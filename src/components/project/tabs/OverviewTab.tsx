@@ -46,7 +46,10 @@ export default function OverviewTab() {
       .reduce((s, m) => s + m.payment_plan_amount, 0);
 
     const allMonths = new Set<string>();
-    clientInvoices.forEach(inv => { if (inv.invoice_date) allMonths.add(inv.invoice_date.substring(0, 7)); });
+    clientInvoices.forEach(inv => {
+      if (inv.receipt_date) allMonths.add(inv.receipt_date.substring(0, 7));
+      if (inv.invoice_date) allMonths.add(inv.invoice_date.substring(0, 7));
+    });
     clientMilestones.forEach(ms => { if (ms.planned_receive_date) allMonths.add(ms.planned_receive_date.substring(0, 7)); });
 
     const eventMonths = [...allMonths].sort();
