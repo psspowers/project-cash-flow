@@ -312,7 +312,7 @@ export default function Dashboard() {
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [clientInvoiceReceipts, setClientInvoiceReceipts] = useState<
-    { project_id: string; received_amount: number; invoice_date: string | null; client_milestone_id: string | null }[]
+    { project_id: string; received_amount: number; receipt_date: string | null; client_milestone_id: string | null }[]
   >([]);
   const [vouchers, setVouchers] = useState<
     Pick<
@@ -383,7 +383,7 @@ export default function Dashboard() {
           .order('created_at'),
         supabase
           .from('client_invoices')
-          .select('project_id, received_amount, invoice_date, client_milestone_id')
+          .select('project_id, received_amount, receipt_date, client_milestone_id')
           .gt('received_amount', 0),
         supabase
           .from('payment_vouchers')
@@ -513,7 +513,7 @@ export default function Dashboard() {
   );
 
   const totalReceivedThisYear = clientInvoiceReceipts
-    .filter((r) => r.invoice_date && r.invoice_date >= yearStart)
+    .filter((r) => r.receipt_date && r.receipt_date >= yearStart)
     .reduce((s, r) => s + r.received_amount, 0);
 
   const totalReceivedAllTime = clientInvoiceReceipts.reduce(
@@ -589,7 +589,7 @@ export default function Dashboard() {
     ...past3Months.map(month => {
       const key = format(month, 'yyyy-MM');
       const inflow = clientInvoiceReceipts
-        .filter(r => r.invoice_date?.startsWith(key))
+        .filter(r => r.receipt_date?.startsWith(key))
         .reduce((s, r) => s + r.received_amount / 1_000_000, 0);
       const outflowApproved = vendorInvoicePaid
         .filter(vi => vi.invoice_date?.startsWith(key))
@@ -698,7 +698,7 @@ export default function Dashboard() {
   const chartData: MonthlyBar[] = months.map((month) => {
     const key = format(month, 'yyyy-MM');
     const inflow = clientInvoiceReceipts
-      .filter((r) => r.invoice_date?.startsWith(key))
+      .filter((r) => r.receipt_date?.startsWith(key))
       .reduce((s, r) => s + r.received_amount / 1_000_000, 0);
     const outflow = vendorInvoicePaid
       .filter((vi) => vi.invoice_date?.startsWith(key))
