@@ -330,7 +330,7 @@ export default function Dashboard() {
   const [pendingReports, setPendingReports] = useState<ProgressReport[]>([]);
   const [pendingCostings, setPendingCostings] = useState<ProjectCosting[]>([]);
   const [vendorInvoicePaid, setVendorInvoicePaid] = useState<
-    { project_id: string; received_amount: number; invoice_date: string | null }[]
+    { project_id: string; net_paid: number; voucher_date: string | null }[]
   >([]);
   const [pendingReceivablesSum, setPendingReceivablesSum] = useState(0);
   const [projectViewCounts, setProjectViewCounts] = useState<Record<string, number>>({});
