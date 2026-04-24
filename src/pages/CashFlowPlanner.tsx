@@ -29,7 +29,18 @@ import {
   isSameWeek,
 } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { Milestone, VendorInvoice, Project, fmtTHB, fmtTHBCompact } from '../types';
+import { VendorInvoice, Project, fmtTHB, fmtTHBCompact } from '../types';
+
+interface ClientMilestoneRow {
+  id: string;
+  project_id: string;
+  milestone_number: number;
+  milestone_pct: number;
+  payment_plan_amount: number;
+  planned_receive_date: string | null;
+  status: string;
+  project?: Project;
+}
 import { useAuth } from '../context/AuthContext';
 
 type CardType = 'milestone' | 'invoice';
@@ -44,7 +55,7 @@ interface DraggableCard {
   milestoneNo?: number;
   milestonePercent?: number;
   vendorName?: string;
-  rawMilestone?: Milestone & { project?: Project };
+  rawMilestone?: ClientMilestoneRow;
   rawInvoice?: VendorInvoice & { vendor?: { name: string }; project?: Project };
 }
 
@@ -348,7 +359,7 @@ export default function CashFlowPlanner() {
   useAuth();
 
   const [projects, setProjects] = useState<Project[]>([]);
-  const [milestones, setMilestones] = useState<(Milestone & { project?: Project })[]>([]);
+  const [milestones, setMilestones] = useState<ClientMilestoneRow[]>([]);
   const [invoices, setInvoices] = useState<(VendorInvoice & { vendor?: { name: string }; project?: Project })[]>([]);
   const [totalReceipts, setTotalReceipts] = useState(0);
   const [totalVouchersPaid, setTotalVouchersPaid] = useState(0);
@@ -383,23 +394,32 @@ export default function CashFlowPlanner() {
     setLoading(true);
     const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes] = await Promise.all([
       supabase.from('projects').select('*').order('name'),
-      supabase.from('milestones').select('*, project:projects(*)').in('status', ['invoiced', 'planned']),
+      supabase
+        .from('client_milestones')
+        .select('id, project_id, milestone_number, milestone_pct, payment_plan_amount, planned_receive_date, status, project:projects(*)')
+        .neq('status', 'received'),
       supabase
         .from('vendor_invoices')
         .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(*)')
         .in('status', ['released', 'approved_evp']),
-      supabase.from('cash_receipts').select('net_received'),
-      supabase.from('vendor_invoices').select('received_amount').gt('received_amount', 0),
+      supabase
+        .from('client_invoices')
+        .select('received_amount')
+        .gt('received_amount', 0),
+      supabase
+        .from('payment_vouchers')
+        .select('net_paid')
+        .eq('status', 'issued'),
     ]);
 
     setProjects(projectsRes.data ?? []);
-    setMilestones(milestonesRes.data ?? []);
+    setMilestones((milestonesRes.data ?? []) as ClientMilestoneRow[]);
     setInvoices(invoicesRes.data ?? []);
     setTotalReceipts(
-      (receiptsRes.data ?? []).reduce((s: number, r: { net_received: number }) => s + (r.net_received ?? 0), 0)
+      (receiptsRes.data ?? []).reduce((s: number, r: { received_amount: number }) => s + (r.received_amount ?? 0), 0)
     );
     setTotalVouchersPaid(
-      (vouchersRes.data ?? []).reduce((s: number, v: { received_amount: number }) => s + (v.received_amount ?? 0), 0)
+      (vouchersRes.data ?? []).reduce((s: number, v: { net_paid: number }) => s + (v.net_paid ?? 0), 0)
     );
     setLoading(false);
   }
@@ -408,16 +428,16 @@ export default function CashFlowPlanner() {
     const cards: DraggableCard[] = [];
     for (const m of milestones) {
       if (selectedProjectId !== 'all' && m.project_id !== selectedProjectId) continue;
-      const d = m.planned_date_override ?? m.planned_date;
+      const d = m.planned_receive_date;
       cards.push({
         id: `m-${m.id}`,
         type: 'milestone',
         projectName: m.project?.name ?? 'Unknown Project',
         projectId: m.project_id,
-        amount: m.planned_amount_incl_vat,
+        amount: m.payment_plan_amount,
         weekDate: d ? parseISO(d) : null,
-        milestoneNo: m.milestone_no,
-        milestonePercent: m.percentage,
+        milestoneNo: m.milestone_number,
+        milestonePercent: m.milestone_pct != null ? m.milestone_pct * 100 : undefined,
         rawMilestone: m,
       });
     }
@@ -504,8 +524,8 @@ export default function CashFlowPlanner() {
 
     if (card.type === 'milestone' && card.rawMilestone) {
       await supabase
-        .from('milestones')
-        .update({ planned_date_override: isoDate })
+        .from('client_milestones')
+        .update({ planned_receive_date: isoDate })
         .eq('id', card.rawMilestone.id);
     } else if (card.type === 'invoice' && card.rawInvoice) {
       await supabase
