@@ -449,12 +449,12 @@ export default function Dashboard() {
       });
 
       const normalizedViPaid = (viRaw ?? [])
-        .map((vi: { project_id: string | null; received_amount: number; invoice_date: string | null; purchase_order: { project_id: string } | null }) => ({
-          project_id: vi.project_id ?? vi.purchase_order?.project_id ?? '',
-          received_amount: vi.received_amount,
-          invoice_date: vi.invoice_date,
+        .map((pv: { project_id: string | null; net_paid: number; voucher_date: string | null }) => ({
+          project_id: pv.project_id ?? '',
+          net_paid: pv.net_paid,
+          voucher_date: pv.voucher_date,
         }))
-        .filter((vi: { project_id: string }) => vi.project_id !== '');
+        .filter((pv: { project_id: string }) => pv.project_id !== '');
 
       setProjects(proj ?? []);
       setClientInvoiceReceipts(ciReceipts ?? []);
