@@ -14,7 +14,6 @@ function buildCashFlowData(
   orphanVendorInvoices: ReturnType<typeof useProjectDetail>['orphanVendorInvoices'],
   orders: ReturnType<typeof useProjectDetail>['orders'],
   poMilestones: ReturnType<typeof useProjectDetail>['poMilestones'],
-  paymentVouchers: ReturnType<typeof useProjectDetail>['paymentVouchers'],
 ) {
   const monthMap: Record<string, { income: number; cost: number; draftCost: number }> = {};
   const ensureMonth = (m: string) => { if (!monthMap[m]) monthMap[m] = { income: 0, cost: 0, draftCost: 0 }; };
@@ -28,8 +27,8 @@ function buildCashFlowData(
   });
 
   clientInvoices.forEach(inv => {
-    if ((inv.received_amount ?? 0) > 0 && inv.receipt_date) {
-      const month = inv.receipt_date.substring(0, 7);
+    if ((inv.received_amount ?? 0) > 0 && inv.invoice_date) {
+      const month = inv.invoice_date.substring(0, 7);
       ensureMonth(month);
       monthMap[month].income += inv.received_amount;
     }
@@ -41,18 +40,13 @@ function buildCashFlowData(
     monthMap[month].cost += inv.received_amount;
   });
 
-  // Actual payments made — use payment_vouchers.voucher_date + net_paid
-  // This is the only correct source: actual bank payment date and amount
-  paymentVouchers.forEach(pv => {
-    if (!pv.voucher_date) return;
-    const month = pv.voucher_date.substring(0, 7);
-    ensureMonth(month);
-    monthMap[month].cost += pv.net_paid;
-  });
-
-  // Forecast: unpaid vendor invoice balances bucketed by planned_payment_date
   orders.forEach(o => {
     const isDraftOrPending = o.status === 'draft' || o.status === 'pending_approval';
+    o.invoices.filter(i => (i.received_amount ?? 0) > 0 && i.invoice_date).forEach(inv => {
+      const month = inv.invoice_date!.substring(0, 7);
+      ensureMonth(month);
+      monthMap[month].cost += inv.received_amount ?? 0;
+    });
     if (o.has_supplier_milestones) {
       poMilestones
         .filter(pm => pm.purchase_order_id === o.id && pm.planned_payment_date && pm.status !== 'paid')
@@ -65,19 +59,14 @@ function buildCashFlowData(
             monthMap[month].cost += pm.amount_due - (pm.paid_amount ?? 0);
           }
         });
-    } else {
-      o.invoices
-        .filter(i => (i.invoice_amount_incl_vat - (i.received_amount ?? 0)) > 0 && i.planned_payment_date)
-        .forEach(inv => {
-          const month = inv.planned_payment_date!.substring(0, 7);
-          ensureMonth(month);
-          const balance = inv.invoice_amount_incl_vat - (inv.received_amount ?? 0);
-          if (isDraftOrPending) {
-            monthMap[month].draftCost += balance;
-          } else {
-            monthMap[month].cost += balance;
-          }
-        });
+    } else if (o.invoices.length === 0 && o.po_date) {
+      const month = o.po_date.substring(0, 7);
+      ensureMonth(month);
+      if (isDraftOrPending) {
+        monthMap[month].draftCost += o.po_amount_incl_vat;
+      } else {
+        monthMap[month].cost += o.po_amount_incl_vat;
+      }
     }
   });
 
@@ -92,11 +81,11 @@ function buildCashFlowData(
 }
 
 export default function TimelineTab() {
-  const { clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones, paymentVouchers } = useProjectDetail();
+  const { clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones } = useProjectDetail();
 
   const cashFlowData = useMemo(
-    () => buildCashFlowData(clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones, paymentVouchers),
-    [clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones, paymentVouchers],
+    () => buildCashFlowData(clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones),
+    [clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones],
   );
 
   return (

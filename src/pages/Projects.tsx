@@ -21,7 +21,7 @@ type TabKey = 'active' | 'estimation' | 'budget' | 'completed';
 
 interface ReceiptRow {
   project_id: string;
-  received_amount: number;
+  net_received: number;
 }
 
 interface VendorInvoicePaidRow {
@@ -151,9 +151,8 @@ export default function Projects() {
           .select('*, client:entities!client_entity_id(*)')
           .order('created_at', { ascending: false }),
         supabase
-          .from('client_invoices')
-          .select('project_id, received_amount')
-          .gt('received_amount', 0),
+          .from('cash_receipts')
+          .select('project_id, net_received'),
         supabase
           .from('vendor_invoices')
           .select('received_amount, purchase_order:purchase_orders!po_id(project_id)')
@@ -211,7 +210,7 @@ export default function Projects() {
   } {
     const received = receipts
       .filter((r) => r.project_id === projectId)
-      .reduce((s, r) => s + r.received_amount, 0);
+      .reduce((s, r) => s + r.net_received, 0);
     const paid = vendorInvoicePaid
       .filter((vi) => vi.project_id === projectId)
       .reduce((s, vi) => s + vi.received_amount, 0);

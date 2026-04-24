@@ -60,7 +60,7 @@ export default function VATReport() {
   async function loadData() {
     const [{ data: clientInvoices }, { data: vendorInvoices }] = await Promise.all([
       supabase
-        .from('client_invoices')
+        .from('milestone_invoices')
         .select('invoice_date, invoice_amount')
         .not('invoice_date', 'is', null)
         .order('invoice_date', { ascending: false }),

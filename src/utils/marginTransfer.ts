@@ -33,10 +33,9 @@ export async function computeMarginTransferPosition(
       .eq('status', 'evp_approved')
       .maybeSingle(),
     supabase
-      .from('client_invoices')
-      .select('received_amount')
-      .eq('project_id', projectId)
-      .gt('received_amount', 0),
+      .from('cash_receipts')
+      .select('net_received')
+      .eq('project_id', projectId),
     supabase
       .from('project_cash_transfers')
       .select('amount')
@@ -49,8 +48,8 @@ export async function computeMarginTransferPosition(
   const budgetGrossMargin = (budgetRes.data?.gross_margin_amount as number) ?? 0;
   const hasApprovedBudget = !!budgetRes.data;
 
-  const totalReceived = ((receiptsRes.data ?? []) as { received_amount: number }[])
-    .reduce((s, r) => s + r.received_amount, 0);
+  const totalReceived = ((receiptsRes.data ?? []) as { net_received: number }[])
+    .reduce((s, r) => s + r.net_received, 0);
 
   const alreadyTransferred = ((transfersRes.data ?? []) as { amount: number }[])
     .reduce((s, t) => s + t.amount, 0);

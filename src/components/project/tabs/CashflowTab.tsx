@@ -61,11 +61,8 @@ export default function CashflowTab() {
 
   const contract = project?.contract_incl_vat ?? 0;
 
-  const invoicesByMilestone: Record<string, typeof clientInvoices> = {};
-  clientInvoices.forEach(inv => {
-    if (!invoicesByMilestone[inv.client_milestone_id]) invoicesByMilestone[inv.client_milestone_id] = [];
-    invoicesByMilestone[inv.client_milestone_id].push(inv);
-  });
+  const invoiceByMilestone: Record<string, typeof clientInvoices[0]> = {};
+  clientInvoices.forEach(inv => { invoiceByMilestone[inv.client_milestone_id] = inv; });
 
   const totalCIReceived = clientInvoices.reduce((s, i) => s + (i.received_amount ?? 0), 0);
   const totalCIInvoicedPending = clientInvoices
@@ -126,19 +123,17 @@ export default function CashflowTab() {
   const monthMap: Record<string, { cashIn: number; cashOut: number }> = {};
   const ensureM = (m: string) => { if (!monthMap[m]) monthMap[m] = { cashIn: 0, cashOut: 0 }; };
   clientMilestones.forEach(ms => {
-    const invs = invoicesByMilestone[ms.id] ?? [];
-    if (invs.length > 0) {
-      invs.forEach(inv => {
-        if ((inv.received_amount ?? 0) > 0 && inv.receipt_date) {
-          const m = inv.receipt_date.substring(0, 7);
-          ensureM(m); monthMap[m].cashIn += inv.received_amount;
-        }
-        const outstanding = inv.invoice_amount - (inv.received_amount ?? 0);
-        if (outstanding > 0 && ms.planned_receive_date) {
-          const m = ms.planned_receive_date.substring(0, 7);
-          ensureM(m); monthMap[m].cashIn += outstanding;
-        }
-      });
+    const inv = invoiceByMilestone[ms.id];
+    if (inv) {
+      if ((inv.received_amount ?? 0) > 0 && inv.invoice_date) {
+        const m = inv.invoice_date.substring(0, 7);
+        ensureM(m); monthMap[m].cashIn += inv.received_amount;
+      }
+      const outstanding = inv.invoice_amount - (inv.received_amount ?? 0);
+      if (outstanding > 0 && ms.planned_receive_date) {
+        const m = ms.planned_receive_date.substring(0, 7);
+        ensureM(m); monthMap[m].cashIn += outstanding;
+      }
     } else if (ms.status === 'pending' && ms.planned_receive_date) {
       const m = ms.planned_receive_date.substring(0, 7);
       ensureM(m); monthMap[m].cashIn += ms.payment_plan_amount;
@@ -226,24 +221,18 @@ export default function CashflowTab() {
             </thead>
             <tbody>
               {clientMilestones.map(ms => {
-                const invs = invoicesByMilestone[ms.id] ?? [];
-                const totalReceived = invs.reduce((s, i) => s + (i.received_amount ?? 0), 0);
-                const invoiceLabel = invs.length === 0
-                  ? '—'
-                  : invs.length === 1
-                  ? (invs[0].invoice_no ?? '—')
-                  : invs.map((inv, idx) => `T${idx + 1}: ${inv.invoice_no ?? '—'}`).join(' · ');
+                const inv = invoiceByMilestone[ms.id];
                 return (
                   <tr key={ms.id} className="border-b border-[rgba(0,0,0,0.04)] hover:bg-[#F8F8F7]">
                     <td className="px-4 py-2.5 font-medium text-[#0f1923]">{ms.milestone_number}</td>
                     <td className="px-4 py-2.5 text-gray-600 max-w-[240px]">{ms.milestone_description ?? '—'}</td>
                     <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{ms.milestone_pct != null ? `${(ms.milestone_pct * 100).toFixed(0)}%` : '—'}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap font-medium">{formatDate(ms.planned_receive_date)}</td>
-                    <td className="px-4 py-2.5 font-mono text-gray-600 text-[10px] leading-snug">{invoiceLabel}</td>
+                    <td className="px-4 py-2.5 font-mono text-gray-600">{inv?.invoice_no ?? '—'}</td>
                     <td className="px-4 py-2.5 font-medium text-[#0f1923] whitespace-nowrap">{fmtTHB(ms.payment_plan_amount)}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap">
-                      {totalReceived > 0
-                        ? <span className="text-[#1D9E75] font-medium">{fmtTHB(totalReceived)}</span>
+                      {inv && (inv.received_amount ?? 0) > 0
+                        ? <span className="text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount)}</span>
                         : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-4 py-2.5">
