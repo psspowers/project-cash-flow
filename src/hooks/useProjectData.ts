@@ -43,6 +43,13 @@ export interface PoMilestoneRow {
   status: string;
 }
 
+export interface PaymentVoucherRow {
+  id: string;
+  voucher_date: string;
+  net_paid: number;
+  project_id: string;
+}
+
 export interface ProjectData {
   project: Project | null;
   costings: ProjectCosting[];
@@ -52,6 +59,7 @@ export interface ProjectData {
   clientMilestones: ClientMilestoneRow[];
   clientInvoices: ClientInvoiceRow[];
   poMilestones: PoMilestoneRow[];
+  paymentVouchers: PaymentVoucherRow[];
   vendors: Entity[];
   profiles: UserProfile[];
   marginPosition: MarginTransferPosition | null;
@@ -70,6 +78,7 @@ export function useProjectData(id: string | undefined): ProjectData {
   const [clientMilestones, setClientMilestones] = useState<ClientMilestoneRow[]>([]);
   const [clientInvoices, setClientInvoices] = useState<ClientInvoiceRow[]>([]);
   const [poMilestones, setPoMilestones] = useState<PoMilestoneRow[]>([]);
+  const [paymentVouchers, setPaymentVouchers] = useState<PaymentVoucherRow[]>([]);
   const [vendors, setVendors] = useState<Entity[]>([]);
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [marginPosition, setMarginPosition] = useState<MarginTransferPosition | null>(null);
@@ -81,7 +90,7 @@ export function useProjectData(id: string | undefined): ProjectData {
     if (!id) return;
     setLoading(true);
 
-    const [projRes, costRes, voRes, poRes, vendorRes, profilesRes, cmRes, ciRes] = await Promise.all([
+    const [projRes, costRes, voRes, poRes, vendorRes, profilesRes, cmRes, ciRes, pvRes] = await Promise.all([
       supabase.from('projects').select('*, client:entities!client_entity_id(*)').eq('id', id).maybeSingle(),
       supabase.from('project_costings').select('*').eq('project_id', id),
       supabase.from('variation_orders').select('*').eq('project_id', id).order('created_at'),
@@ -90,6 +99,7 @@ export function useProjectData(id: string | undefined): ProjectData {
       supabase.from('user_profiles').select('*'),
       supabase.from('client_milestones').select('id, milestone_number, milestone_description, milestone_pct, payment_plan_amount, planned_receive_date, status').eq('project_id', id).order('milestone_number'),
       supabase.from('client_invoices').select('id, client_milestone_id, invoice_no, invoice_date, receipt_date, invoice_amount, received_amount, status').eq('project_id', id),
+      supabase.from('payment_vouchers').select('id, voucher_date, net_paid, project_id').eq('project_id', id).eq('status', 'issued'),
     ]);
 
     if (projRes.data) setProject(projRes.data as Project);
@@ -99,6 +109,7 @@ export function useProjectData(id: string | undefined): ProjectData {
     if (profilesRes.data) setProfiles(profilesRes.data as UserProfile[]);
     setClientMilestones((cmRes.data ?? []) as ClientMilestoneRow[]);
     setClientInvoices((ciRes.data ?? []) as ClientInvoiceRow[]);
+    setPaymentVouchers((pvRes.data ?? []) as PaymentVoucherRow[]);
 
     if (poRes.data) {
       const pos = poRes.data as PurchaseOrder[];
@@ -154,7 +165,7 @@ export function useProjectData(id: string | undefined): ProjectData {
 
   return {
     project, costings, vos, orders, orphanVendorInvoices,
-    clientMilestones, clientInvoices, poMilestones, vendors, profiles,
-    marginPosition, transfers, allActiveProjects, loading, reload,
+    clientMilestones, clientInvoices, poMilestones, paymentVouchers,
+    vendors, profiles, marginPosition, transfers, allActiveProjects, loading, reload,
   };
 }
