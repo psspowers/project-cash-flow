@@ -417,9 +417,10 @@ export default function Dashboard() {
               .eq('user_id', userId)
           : Promise.resolve({ data: [], error: null }),
         supabase
-          .from('vendor_invoices')
-          .select('project_id, received_amount, invoice_date, purchase_order:purchase_orders!po_id(project_id)')
-          .gt('received_amount', 0),
+          .from('payment_vouchers')
+          .select('project_id, net_paid, voucher_date')
+          .eq('status', 'issued')
+          .gt('net_paid', 0),
         supabase
           .from('client_milestones')
           .select('id, project_id, payment_plan_amount, planned_receive_date, status')
