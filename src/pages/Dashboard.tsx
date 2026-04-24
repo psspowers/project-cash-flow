@@ -592,14 +592,14 @@ export default function Dashboard() {
       const inflow = clientInvoiceReceipts
         .filter(r => r.receipt_date?.startsWith(key))
         .reduce((s, r) => s + r.received_amount / 1_000_000, 0);
-      const outflowApproved = vendorInvoicePaid
-        .filter(vi => vi.invoice_date?.startsWith(key))
-        .reduce((s, vi) => s + vi.received_amount / 1_000_000, 0);
+      const cashOutActual = vendorInvoicePaid
+        .filter(vi => vi.voucher_date?.startsWith(key))
+        .reduce((s, vi) => s + vi.net_paid / 1_000_000, 0);
       return {
         month: format(month, 'MMM yy'),
         key,
         inflow: +inflow.toFixed(2),
-        outflowApproved: +outflowApproved.toFixed(2),
+        outflowApproved: +cashOutActual.toFixed(2),
         outflowDraft: 0,
         isForecast: false,
       };
@@ -702,8 +702,8 @@ export default function Dashboard() {
       .filter((r) => r.receipt_date?.startsWith(key))
       .reduce((s, r) => s + r.received_amount / 1_000_000, 0);
     const outflow = vendorInvoicePaid
-      .filter((vi) => vi.invoice_date?.startsWith(key))
-      .reduce((s, vi) => s + vi.received_amount / 1_000_000, 0);
+      .filter((vi) => vi.voucher_date?.startsWith(key))
+      .reduce((s, vi) => s + vi.net_paid / 1_000_000, 0);
     return {
       month: format(month, 'MMM yy'),
       inflow: +inflow.toFixed(2),
