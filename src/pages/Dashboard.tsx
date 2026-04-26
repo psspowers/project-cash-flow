@@ -332,6 +332,9 @@ export default function Dashboard() {
   const [vendorInvoicePaid, setVendorInvoicePaid] = useState<
     { project_id: string; net_paid: number; voucher_date: string | null }[]
   >([]);
+  const [pendingClientInvoices, setPendingClientInvoices] = useState<
+    { project_id: string; pending_amount: number; invoice_date: string | null }[]
+  >([]);
   const [pendingReceivablesSum, setPendingReceivablesSum] = useState(0);
   const [projectViewCounts, setProjectViewCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -405,8 +408,9 @@ export default function Dashboard() {
           .order('created_at', { ascending: false }),
         supabase
           .from('client_invoices')
-          .select('pending_amount')
-          .in('status', ['pending', 'partially_received']),
+          .select('project_id, pending_amount, invoice_date')
+          .in('status', ['pending', 'partially_received'])
+          .gt('pending_amount', 0),
         supabase
           .from('project_costings')
           .select('*, project:projects(*)')
@@ -470,8 +474,10 @@ export default function Dashboard() {
       setPendingCostings((costings as unknown as ProjectCosting[]) ?? []);
       setProjectViewCounts(viewMap);
       setVendorInvoicePaid(normalizedViPaid);
+      const normalizedClientInvs = (clientInvs ?? []) as { project_id: string; pending_amount: number; invoice_date: string | null }[];
+      setPendingClientInvoices(normalizedClientInvs);
       setPendingReceivablesSum(
-        (clientInvs ?? []).reduce((s, r) => s + (r.pending_amount ?? 0), 0),
+        normalizedClientInvs.reduce((s, r) => s + (r.pending_amount ?? 0), 0),
       );
       setClientMilestonesAll((cmAll ?? []) as typeof clientMilestonesAll);
 
@@ -672,17 +678,23 @@ export default function Dashboard() {
   ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
   const ninetyDayKey = format(ninetyDaysFromNow, 'yyyy-MM-dd');
 
-  const plannedInflow90 = clientMilestonesAll
-    .filter(m => m.planned_receive_date && m.planned_receive_date <= ninetyDayKey)
-    .reduce((s, m) => s + m.payment_plan_amount, 0);
+  // Pending client invoices are outstanding receivables due now — always counted in 90-day window
+  const pendingClientInvoicesTotal = pendingClientInvoices.reduce((s, i) => s + i.pending_amount, 0);
+
+  const plannedInflow90 =
+    clientMilestonesAll
+      .filter(m => m.planned_receive_date && m.planned_receive_date <= ninetyDayKey)
+      .reduce((s, m) => s + m.payment_plan_amount, 0)
+    + pendingClientInvoicesTotal;
+
+  // Unpaid vendor invoices are outstanding payables due now — always counted in 90-day window
+  const vendorInvoicesUnpaidTotal = vendorInvoicesUnpaid.reduce((s, vi) => s + vi.balance, 0);
 
   const plannedOutflow90 =
     poMilestonesAll
       .filter(m => m.planned_payment_date && m.planned_payment_date <= ninetyDayKey)
       .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
-    + vendorInvoicesUnpaid
-      .filter(vi => vi.planned_payment_date && vi.planned_payment_date <= ninetyDayKey)
-      .reduce((s, vi) => s + vi.balance, 0)
+    + vendorInvoicesUnpaidTotal
     + poSimplePending
       .filter(po => po.po_date && po.po_date <= ninetyDayKey)
       .reduce((s, po) => s + (po.pending_remaining_amount ?? 0), 0);
@@ -1314,6 +1326,10 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {projectCashPositions.map(({ project, totalReceived, totalCostPaid }) => {
+                  const pendingInvForProject = pendingClientInvoices.filter(i => i.project_id === project.id);
+                  const pendingInvProjectTotal = pendingInvForProject.reduce((s, i) => s + i.pending_amount, 0);
+                  const vendorUnpaidForProject = vendorInvoicesUnpaid.filter(vi => vi.project_id === project.id);
+                  const vendorUnpaidProjectTotal = vendorUnpaidForProject.reduce((s, vi) => s + vi.balance, 0);
                   const nextIn = clientMilestonesAll
                     .filter(m => m.project_id === project.id && m.planned_receive_date)
                     .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? ''))
@@ -1322,12 +1338,22 @@ export default function Dashboard() {
                     .filter(m => m.project_id === project.id && m.planned_payment_date)
                     .sort((a, b) => (a.planned_payment_date ?? '').localeCompare(b.planned_payment_date ?? ''))
                     [0];
-                  const net30In = clientMilestonesAll
-                    .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
-                    .reduce((s, m) => s + m.payment_plan_amount, 0);
-                  const net30Out = poMilestonesAll
-                    .filter(m => m.project_id === project.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
-                    .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0);
+                  const pendingInvTotal = pendingClientInvoices
+                    .filter(i => i.project_id === project.id)
+                    .reduce((s, i) => s + i.pending_amount, 0);
+                  const vendorUnpaidTotal = vendorInvoicesUnpaid
+                    .filter(vi => vi.project_id === project.id)
+                    .reduce((s, vi) => s + vi.balance, 0);
+                  const net30In =
+                    clientMilestonesAll
+                      .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
+                      .reduce((s, m) => s + m.payment_plan_amount, 0)
+                    + pendingInvTotal;
+                  const net30Out =
+                    poMilestonesAll
+                      .filter(m => m.project_id === project.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
+                      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
+                    + vendorUnpaidTotal;
                   const net30 = net30In - net30Out;
                   const isAtRisk = net30 < 0;
 
@@ -1352,7 +1378,12 @@ export default function Dashboard() {
                         {fmtTHBCompact(totalCostPaid)}
                       </td>
                       <td className="py-2.5 text-right">
-                        {nextIn ? (
+                        {pendingInvProjectTotal > 0 ? (
+                          <div>
+                            <p className="text-[13px] font-medium text-amber-500">{fmtTHBCompact(pendingInvProjectTotal)}</p>
+                            <p className="text-[10px] text-amber-400">Awaiting Payment</p>
+                          </div>
+                        ) : nextIn ? (
                           <div>
                             <p className="text-[13px] font-medium text-[#1D9E75]">{fmtTHBCompact(nextIn.payment_plan_amount)}</p>
                             <p className="text-[10px] text-gray-400">{formatDate(nextIn.planned_receive_date)}</p>
@@ -1360,7 +1391,12 @@ export default function Dashboard() {
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="py-2.5 text-right">
-                        {nextOut ? (
+                        {vendorUnpaidProjectTotal > 0 ? (
+                          <div>
+                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(vendorUnpaidProjectTotal)}</p>
+                            <p className="text-[10px] text-[#E24B4A]/70">Supplier Invoiced</p>
+                          </div>
+                        ) : nextOut ? (
                           <div>
                             <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(nextOut.amount_due - (nextOut.paid_amount ?? 0))}</p>
                             <p className="text-[10px] text-gray-400">{formatDate(nextOut.planned_payment_date)}</p>
