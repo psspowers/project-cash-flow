@@ -11,13 +11,14 @@ import Badge from '../../ui/Badge';
 function buildCashFlowData(
   clientMilestones: ReturnType<typeof useProjectDetail>['clientMilestones'],
   clientInvoices: ReturnType<typeof useProjectDetail>['clientInvoices'],
-  orphanVendorInvoices: ReturnType<typeof useProjectDetail>['orphanVendorInvoices'],
+  paymentVouchers: ReturnType<typeof useProjectDetail>['paymentVouchers'],
   orders: ReturnType<typeof useProjectDetail>['orders'],
   poMilestones: ReturnType<typeof useProjectDetail>['poMilestones'],
 ) {
   const monthMap: Record<string, { income: number; cost: number; draftCost: number }> = {};
   const ensureMonth = (m: string) => { if (!monthMap[m]) monthMap[m] = { income: 0, cost: 0, draftCost: 0 }; };
 
+  // Planned future income from milestones not yet received
   clientMilestones.forEach(ms => {
     if (ms.status !== 'received' && ms.planned_receive_date) {
       const month = ms.planned_receive_date.substring(0, 7);
@@ -26,27 +27,27 @@ function buildCashFlowData(
     }
   });
 
+  // Actual cash in — bucketed by bank-cleared receipt_date
   clientInvoices.forEach(inv => {
-    if ((inv.received_amount ?? 0) > 0 && inv.invoice_date) {
-      const month = inv.invoice_date.substring(0, 7);
+    if (inv.status !== 'pending' && (inv.received_amount ?? 0) > 0 && inv.receipt_date) {
+      const month = inv.receipt_date.substring(0, 7);
       ensureMonth(month);
-      monthMap[month].income += inv.received_amount;
+      monthMap[month].income += Number(inv.received_amount);
     }
   });
 
-  orphanVendorInvoices.filter(i => i.invoice_date).forEach(inv => {
-    const month = inv.invoice_date!.substring(0, 7);
-    ensureMonth(month);
-    monthMap[month].cost += inv.received_amount;
+  // Actual cash out — bucketed by voucher_date from payment_vouchers (already filtered to status='issued')
+  paymentVouchers.forEach(pv => {
+    if (pv.net_paid > 0 && pv.voucher_date) {
+      const month = pv.voucher_date.substring(0, 7);
+      ensureMonth(month);
+      monthMap[month].cost += Number(pv.net_paid);
+    }
   });
 
+  // Planned future cost from PO milestones
   orders.forEach(o => {
     const isDraftOrPending = o.status === 'draft' || o.status === 'pending_approval';
-    o.invoices.filter(i => (i.received_amount ?? 0) > 0 && i.invoice_date).forEach(inv => {
-      const month = inv.invoice_date!.substring(0, 7);
-      ensureMonth(month);
-      monthMap[month].cost += inv.received_amount ?? 0;
-    });
     if (o.has_supplier_milestones) {
       poMilestones
         .filter(pm => pm.purchase_order_id === o.id && pm.planned_payment_date && pm.status !== 'paid')
@@ -81,11 +82,11 @@ function buildCashFlowData(
 }
 
 export default function TimelineTab() {
-  const { clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones } = useProjectDetail();
+  const { clientMilestones, clientInvoices, paymentVouchers, orders, poMilestones } = useProjectDetail();
 
   const cashFlowData = useMemo(
-    () => buildCashFlowData(clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones),
-    [clientMilestones, clientInvoices, orphanVendorInvoices, orders, poMilestones],
+    () => buildCashFlowData(clientMilestones, clientInvoices, paymentVouchers, orders, poMilestones),
+    [clientMilestones, clientInvoices, paymentVouchers, orders, poMilestones],
   );
 
   return (
