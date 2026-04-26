@@ -19,14 +19,14 @@ import Badge, { statusVariant } from '../components/ui/Badge';
 
 type TabKey = 'active' | 'estimation' | 'budget' | 'completed';
 
-interface ReceiptRow {
-  project_id: string;
-  net_received: number;
-}
-
-interface VendorInvoicePaidRow {
+interface ClientInvoiceRow {
   project_id: string;
   received_amount: number;
+}
+
+interface PaymentVoucherRow {
+  project_id: string;
+  net_paid: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +121,8 @@ export default function Projects() {
 
   const [tab, setTab] = useState<TabKey>('active');
   const [projects, setProjects] = useState<Project[]>([]);
-  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
-  const [vendorInvoicePaid, setVendorInvoicePaid] = useState<VendorInvoicePaidRow[]>([]);
+  const [clientInvoices, setClientInvoices] = useState<ClientInvoiceRow[]>([]);
+  const [paymentVouchers, setPaymentVouchers] = useState<PaymentVoucherRow[]>([]);
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -141,8 +141,8 @@ export default function Projects() {
       const userId = user?.id;
       const [
         { data: proj, error: e1 },
-        { data: rec, error: e2 },
-        { data: viRaw, error: e3 },
+        { data: ciRaw, error: e2 },
+        { data: pvRaw, error: e3 },
         { data: clientList, error: e4 },
         { data: viewRows },
       ] = await Promise.all([
@@ -151,12 +151,12 @@ export default function Projects() {
           .select('*, client:entities!client_entity_id(*)')
           .order('created_at', { ascending: false }),
         supabase
-          .from('cash_receipts')
-          .select('project_id, net_received'),
+          .from('client_invoices')
+          .select('project_id, received_amount'),
         supabase
-          .from('vendor_invoices')
-          .select('received_amount, purchase_order:purchase_orders!po_id(project_id)')
-          .gt('received_amount', 0),
+          .from('payment_vouchers')
+          .select('project_id, net_paid')
+          .eq('status', 'issued'),
         supabase
           .from('entities')
           .select('*')
@@ -178,16 +178,9 @@ export default function Projects() {
         viewMap[r.project_id] = r.view_count;
       });
 
-      const normalizedViPaid: VendorInvoicePaidRow[] = (viRaw ?? [])
-        .map((vi: { received_amount: number; purchase_order: { project_id: string } | null }) => ({
-          project_id: vi.purchase_order?.project_id ?? '',
-          received_amount: vi.received_amount,
-        }))
-        .filter((vi) => vi.project_id !== '');
-
       setProjects(proj ?? []);
-      setReceipts(rec ?? []);
-      setVendorInvoicePaid(normalizedViPaid);
+      setClientInvoices(ciRaw ?? []);
+      setPaymentVouchers(pvRaw ?? []);
       setClients(clientList ?? []);
       setViewCounts(viewMap);
     } catch (err: unknown) {
@@ -208,12 +201,12 @@ export default function Projects() {
     paid: number;
     margin: number;
   } {
-    const received = receipts
-      .filter((r) => r.project_id === projectId)
-      .reduce((s, r) => s + r.net_received, 0);
-    const paid = vendorInvoicePaid
-      .filter((vi) => vi.project_id === projectId)
-      .reduce((s, vi) => s + vi.received_amount, 0);
+    const received = clientInvoices
+      .filter((ci) => ci.project_id === projectId)
+      .reduce((s, ci) => s + Number(ci.received_amount || 0), 0);
+    const paid = paymentVouchers
+      .filter((pv) => pv.project_id === projectId)
+      .reduce((s, pv) => s + Number(pv.net_paid || 0), 0);
     return { received, paid, margin: received - paid };
   }
 
