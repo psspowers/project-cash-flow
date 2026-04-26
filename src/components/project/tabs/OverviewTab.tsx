@@ -321,7 +321,7 @@ export default function OverviewTab() {
                 <ReferenceLine x={today} stroke="#9ca3af" strokeDasharray="4 2" label={{ value: 'Today', position: 'top', fontSize: 10, fill: '#9ca3af' }} />
                 <Line data={points} dataKey="cumReceivedLine" stroke="none" dot={false} activeDot={false} legendType="none" />
                 {receivedScatter.length > 0 && <Line data={receivedScatter} dataKey="y" name="Received" type="stepAfter" stroke="#1D9E75" strokeWidth={2.5} dot={false} activeDot={false} connectNulls legendType="circle" />}
-                {invoicedScatter.length > 0 && <Line data={invoicedScatter} dataKey="y" name="Invoiced (pending)" type="stepAfter" stroke="#EF9F27" strokeWidth={2.5} dot={false} activeDot={false} connectNulls legendType="circle" />}
+                {invoicedScatter.length > 0 && <Line data={invoicedScatter} dataKey="y" name="Invoiced & Awaiting" type="stepAfter" stroke="#EAB308" strokeWidth={2.5} dot={false} activeDot={false} connectNulls legendType="circle" />}
                 {plannedScatter.length > 0 && <Line data={plannedScatter} dataKey="y" name="Forecast" type="stepAfter" stroke="#3B82F6" strokeWidth={1.5} strokeDasharray="6 4" dot={false} activeDot={false} connectNulls legendType="circle" />}
                 {receivedScatter.length > 0 && (
                   <Scatter name="Received dots" data={receivedScatter} dataKey="y" xAxisId={0} yAxisId={0} fill="#1D9E75" legendType="none"
@@ -333,11 +333,11 @@ export default function OverviewTab() {
                   />
                 )}
                 {invoicedScatter.length > 0 && (
-                  <Scatter name="Invoiced dots" data={invoicedScatter} dataKey="y" xAxisId={0} yAxisId={0} fill="#EF9F27" legendType="none"
+                  <Scatter name="Invoiced & Awaiting" data={invoicedScatter} dataKey="y" xAxisId={0} yAxisId={0} fill="#EAB308" legendType="none"
                     shape={(props: { cx?: number; cy?: number; payload?: { label: string } }) => {
                       const { cx, cy, payload } = props;
                       if (cx == null || cy == null) return <g />;
-                      return <g><circle cx={cx} cy={cy} r={5} fill="#EF9F27" stroke="#fff" strokeWidth={2} /><text x={cx} y={cy - 10} textAnchor="middle" fontSize={10} fontWeight={600} fill="#EF9F27">{payload?.label}</text></g>;
+                      return <g><circle cx={cx} cy={cy} r={5} fill="#EAB308" stroke="#fff" strokeWidth={2} /><text x={cx} y={cy - 10} textAnchor="middle" fontSize={10} fontWeight={600} fill="#EAB308">{payload?.label}</text></g>;
                     }}
                   />
                 )}
@@ -361,7 +361,7 @@ export default function OverviewTab() {
         <div className="grid grid-cols-4 border-t border-[rgba(0,0,0,0.06)]">
           {[
             { label: 'Already Received', value: alreadyReceived, color: 'text-[#1D9E75]', dot: 'bg-[#1D9E75]' },
-            { label: 'Invoiced — Awaiting', value: invoicedAwaiting, color: 'text-[#EF9F27]', dot: 'bg-[#EF9F27]' },
+            { label: 'Invoiced — Awaiting', value: invoicedAwaiting, color: 'text-[#EAB308]', dot: 'bg-[#EAB308]' },
             { label: 'Not Yet Invoiced', value: notYetInvoiced, color: 'text-[#3B82F6]', dot: 'bg-[#3B82F6]' },
             { label: 'Total Contract', value: contractValue, color: 'text-[#0f1923]', dot: 'bg-[#0f1923]' },
           ].map((item, i) => (

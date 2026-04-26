@@ -26,7 +26,7 @@ export default function VarianceTab() {
       <table className="w-full text-xs">
         <thead>
           <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-            {['Category', 'Estimation', 'Budget', 'Actual', 'Variance', 'Variance %'].map(h => (
+            {['Category', 'Estimation', 'Budget', 'Committed (POs)', 'Variance', 'Variance %'].map(h => (
               <th key={h} className="px-4 py-3 text-left font-medium text-gray-500">{h}</th>
             ))}
           </tr>

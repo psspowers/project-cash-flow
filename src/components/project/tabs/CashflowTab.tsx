@@ -113,7 +113,7 @@ export default function CashflowTab() {
     } else if ((o.pending_remaining_amount ?? 0) > 0) {
       cashOutRows.push({
         key: `draft-${o.id}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
-        msLabel: '—', plannedDate: undefined,
+        msLabel: '—', plannedDate: o.po_date || undefined,
         amount: o.pending_remaining_amount ?? 0, paid: 0, balance: o.pending_remaining_amount ?? 0,
         status: 'draft', rowType: 'draft_po', rowId: o.id,
       });
