@@ -1326,10 +1326,12 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {projectCashPositions.map(({ project, totalReceived, totalCostPaid }) => {
-                  const pendingInvForProject = pendingClientInvoices.filter(i => i.project_id === project.id);
-                  const pendingInvProjectTotal = pendingInvForProject.reduce((s, i) => s + i.pending_amount, 0);
-                  const vendorUnpaidForProject = vendorInvoicesUnpaid.filter(vi => vi.project_id === project.id);
-                  const vendorUnpaidProjectTotal = vendorUnpaidForProject.reduce((s, vi) => s + vi.balance, 0);
+                  const projPendingInvsTotal = pendingClientInvoices
+                    .filter(i => i.project_id === project.id)
+                    .reduce((s, i) => s + i.pending_amount, 0);
+                  const projUnpaidVendorInvsTotal = vendorInvoicesUnpaid
+                    .filter(vi => vi.project_id === project.id)
+                    .reduce((s, vi) => s + vi.balance, 0);
                   const nextIn = clientMilestonesAll
                     .filter(m => m.project_id === project.id && m.planned_receive_date)
                     .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? ''))
@@ -1338,22 +1340,16 @@ export default function Dashboard() {
                     .filter(m => m.project_id === project.id && m.planned_payment_date)
                     .sort((a, b) => (a.planned_payment_date ?? '').localeCompare(b.planned_payment_date ?? ''))
                     [0];
-                  const pendingInvTotal = pendingClientInvoices
-                    .filter(i => i.project_id === project.id)
-                    .reduce((s, i) => s + i.pending_amount, 0);
-                  const vendorUnpaidTotal = vendorInvoicesUnpaid
-                    .filter(vi => vi.project_id === project.id)
-                    .reduce((s, vi) => s + vi.balance, 0);
                   const net30In =
                     clientMilestonesAll
                       .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
                       .reduce((s, m) => s + m.payment_plan_amount, 0)
-                    + pendingInvTotal;
+                    + projPendingInvsTotal;
                   const net30Out =
                     poMilestonesAll
                       .filter(m => m.project_id === project.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
                       .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
-                    + vendorUnpaidTotal;
+                    + projUnpaidVendorInvsTotal;
                   const net30 = net30In - net30Out;
                   const isAtRisk = net30 < 0;
 
@@ -1378,10 +1374,10 @@ export default function Dashboard() {
                         {fmtTHBCompact(totalCostPaid)}
                       </td>
                       <td className="py-2.5 text-right">
-                        {pendingInvProjectTotal > 0 ? (
+                        {projPendingInvsTotal > 0 ? (
                           <div>
-                            <p className="text-[13px] font-medium text-amber-500">{fmtTHBCompact(pendingInvProjectTotal)}</p>
-                            <p className="text-[10px] text-amber-400">Awaiting Payment</p>
+                            <p className="text-[13px] font-medium text-amber-600">{fmtTHBCompact(projPendingInvsTotal)}</p>
+                            <p className="text-[10px] text-amber-600/70">Awaiting Payment</p>
                           </div>
                         ) : nextIn ? (
                           <div>
@@ -1391,9 +1387,9 @@ export default function Dashboard() {
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="py-2.5 text-right">
-                        {vendorUnpaidProjectTotal > 0 ? (
+                        {projUnpaidVendorInvsTotal > 0 ? (
                           <div>
-                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(vendorUnpaidProjectTotal)}</p>
+                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(projUnpaidVendorInvsTotal)}</p>
                             <p className="text-[10px] text-[#E24B4A]/70">Supplier Invoiced</p>
                           </div>
                         ) : nextOut ? (
