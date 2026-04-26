@@ -46,7 +46,7 @@ export default function OverviewTab() {
       .reduce((s, m) => s + m.payment_plan_amount, 0);
 
     const allMonths = new Set<string>();
-    clientInvoices.forEach(inv => { if (inv.invoice_date) allMonths.add(inv.invoice_date.substring(0, 7)); });
+    clientInvoices.forEach(inv => { if (inv.receipt_date) allMonths.add((inv.receipt_date as string).substring(0, 7)); });
     clientMilestones.forEach(ms => { if (ms.planned_receive_date) allMonths.add(ms.planned_receive_date.substring(0, 7)); });
 
     const eventMonths = [...allMonths].sort();
@@ -75,9 +75,9 @@ export default function OverviewTab() {
 
     const receivedDeltaMap: Record<string, number> = {};
     clientInvoices.forEach(inv => {
-      if ((inv.received_amount ?? 0) > 0 && inv.invoice_date) {
-        const m = inv.invoice_date.substring(0, 7);
-        receivedDeltaMap[m] = (receivedDeltaMap[m] ?? 0) + inv.received_amount;
+      if (inv.status !== 'pending' && (inv.received_amount ?? 0) > 0 && inv.receipt_date) {
+        const m = (inv.receipt_date as string).substring(0, 7);
+        receivedDeltaMap[m] = (receivedDeltaMap[m] ?? 0) + Number(inv.received_amount);
       }
     });
     const invoicedDeltaMap: Record<string, number> = {};
@@ -123,14 +123,14 @@ export default function OverviewTab() {
 
     let runReceived = 0, runInvoicedOutstanding = 0, runPlanned = 0;
     const sortedInvoicesByDate = [...clientInvoices]
-      .filter(inv => inv.invoice_date)
-      .sort((a, b) => (a.invoice_date ?? '').localeCompare(b.invoice_date ?? '') || (a.invoice_no ?? '').localeCompare(b.invoice_no ?? ''));
+      .filter(inv => inv.status !== 'pending' && (inv.received_amount ?? 0) > 0 && inv.receipt_date)
+      .sort((a, b) => (a.receipt_date as string).localeCompare(b.receipt_date as string) || (a.invoice_no ?? '').localeCompare(b.invoice_no ?? ''));
     const sortedMilestonesByDate = [...clientMilestones]
       .filter(ms => ms.status === 'pending' && !invoicedMilestoneIds.has(ms.id) && ms.planned_receive_date)
       .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? '') || a.milestone_number - b.milestone_number);
 
     sorted.forEach(month => {
-      const monthReceivedInvs = sortedInvoicesByDate.filter(inv => inv.invoice_date?.substring(0, 7) === month && (inv.received_amount ?? 0) > 0);
+      const monthReceivedInvs = sortedInvoicesByDate.filter(inv => (inv.receipt_date as string)?.substring(0, 7) === month);
       monthReceivedInvs.forEach(inv => {
         runReceived += inv.received_amount;
         const msNum = milestoneNumById[inv.client_milestone_id];
@@ -138,7 +138,7 @@ export default function OverviewTab() {
       });
       const receivedThisMonth = monthReceivedInvs.reduce((s, i) => s + i.received_amount, 0);
       runInvoicedOutstanding = Math.max(0, runInvoicedOutstanding - receivedThisMonth);
-      const monthInvoicedInvs = sortedInvoicesByDate.filter(inv => inv.invoice_date?.substring(0, 7) === month && (inv.invoice_amount - (inv.received_amount ?? 0)) > 0);
+      const monthInvoicedInvs = clientInvoices.filter(inv => inv.invoice_date?.substring(0, 7) === month && (inv.invoice_amount - (inv.received_amount ?? 0)) > 0);
       monthInvoicedInvs.forEach(inv => {
         const outstanding = inv.invoice_amount - (inv.received_amount ?? 0);
         runInvoicedOutstanding += outstanding;
