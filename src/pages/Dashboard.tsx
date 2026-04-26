@@ -549,10 +549,10 @@ export default function Dashboard() {
 
   // ── Payables Pipeline ──────────────────────────────────────────────────
   // Col O (cost): vendor invoices issued but not yet fully paid
-  const colO_Cost = vendorInvoicesUnpaid.reduce((s, vi) => s + vi.balance, 0);
+  const colO_Cost = vendorInvoicesUnpaid.reduce((s, vi) => s + Number(vi.balance), 0);
 
   // Col P1 (cost): PO milestones not yet invoiced — amount_due minus paid
-  const colP1_Cost = poMilestonesAll.reduce((s, m) => s + Math.max(0, m.amount_due - (m.paid_amount ?? 0)), 0);
+  const colP1_Cost = poMilestonesAll.reduce((s, m) => s + Math.max(0, Number(m.amount_due) - Number(m.paid_amount ?? 0)), 0);
 
   // Col P2 (cost): uncontracted budget — approved estimation cost minus total POs per project
   let colP2_Cost = 0;
@@ -562,19 +562,19 @@ export default function Dashboard() {
     );
     if (!estimation) continue;
     const totalEstimation =
-      (estimation.cost_01_civil ?? 0) +
-      (estimation.cost_02_pv_modules ?? 0) +
-      (estimation.cost_03_mounting ?? 0) +
-      (estimation.cost_04_inverters ?? 0) +
-      (estimation.cost_05_hv_switchgear ?? 0) +
-      (estimation.cost_06_cabling ?? 0) +
-      (estimation.cost_07_installation ?? 0) +
-      (estimation.cost_08_engineering ?? 0) +
-      (estimation.cost_09_logistics ?? 0) +
-      (estimation.cost_10_testing ?? 0);
+      Number(estimation.cost_01_civil ?? 0) +
+      Number(estimation.cost_02_pv_modules ?? 0) +
+      Number(estimation.cost_03_mounting ?? 0) +
+      Number(estimation.cost_04_inverters ?? 0) +
+      Number(estimation.cost_05_hv_switchgear ?? 0) +
+      Number(estimation.cost_06_cabling ?? 0) +
+      Number(estimation.cost_07_installation ?? 0) +
+      Number(estimation.cost_08_engineering ?? 0) +
+      Number(estimation.cost_09_logistics ?? 0) +
+      Number(estimation.cost_10_testing ?? 0);
     const totalPOs = allPOs
       .filter((po) => po.project_id === project.id)
-      .reduce((s, po) => s + (po.po_amount_excl_vat ?? 0), 0);
+      .reduce((s, po) => s + Number(po.po_amount_excl_vat ?? 0), 0);
     colP2_Cost += Math.max(0, totalEstimation - totalPOs);
   }
 
@@ -711,10 +711,10 @@ export default function Dashboard() {
     .map((project) => {
       const received = clientInvoiceReceipts
         .filter((r) => r.project_id === project.id)
-        .reduce((s, r) => s + r.received_amount, 0);
+        .reduce((s, r) => s + Number(r.received_amount), 0);
       const paid = vendorInvoicePaid
         .filter((vi) => vi.project_id === project.id)
-        .reduce((s, vi) => s + vi.received_amount, 0);
+        .reduce((s, vi) => s + Number(vi.net_paid), 0);
       return {
         project,
         totalReceived: received,
