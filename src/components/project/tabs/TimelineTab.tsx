@@ -112,7 +112,7 @@ export default function TimelineTab() {
                 <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickFormatter={(v: number) => fmtTHB(v)} width={90} />
                 <Tooltip formatter={(v: number, name: string) => [fmtTHB(v), name]} />
                 <ReferenceLine y={0} stroke="#ccc" />
-                <Area type="monotone" dataKey="cumIncome" stroke="#1D9E75" strokeWidth={2} fill="url(#incomeGrad)" name="Cumulative Received" />
+                <Area type="monotone" dataKey="cumIncome" stroke="#1D9E75" strokeWidth={2} fill="url(#incomeGrad)" name="Expected Cumulative Revenue" />
                 <Area type="monotone" dataKey="cumCost" stroke="#E24B4A" strokeWidth={2} strokeDasharray="6 3" fill="url(#costGrad)" name="Confirmed Cost Forecast" />
                 <Line type="monotone" dataKey="cumDraftCost" stroke="#E24B4A" strokeWidth={1.5} strokeDasharray="4 4" strokeOpacity={0.4} dot={false} name="Draft / Pending Cost" />
               </ComposedChart>
@@ -120,7 +120,7 @@ export default function TimelineTab() {
             <div className="flex items-center gap-5 mt-3 px-1 flex-wrap">
               <div className="flex items-center gap-1.5 text-xs text-gray-500">
                 <div className="w-5 h-0.5 bg-[#1D9E75]" />
-                <span>Cumulative Received</span>
+                <span>Expected Cumulative Revenue</span>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-gray-500">
                 <div className="w-5 border-t-2 border-dashed border-[#E24B4A]" />
