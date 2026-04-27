@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import { startOfMonth } from 'date-fns';
 import { X, CalendarClock } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { toMonthKey, toMonthLabel, fmtTHB2dp } from './AnalysisPivotTable';
@@ -10,6 +9,7 @@ import { toMonthKey, toMonthLabel, fmtTHB2dp } from './AnalysisPivotTable';
 
 interface RawMilestone {
   id: string;
+  purchase_order_id: string;
   milestone_number: number;
   amount_due: number;
   planned_payment_date: string | null;
@@ -17,11 +17,14 @@ interface RawMilestone {
     pss_po_no: string | null;
     description: string | null;
     supplier_name_raw: string | null;
-    project: {
-      id: string;
-      name: string;
-    } | null;
+    project: { id: string; name: string } | null;
   } | null;
+}
+
+interface RawInvoice {
+  id: string;
+  po_id: string | null;
+  invoice_amount_incl_vat: number;
 }
 
 interface UninvoicedDrillRow {
@@ -35,16 +38,10 @@ interface UninvoicedDrillRow {
 }
 
 // ---------------------------------------------------------------------------
-// DrillDownUninvoicedModal
+// DrillDownModal
 // ---------------------------------------------------------------------------
 
-interface DrillDownUninvoicedModalProps {
-  rows: UninvoicedDrillRow[];
-  cellLabel: string;
-  onClose: () => void;
-}
-
-function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: DrillDownUninvoicedModalProps) {
+function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: { rows: UninvoicedDrillRow[]; cellLabel: string; onClose: () => void }) {
   const total = rows.reduce((s, r) => s + r.amountDue, 0);
 
   return (
@@ -56,32 +53,26 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: DrillDownUninvoi
         className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col border border-black/[0.08]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
-            <h3 className="text-sm font-semibold text-gray-900">Yet to be Invoiced — Drill-Down</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Yet to Invoice — Drill-Down</h3>
             <p className="text-xs text-gray-400 mt-0.5">{cellLabel}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
-          >
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700">
             <X size={16} />
           </button>
         </div>
-
-        {/* Table */}
         <div className="overflow-auto flex-1">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Month</th>
+                <th className="text-left px-4 py-3">Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
                 <th className="text-left px-4 py-3">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
                 <th className="text-center px-4 py-3 whitespace-nowrap">Milestone #</th>
-                <th className="text-right px-4 py-3 whitespace-nowrap text-amber-600">Not Yet Invoiced</th>
+                <th className="text-right px-4 py-3 whitespace-nowrap">Not Yet Invoiced</th>
               </tr>
             </thead>
             <tbody>
@@ -93,20 +84,14 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: DrillDownUninvoi
                   <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.supplier || '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500 max-w-[180px] truncate">{r.description || '—'}</td>
                   <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-amber-700 whitespace-nowrap">
-                    {fmtTHB2dp(r.amountDue)}
-                  </td>
+                  <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">{fmtTHB2dp(r.amountDue)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="bg-amber-50 border-t-2 border-amber-200">
-                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Total
-                </td>
-                <td className="px-4 py-2.5 text-right font-black tabular-nums text-amber-700 text-[13px] whitespace-nowrap">
-                  {fmtTHB2dp(total)}
-                </td>
+                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</td>
+                <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums text-[13px]">{fmtTHB2dp(total)}</td>
               </tr>
             </tfoot>
           </table>
@@ -122,81 +107,109 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: DrillDownUninvoi
 
 export default function MonthlyAnalysisUninvoiced() {
   const [milestones, setMilestones] = useState<RawMilestone[]>([]);
+  const [invoices, setInvoices] = useState<RawInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [drill, setDrill] = useState<{ rows: UninvoicedDrillRow[]; label: string } | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('po_milestones')
-      .select(`
-        id,
-        milestone_number,
-        amount_due,
-        planned_payment_date,
-        purchase_order:purchase_orders (
-          pss_po_no,
-          description,
-          supplier_name_raw,
-          project:projects (
-            id,
-            name
-          )
-        )
-      `)
-      .eq('status', 'pending')
-      .order('planned_payment_date', { ascending: true, nullsFirst: false });
 
-    if (!error && data) {
-      setMilestones(data as unknown as RawMilestone[]);
-    }
+    // Fetch ALL milestones and ALL invoices in parallel
+    const [milestonesRes, invoicesRes] = await Promise.all([
+      supabase
+        .from('po_milestones')
+        .select(`
+          id, purchase_order_id, milestone_number, amount_due, planned_payment_date,
+          purchase_order:purchase_orders (
+            pss_po_no, description, supplier_name_raw,
+            project:projects ( id, name )
+          )
+        `)
+        .order('planned_payment_date', { ascending: true, nullsFirst: false }),
+      supabase
+        .from('vendor_invoices')
+        .select('id, po_id, invoice_amount_incl_vat'),
+    ]);
+
+    if (!milestonesRes.error && milestonesRes.data) setMilestones(milestonesRes.data as unknown as RawMilestone[]);
+    if (!invoicesRes.error && invoicesRes.data) setInvoices(invoicesRes.data as unknown as RawInvoice[]);
     setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Filter to current-month-and-future only ──────────────────────────────
+  // ── 1:1 mathematical matching algorithm ─────────────────────────────────
+  //
+  // For each vendor_invoice, find the FIRST unmatched milestone where:
+  //   milestone.purchase_order_id === invoice.po_id
+  //   AND milestone.amount_due === invoice.invoice_amount_incl_vat
+  // Flag that milestone as invoiced (remove from forecast).
+  // Milestones that survive = true "yet to invoice" forecast.
 
-  const startOfCurrentMonth = startOfMonth(new Date());
+  const uninvoicedMilestones = (() => {
+    // Build a mutable map: `${po_id}::${amount}` → array of milestone indices still available
+    const availableByKey = new Map<string, number[]>();
 
-  const validRows = milestones.filter(m => {
-    if (!m.purchase_order?.project?.name) return false;
-    if (!m.amount_due || Number(m.amount_due) <= 0) return false;
-    // Include if planned_payment_date >= start of current month, or no date (unscheduled)
-    if (!m.planned_payment_date) return false;
-    return new Date(m.planned_payment_date) >= startOfCurrentMonth;
-  });
+    milestones.forEach((m, idx) => {
+      if (!m.purchase_order?.project?.name) return;
+      const key = `${m.purchase_order_id}::${Number(m.amount_due).toFixed(2)}`;
+      if (!availableByKey.has(key)) availableByKey.set(key, []);
+      availableByKey.get(key)!.push(idx);
+    });
 
-  // ── Build pivot ──────────────────────────────────────────────────────────
+    // Track which milestone indices are consumed by an invoice
+    const consumedIndices = new Set<number>();
+
+    for (const inv of invoices) {
+      if (!inv.po_id) continue;
+      const key = `${inv.po_id}::${Number(inv.invoice_amount_incl_vat).toFixed(2)}`;
+      const available = availableByKey.get(key);
+      if (available && available.length > 0) {
+        // Consume the first available match
+        consumedIndices.add(available.shift()!);
+      }
+    }
+
+    // Return milestones that were NOT consumed
+    return milestones.filter((_, idx) => !consumedIndices.has(idx));
+  })();
+
+  // ── Build pivot from surviving uninvoiced milestones ─────────────────────
+
+  const validRows = uninvoicedMilestones.filter(m =>
+    m.purchase_order?.project?.name &&
+    m.amount_due &&
+    Number(m.amount_due) > 0
+  );
 
   const monthKeySet = new Set<string>();
   const projectNameSet = new Set<string>();
 
   for (const m of validRows) {
-    monthKeySet.add(toMonthKey(m.planned_payment_date!));
+    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
+    monthKeySet.add(toMonthKey(dateStr));
     projectNameSet.add(m.purchase_order!.project!.name);
   }
 
   const monthKeys = [...monthKeySet].sort();
   const projectNames = [...projectNameSet].sort();
 
-  // cell map: `${project}||${monthKey}` → UninvoicedDrillRow[]
   const cellMap = new Map<string, UninvoicedDrillRow[]>();
 
   for (const m of validRows) {
-    const mk = toMonthKey(m.planned_payment_date!);
+    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
+    const mk = toMonthKey(dateStr);
     const project = m.purchase_order!.project!.name;
-    const mapKey = `${project}||${mk}`;
-    if (!cellMap.has(mapKey)) cellMap.set(mapKey, []);
-    const amountDue = Number(m.amount_due);
-    cellMap.get(mapKey)!.push({
+    const key = `${project}||${mk}`;
+    if (!cellMap.has(key)) cellMap.set(key, []);
+    cellMap.get(key)!.push({
       project,
       monthLabel: toMonthLabel(mk),
-      poNo: m.purchase_order?.pss_po_no ?? '',
-      supplier: m.purchase_order?.supplier_name_raw ?? '',
-      description: m.purchase_order?.description ?? '',
+      poNo: m.purchase_order!.pss_po_no ?? '',
+      supplier: m.purchase_order!.supplier_name_raw ?? '',
+      description: m.purchase_order!.description ?? '',
       milestoneNo: m.milestone_number,
-      amountDue,
+      amountDue: Number(m.amount_due),
     });
   }
 
@@ -235,32 +248,22 @@ export default function MonthlyAnalysisUninvoiced() {
   return (
     <>
       <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <CalendarClock size={15} className="text-amber-500" />
-            <h2 className="text-[13px] font-semibold text-gray-800">
-              Monthly Analysis — Yet to be Invoiced
-            </h2>
-            <span className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
-              Forecast
-            </span>
+            <h2 className="text-[13px] font-semibold text-gray-800">Monthly Analysis — Yet to Invoice</h2>
           </div>
-          <p className="text-[11px] text-gray-400">
-            Click any value to drill down
-          </p>
+          <p className="text-[11px] text-gray-400">Click any value to drill down</p>
         </div>
 
         {loading ? (
           <div className="space-y-2 py-4">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />
-            ))}
+            {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />)}
           </div>
         ) : validRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2">
             <CalendarClock size={28} className="text-gray-200" />
-            <p className="text-[13px] text-gray-400">No future uninvoiced milestones found</p>
+            <p className="text-[13px] text-gray-400">All milestones have been invoiced</p>
           </div>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-100">
@@ -280,7 +283,6 @@ export default function MonthlyAnalysisUninvoiced() {
                   </th>
                 </tr>
               </thead>
-
               <tbody>
                 {projectNames.map((project, pi) => {
                   const rowTotal = projectTotal(project);
@@ -297,9 +299,7 @@ export default function MonthlyAnalysisUninvoiced() {
                           <td
                             key={mk}
                             className={`text-right px-3 py-2 tabular-nums border-b border-gray-50 transition-colors ${
-                              val > 0 && hasDrill
-                                ? 'text-gray-800 font-medium cursor-pointer hover:bg-blue-50 hover:text-blue-600'
-                                : 'text-gray-300'
+                              val > 0 && hasDrill ? 'text-gray-800 font-medium cursor-pointer hover:bg-blue-50 hover:text-blue-600' : 'text-gray-300'
                             }`}
                             onClick={() => hasDrill && openDrill(project, mk)}
                           >
@@ -309,9 +309,7 @@ export default function MonthlyAnalysisUninvoiced() {
                       })}
                       <td
                         className={`text-right px-4 py-2 font-bold tabular-nums border-l border-gray-200 bg-amber-50 whitespace-nowrap ${
-                          rowTotal > 0
-                            ? 'text-amber-700 cursor-pointer hover:bg-amber-100 hover:text-blue-600'
-                            : 'text-gray-300'
+                          rowTotal > 0 ? 'text-amber-700 cursor-pointer hover:bg-amber-100 hover:text-blue-600' : 'text-gray-300'
                         }`}
                         onClick={() => rowTotal > 0 && openDrill(project, null)}
                       >
@@ -321,7 +319,6 @@ export default function MonthlyAnalysisUninvoiced() {
                   );
                 })}
               </tbody>
-
               <tfoot>
                 <tr className="bg-amber-50 border-t-2 border-amber-200">
                   <td className="sticky left-0 z-10 bg-amber-50 px-4 py-2.5 font-bold text-amber-700 border-r border-amber-200 whitespace-nowrap uppercase tracking-wide text-[11px]">
@@ -333,9 +330,7 @@ export default function MonthlyAnalysisUninvoiced() {
                       <td
                         key={mk}
                         className={`text-right px-3 py-2.5 font-bold tabular-nums whitespace-nowrap ${
-                          val > 0
-                            ? 'text-gray-900 cursor-pointer hover:bg-amber-100 hover:text-blue-600'
-                            : 'text-gray-300'
+                          val > 0 ? 'text-gray-900 cursor-pointer hover:bg-amber-100 hover:text-blue-600' : 'text-gray-300'
                         }`}
                         onClick={() => val > 0 && openDrill(null, mk)}
                       >
@@ -345,9 +340,7 @@ export default function MonthlyAnalysisUninvoiced() {
                   })}
                   <td
                     className={`text-right px-4 py-2.5 font-black text-[13px] tabular-nums border-l border-amber-200 whitespace-nowrap ${
-                      grandTotal > 0
-                        ? 'text-amber-700 cursor-pointer hover:bg-amber-100 hover:text-blue-600'
-                        : 'text-gray-300'
+                      grandTotal > 0 ? 'text-amber-700 cursor-pointer hover:bg-amber-100 hover:text-blue-600' : 'text-gray-300'
                     }`}
                     onClick={() => grandTotal > 0 && openDrill(null, null)}
                   >
@@ -360,13 +353,7 @@ export default function MonthlyAnalysisUninvoiced() {
         )}
       </div>
 
-      {drill && (
-        <DrillDownUninvoicedModal
-          rows={drill.rows}
-          cellLabel={drill.label}
-          onClose={() => setDrill(null)}
-        />
-      )}
+      {drill && <DrillDownUninvoicedModal rows={drill.rows} cellLabel={drill.label} onClose={() => setDrill(null)} />}
     </>
   );
 }

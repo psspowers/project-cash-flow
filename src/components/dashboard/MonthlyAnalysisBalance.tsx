@@ -7,20 +7,18 @@ import { toMonthKey, toMonthLabel, fmtTHB2dp } from './AnalysisPivotTable';
 // Types
 // ---------------------------------------------------------------------------
 
-interface RawMilestone {
+interface RawInvoice {
   id: string;
-  milestone_number: number;
-  amount_due: number;
-  paid_amount: number | null;
-  planned_payment_date: string | null;
+  po_id: string | null;
+  invoice_date: string | null;
+  invoice_amount_incl_vat: number;
+  received_amount: number | null;
+  vendor_invoice_no: string | null;
   purchase_order: {
     pss_po_no: string | null;
     description: string | null;
     supplier_name_raw: string | null;
-    project: {
-      id: string;
-      name: string;
-    } | null;
+    project: { id: string; name: string } | null;
   } | null;
 }
 
@@ -30,25 +28,19 @@ interface BalanceDrillRow {
   poNo: string;
   supplier: string;
   description: string;
-  milestoneNo: number;
-  amountDue: number;
-  paidAmount: number;
+  invoiceNo: string;
+  invoiceAmount: number;
+  receivedAmount: number;
   balance: number;
 }
 
 // ---------------------------------------------------------------------------
-// DrillDownBalanceModal
+// DrillDownModal
 // ---------------------------------------------------------------------------
 
-interface DrillDownBalanceModalProps {
-  rows: BalanceDrillRow[];
-  cellLabel: string;
-  onClose: () => void;
-}
-
-function DrillDownBalanceModal({ rows, cellLabel, onClose }: DrillDownBalanceModalProps) {
-  const totalDue = rows.reduce((s, r) => s + r.amountDue, 0);
-  const totalPaid = rows.reduce((s, r) => s + r.paidAmount, 0);
+function DrillDownBalanceModal({ rows, cellLabel, onClose }: { rows: BalanceDrillRow[]; cellLabel: string; onClose: () => void }) {
+  const totalInvoiced = rows.reduce((s, r) => s + r.invoiceAmount, 0);
+  const totalReceived = rows.reduce((s, r) => s + r.receivedAmount, 0);
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
 
   return (
@@ -60,33 +52,27 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose }: DrillDownBalanceMod
         className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col border border-black/[0.08]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Invoice Balance — Drill-Down</h3>
             <p className="text-xs text-gray-400 mt-0.5">{cellLabel}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
-          >
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700">
             <X size={16} />
           </button>
         </div>
-
-        {/* Table */}
         <div className="overflow-auto flex-1">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Month</th>
+                <th className="text-left px-4 py-3">Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
                 <th className="text-left px-4 py-3">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
-                <th className="text-center px-4 py-3 whitespace-nowrap">Milestone #</th>
-                <th className="text-right px-4 py-3 whitespace-nowrap">Amount Due</th>
-                <th className="text-right px-4 py-3 whitespace-nowrap">Paid</th>
+                <th className="text-center px-4 py-3 whitespace-nowrap">Invoice #</th>
+                <th className="text-right px-4 py-3 whitespace-nowrap">Invoice Amount</th>
+                <th className="text-right px-4 py-3 whitespace-nowrap">Received</th>
                 <th className="text-right px-4 py-3 whitespace-nowrap text-[#E24B4A]">Balance</th>
               </tr>
             </thead>
@@ -98,20 +84,18 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose }: DrillDownBalanceMod
                   <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.supplier || '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500 max-w-[180px] truncate">{r.description || '—'}</td>
-                  <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">{fmtTHB2dp(r.amountDue)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-[#1D9E75] whitespace-nowrap">{r.paidAmount > 0 ? fmtTHB2dp(r.paidAmount) : '—'}</td>
+                  <td className="px-4 py-2.5 text-center text-gray-500 font-mono text-xs">{r.invoiceNo || '—'}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">{fmtTHB2dp(r.invoiceAmount)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-[#1D9E75] whitespace-nowrap">{r.receivedAmount > 0 ? fmtTHB2dp(r.receivedAmount) : '—'}</td>
                   <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[#E24B4A] whitespace-nowrap">{fmtTHB2dp(r.balance)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="bg-red-50 border-t-2 border-red-200">
-                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Total
-                </td>
-                <td className="px-4 py-2.5 text-right font-bold tabular-nums text-gray-700 whitespace-nowrap">{fmtTHB2dp(totalDue)}</td>
-                <td className="px-4 py-2.5 text-right font-bold tabular-nums text-[#1D9E75] whitespace-nowrap">{totalPaid > 0 ? fmtTHB2dp(totalPaid) : '—'}</td>
+                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</td>
+                <td className="px-4 py-2.5 text-right font-bold tabular-nums text-gray-700 whitespace-nowrap">{fmtTHB2dp(totalInvoiced)}</td>
+                <td className="px-4 py-2.5 text-right font-bold tabular-nums text-[#1D9E75] whitespace-nowrap">{totalReceived > 0 ? fmtTHB2dp(totalReceived) : '—'}</td>
                 <td className="px-4 py-2.5 text-right font-black tabular-nums text-[#E24B4A] text-[13px] whitespace-nowrap">{fmtTHB2dp(totalBalance)}</td>
               </tr>
             </tfoot>
@@ -127,83 +111,68 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose }: DrillDownBalanceMod
 // ---------------------------------------------------------------------------
 
 export default function MonthlyAnalysisBalance() {
-  const [milestones, setMilestones] = useState<RawMilestone[]>([]);
+  const [invoices, setInvoices] = useState<RawInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [drill, setDrill] = useState<{ rows: BalanceDrillRow[]; label: string } | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
-      .from('po_milestones')
+      .from('vendor_invoices')
       .select(`
-        id,
-        milestone_number,
-        amount_due,
-        paid_amount,
-        planned_payment_date,
+        id, po_id, invoice_date, invoice_amount_incl_vat, received_amount, vendor_invoice_no,
         purchase_order:purchase_orders (
-          pss_po_no,
-          description,
-          supplier_name_raw,
-          project:projects (
-            id,
-            name
-          )
+          pss_po_no, description, supplier_name_raw,
+          project:projects ( id, name )
         )
       `)
-      .or('status.neq.paid,status.is.null')
-      .order('planned_payment_date', { ascending: true, nullsFirst: false });
+      .eq('status', 'received')
+      .not('invoice_date', 'is', null)
+      .order('invoice_date', { ascending: true });
 
-    if (!error && data) {
-      setMilestones(data as unknown as RawMilestone[]);
-    }
+    if (!error && data) setInvoices(data as unknown as RawInvoice[]);
     setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Build pivot ──────────────────────────────────────────────────────────
+  // ── Build pivot (only rows where balance > 0) ────────────────────────────
 
-  // Filter to rows with a positive balance and a known project
-  const validRows = milestones.filter(m => {
-    const balance = Number(m.amount_due) - Number(m.paid_amount ?? 0);
-    return balance > 0 && m.purchase_order?.project?.name;
+  const validInvoices = invoices.filter(inv => {
+    const balance = Number(inv.invoice_amount_incl_vat ?? 0) - Number(inv.received_amount ?? 0);
+    return balance > 0 && inv.invoice_date && inv.purchase_order?.project?.name;
   });
 
   const monthKeySet = new Set<string>();
   const projectNameSet = new Set<string>();
 
-  for (const m of validRows) {
-    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
-    monthKeySet.add(toMonthKey(dateStr));
-    projectNameSet.add(m.purchase_order!.project!.name);
+  for (const inv of validInvoices) {
+    monthKeySet.add(toMonthKey(inv.invoice_date!));
+    projectNameSet.add(inv.purchase_order!.project!.name);
   }
 
   const monthKeys = [...monthKeySet].sort();
   const projectNames = [...projectNameSet].sort();
 
-  // cell map: `${project}||${monthKey}` → BalanceDrillRow[]
   const cellMap = new Map<string, BalanceDrillRow[]>();
 
-  for (const m of validRows) {
-    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
-    const mk = toMonthKey(dateStr);
-    const project = m.purchase_order!.project!.name;
-    const mapKey = `${project}||${mk}`;
-    if (!cellMap.has(mapKey)) cellMap.set(mapKey, []);
-    const amountDue = Number(m.amount_due);
-    const paidAmount = Number(m.paid_amount ?? 0);
-    const balance = amountDue - paidAmount;
-    cellMap.get(mapKey)!.push({
+  for (const inv of validInvoices) {
+    const mk = toMonthKey(inv.invoice_date!);
+    const project = inv.purchase_order!.project!.name;
+    const key = `${project}||${mk}`;
+    if (!cellMap.has(key)) cellMap.set(key, []);
+    const invoiceAmount = Number(inv.invoice_amount_incl_vat ?? 0);
+    const receivedAmount = Number(inv.received_amount ?? 0);
+    cellMap.get(key)!.push({
       project,
       monthLabel: toMonthLabel(mk),
-      poNo: m.purchase_order?.pss_po_no ?? '',
-      supplier: m.purchase_order?.supplier_name_raw ?? '',
-      description: m.purchase_order?.description ?? '',
-      milestoneNo: m.milestone_number,
-      amountDue,
-      paidAmount,
-      balance,
+      poNo: inv.purchase_order!.pss_po_no ?? '',
+      supplier: inv.purchase_order!.supplier_name_raw ?? '',
+      description: inv.purchase_order!.description ?? '',
+      invoiceNo: inv.vendor_invoice_no ?? '',
+      invoiceAmount,
+      receivedAmount,
+      balance: invoiceAmount - receivedAmount,
     });
   }
 
@@ -242,26 +211,19 @@ export default function MonthlyAnalysisBalance() {
   return (
     <>
       <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <AlertCircle size={15} className="text-[#E24B4A]" />
-            <h2 className="text-[13px] font-semibold text-gray-800">
-              Monthly Analysis — Invoice Balance
-            </h2>
+            <h2 className="text-[13px] font-semibold text-gray-800">Monthly Analysis — Invoice Balance</h2>
           </div>
-          <p className="text-[11px] text-gray-400">
-            Click any value to drill down
-          </p>
+          <p className="text-[11px] text-gray-400">Click any value to drill down</p>
         </div>
 
         {loading ? (
           <div className="space-y-2 py-4">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />
-            ))}
+            {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />)}
           </div>
-        ) : validRows.length === 0 ? (
+        ) : validInvoices.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2">
             <AlertCircle size={28} className="text-gray-200" />
             <p className="text-[13px] text-gray-400">No outstanding invoice balances</p>
@@ -284,7 +246,6 @@ export default function MonthlyAnalysisBalance() {
                   </th>
                 </tr>
               </thead>
-
               <tbody>
                 {projectNames.map((project, pi) => {
                   const rowTotal = projectTotal(project);
@@ -301,9 +262,7 @@ export default function MonthlyAnalysisBalance() {
                           <td
                             key={mk}
                             className={`text-right px-3 py-2 tabular-nums border-b border-gray-50 transition-colors ${
-                              val > 0 && hasDrill
-                                ? 'text-gray-800 font-medium cursor-pointer hover:bg-blue-50 hover:text-blue-600'
-                                : 'text-gray-300'
+                              val > 0 && hasDrill ? 'text-gray-800 font-medium cursor-pointer hover:bg-blue-50 hover:text-blue-600' : 'text-gray-300'
                             }`}
                             onClick={() => hasDrill && openDrill(project, mk)}
                           >
@@ -313,9 +272,7 @@ export default function MonthlyAnalysisBalance() {
                       })}
                       <td
                         className={`text-right px-4 py-2 font-bold tabular-nums border-l border-gray-200 bg-red-50 whitespace-nowrap ${
-                          rowTotal > 0
-                            ? 'text-[#E24B4A] cursor-pointer hover:bg-red-100 hover:text-blue-600'
-                            : 'text-gray-300'
+                          rowTotal > 0 ? 'text-[#E24B4A] cursor-pointer hover:bg-red-100 hover:text-blue-600' : 'text-gray-300'
                         }`}
                         onClick={() => rowTotal > 0 && openDrill(project, null)}
                       >
@@ -325,7 +282,6 @@ export default function MonthlyAnalysisBalance() {
                   );
                 })}
               </tbody>
-
               <tfoot>
                 <tr className="bg-red-50 border-t-2 border-red-200">
                   <td className="sticky left-0 z-10 bg-red-50 px-4 py-2.5 font-bold text-[#E24B4A] border-r border-red-200 whitespace-nowrap uppercase tracking-wide text-[11px]">
@@ -337,9 +293,7 @@ export default function MonthlyAnalysisBalance() {
                       <td
                         key={mk}
                         className={`text-right px-3 py-2.5 font-bold tabular-nums whitespace-nowrap ${
-                          val > 0
-                            ? 'text-gray-900 cursor-pointer hover:bg-red-100 hover:text-blue-600'
-                            : 'text-gray-300'
+                          val > 0 ? 'text-gray-900 cursor-pointer hover:bg-red-100 hover:text-blue-600' : 'text-gray-300'
                         }`}
                         onClick={() => val > 0 && openDrill(null, mk)}
                       >
@@ -349,9 +303,7 @@ export default function MonthlyAnalysisBalance() {
                   })}
                   <td
                     className={`text-right px-4 py-2.5 font-black text-[13px] tabular-nums border-l border-red-200 whitespace-nowrap ${
-                      grandTotal > 0
-                        ? 'text-[#E24B4A] cursor-pointer hover:bg-red-100 hover:text-blue-600'
-                        : 'text-gray-300'
+                      grandTotal > 0 ? 'text-[#E24B4A] cursor-pointer hover:bg-red-100 hover:text-blue-600' : 'text-gray-300'
                     }`}
                     onClick={() => grandTotal > 0 && openDrill(null, null)}
                   >
@@ -364,13 +316,7 @@ export default function MonthlyAnalysisBalance() {
         )}
       </div>
 
-      {drill && (
-        <DrillDownBalanceModal
-          rows={drill.rows}
-          cellLabel={drill.label}
-          onClose={() => setDrill(null)}
-        />
-      )}
+      {drill && <DrillDownBalanceModal rows={drill.rows} cellLabel={drill.label} onClose={() => setDrill(null)} />}
     </>
   );
 }
