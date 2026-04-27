@@ -349,7 +349,7 @@ export default function Dashboard() {
   const [vendorInvoicesUnpaid, setVendorInvoicesUnpaid] = useState<
     { project_id: string; balance: number; planned_payment_date: string | null; approved_by: string | null }[]
   >([]);
-  const [poSimplePending, setPoSimplePending] = useState<
+  const [uninvoicedPOs, setUninvoicedPOs] = useState<
     { project_id: string; pending_remaining_amount: number; po_date: string | null; approved_by: string | null }[]
   >([]);
   const [allPOs, setAllPOs] = useState<{ project_id: string; po_amount_excl_vat: number }[]>([]);
@@ -442,7 +442,6 @@ export default function Dashboard() {
         supabase
           .from('purchase_orders')
           .select('project_id, pending_remaining_amount, po_date, approved_by, has_supplier_milestones')
-          .eq('has_supplier_milestones', false)
           .gt('pending_remaining_amount', 0),
         supabase
           .from('purchase_orders')
@@ -504,7 +503,7 @@ export default function Dashboard() {
         .filter((vi: { project_id: string; balance: number }) => vi.project_id !== '' && vi.balance > 0);
       setVendorInvoicesUnpaid(normalizedUnpaidInvoices);
 
-      setPoSimplePending((poSimpleRaw ?? []) as typeof poSimplePending);
+      setUninvoicedPOs((poSimpleRaw ?? []) as typeof uninvoicedPOs);
       setAllPOs((poRaw as any) ?? []);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
@@ -557,8 +556,11 @@ export default function Dashboard() {
   // Col O (cost): vendor invoices issued but not yet fully paid
   const colO_Cost = vendorInvoicesUnpaid.reduce((s, vi) => s + Number(vi.balance), 0);
 
-  // Col P1 (cost): PO milestones not yet invoiced — amount_due minus paid
-  const colP1_Cost = poMilestonesAll.reduce((s, m) => s + Math.max(0, Number(m.amount_due) - Number(m.paid_amount ?? 0)), 0);
+  // Col P1 (cost): uninvoiced balance across all POs (pending_remaining_amount covers both milestone and non-milestone POs)
+  const activeProjectIds = new Set(activeProjects.map(p => p.id));
+  const colP1_Cost = uninvoicedPOs
+    .filter(po => activeProjectIds.has(po.project_id))
+    .reduce((s, po) => s + Number(po.pending_remaining_amount || 0), 0);
 
   // Col P2 (cost): uncontracted budget — approved estimation cost minus total POs per project
   let colP2_Cost = 0;
@@ -608,7 +610,7 @@ export default function Dashboard() {
       .filter(vi => vi.planned_payment_date?.startsWith(key))
       .reduce((s, vi) => s + vi.balance / 1_000_000, 0);
     // Source 2: Simple POs with no invoice yet — use po_date as proxy
-    const outflowSimplePO = poSimplePending
+    const outflowSimplePO = uninvoicedPOs
       .filter(po => po.po_date?.startsWith(key))
       .reduce((s, po) => s + (po.pending_remaining_amount ?? 0) / 1_000_000, 0);
     return {
@@ -695,7 +697,7 @@ export default function Dashboard() {
       .filter(m => m.planned_payment_date && m.planned_payment_date <= ninetyDayKey)
       .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
     + vendorInvoicesUnpaidTotal
-    + poSimplePending
+    + uninvoicedPOs
       .filter(po => po.po_date && po.po_date <= ninetyDayKey)
       .reduce((s, po) => s + (po.pending_remaining_amount ?? 0), 0);
 
@@ -1067,10 +1069,10 @@ export default function Dashboard() {
             <div className="md:pl-6 pt-4 md:pt-0">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Committed + Uncontracted</p>
               <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colP1_Cost + colP2_Cost)}</p>
-              <p className="text-xs text-gray-400 mt-1">Col P1 PO milestones · Col P2 budget gap</p>
+              <p className="text-xs text-gray-400 mt-1">Col P1 Uninvoiced POs · Col P2 budget gap</p>
               <div className="mt-2 space-y-1">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">PO milestones (P1)</span>
+                  <span className="text-gray-400">Uninvoiced POs (P1)</span>
                   <span className="font-medium text-gray-700">{fmtTHBCompact(colP1_Cost)}</span>
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
