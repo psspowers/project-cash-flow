@@ -39,9 +39,6 @@ import {
 import MetricCard from '../components/ui/MetricCard';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatDate } from '../utils/formatters';
-import MonthlyAnalysis from '../components/dashboard/MonthlyAnalysis';
-import MonthlyAnalysisBalance from '../components/dashboard/MonthlyAnalysisBalance';
-import MonthlyAnalysisUninvoiced from '../components/dashboard/MonthlyAnalysisUninvoiced';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -1308,15 +1305,6 @@ export default function Dashboard() {
           </>
         )}
       </div>
-
-      {/* Monthly Analysis — Invoices Paid pivot table */}
-      <MonthlyAnalysis />
-
-      {/* Monthly Analysis — Invoice Balance pivot table */}
-      <MonthlyAnalysisBalance />
-
-      {/* Monthly Analysis — Yet to be Invoiced (Forecast) pivot table */}
-      <MonthlyAnalysisUninvoiced />
 
       {/* Project cash positions + Approval queue */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

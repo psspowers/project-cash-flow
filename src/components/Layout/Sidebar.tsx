@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderKanban, ShoppingCart, CheckCircle,
   CreditCard, Receipt, BookOpen, FileText, Bell, CalendarRange,
   BarChart3, Zap, ChevronDown, ChevronRight,
-  CheckCircle2, Clock, FileWarning, TrendingUp,
+  CheckCircle2, Clock, CalendarClock, TrendingUp,
 } from 'lucide-react';
 import { UserRole } from '../../types';
 
@@ -13,7 +13,9 @@ interface SidebarProps {
   badges?: Record<string, number>;
 }
 
-const ALL_ROLES: UserRole[] = ['cost_controller', 'construction_manager', 'evp', 'accounts_supervisor', 'accounts_manager', 'ceo'];
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function NavItem({
   to,
@@ -52,8 +54,40 @@ function NavItem({
   );
 }
 
+// A sub-link whose "active" state is driven by both path AND ?tab= query param
+function TabNavItem({
+  tab,
+  label,
+  icon,
+}: {
+  tab: string;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  const location = useLocation();
+  const isActive =
+    location.pathname === '/monthly-analyzer' &&
+    (location.search === `?tab=${tab}` ||
+      // default: "paid" is active when no search param
+      (tab === 'paid' && !location.search));
+
+  return (
+    <NavLink
+      to={`/monthly-analyzer?tab=${tab}`}
+      className={`group flex items-center gap-2.5 pl-8 pr-3 py-2 rounded-md text-[13px] transition-colors ${
+        isActive
+          ? 'bg-[#1D9E75]/15 text-[#1D9E75] font-medium'
+          : 'text-white/50 hover:text-white/90 hover:bg-white/5'
+      }`}
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+    </NavLink>
+  );
+}
+
 function Divider() {
-  return <div className="my-2 border-t border-white/8" />;
+  return <div className="my-2 border-t border-white/[0.08]" />;
 }
 
 function SectionLabel({ label }: { label: string }) {
@@ -66,18 +100,21 @@ function SectionLabel({ label }: { label: string }) {
 
 const ANALYZER_ROLES: UserRole[] = ['cost_controller', 'accounts_supervisor', 'accounts_manager', 'evp', 'ceo'];
 
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
 export default function Sidebar({ role, badges = {} }: SidebarProps) {
   const location = useLocation();
-  const analyzerPaths = [
-    '/monthly-analyzer/paid',
-    '/monthly-analyzer/balance-invoiced',
-    '/monthly-analyzer/yet-to-invoice',
-  ];
-  const analyzerActive = analyzerPaths.some(p => location.pathname.startsWith(p));
-  const [analyzerOpen, setAnalyzerOpen] = useState(analyzerActive);
+  const onAnalyzerPage = location.pathname === '/monthly-analyzer';
+  const [analyzerOpen, setAnalyzerOpen] = useState(onAnalyzerPage);
+
+  // Keep group open while on the page even after mount
+  const groupOpen = analyzerOpen || onAnalyzerPage;
 
   return (
     <aside className="w-[220px] min-h-screen bg-[#0f1923] flex flex-col shrink-0 border-r border-white/5">
+
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/10">
         <div className="flex items-center gap-2.5">
@@ -96,53 +133,50 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {/* Dashboard */}
         <NavItem to="/dashboard" label="Dashboard" icon={<LayoutDashboard size={16} />} />
 
-        {/* Monthly Analyzer group */}
+        {/* ── Analytics group ── */}
         {ANALYZER_ROLES.includes(role) && (
           <>
             <Divider />
             <SectionLabel label="Analytics" />
 
-            {/* Collapsible group header */}
+            {/* Collapsible Monthly Analyzer group */}
             <button
               onClick={() => setAnalyzerOpen(o => !o)}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] transition-colors ${
-                analyzerActive
+                onAnalyzerPage
                   ? 'text-[#1D9E75] font-medium bg-[#1D9E75]/10'
                   : 'text-white/50 hover:text-white/90 hover:bg-white/5'
               }`}
             >
               <TrendingUp size={16} />
               <span className="flex-1 text-left">Monthly Analyzer</span>
-              {analyzerOpen
+              {groupOpen
                 ? <ChevronDown size={13} className="shrink-0 opacity-50" />
                 : <ChevronRight size={13} className="shrink-0 opacity-50" />
               }
             </button>
 
-            {analyzerOpen && (
+            {groupOpen && (
               <div className="space-y-0.5">
-                <NavItem
-                  to="/monthly-analyzer/paid"
+                <TabNavItem
+                  tab="paid"
                   label="Paid Invoice"
                   icon={<CheckCircle2 size={14} />}
-                  indent
                 />
-                <NavItem
-                  to="/monthly-analyzer/balance-invoiced"
+                <TabNavItem
+                  tab="balance"
                   label="Balance of Invoiced"
                   icon={<Clock size={14} />}
-                  indent
                 />
-                <NavItem
-                  to="/monthly-analyzer/yet-to-invoice"
+                <TabNavItem
+                  tab="uninvoiced"
                   label="Yet to Invoice"
-                  icon={<FileWarning size={14} />}
-                  indent
+                  icon={<CalendarClock size={14} />}
                 />
               </div>
             )}
 
-            {/* Cash Flow Planner stays after the group */}
+            {/* Cash Flow Planner */}
             {['cost_controller', 'accounts_supervisor', 'evp', 'ceo'].includes(role) && (
               <NavItem to="/cash-flow-planner" label="Cash Flow Planner" icon={<CalendarRange size={16} />} />
             )}
@@ -151,7 +185,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
 
         <Divider />
 
-        {/* Projects */}
+        {/* All Projects */}
         {['cost_controller', 'construction_manager', 'evp', 'ceo'].includes(role) && (
           <NavItem to="/projects" label="All Projects" icon={<FolderKanban size={16} />} />
         )}
@@ -175,7 +209,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
           />
         )}
 
-        {/* Remaining items — no divider clutter */}
+        {/* Remaining role-gated items */}
         {['evp', 'ceo'].includes(role) && (
           <NavItem to="/variance" label="Cost Variance" icon={<BarChart3 size={16} />} />
         )}
@@ -202,6 +236,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {role === 'ceo' && (
           <NavItem to="/ceo-alerts" label="Alerts" icon={<Bell size={16} />} badge={badges['alerts']} />
         )}
+
       </nav>
 
       <div className="px-5 py-3 border-t border-white/10">
