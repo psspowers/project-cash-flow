@@ -1057,13 +1057,41 @@ export default function Dashboard() {
             </div>
             {/* Col 2: Invoiced — awaiting payment (Column O) */}
             <div className="md:px-6 py-4 md:py-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Invoiced — Awaiting Payment</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colO_Cost)}</p>
-              <p className="text-xs text-gray-400 mt-1">Column O — supplier invoices not yet paid</p>
-              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#E24B4A] font-medium">
-                <Clock size={11} />
-                Awaiting payment processing
-              </div>
+              {colO_Cost > 0 ? (
+                <div className="relative p-4 -mx-4 rounded-xl overflow-hidden shadow-sm">
+                  {/* Spinning comet-tail border */}
+                  <div
+                    className="absolute -inset-[150%] bg-[conic-gradient(from_0deg,transparent_0_340deg,#E24B4A_360deg)]"
+                    style={{ animation: 'spin 1.5s linear 3 forwards' }}
+                  />
+                  {/* Inner white mask */}
+                  <div className="absolute inset-[2px] bg-white rounded-xl border border-[#E24B4A]/20" />
+                  {/* Content */}
+                  <div className="relative z-10">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">
+                      Supplier Invoiced — Unpaid
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900 tabular-nums">
+                      {fmtTHBCompact(colO_Cost)}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Column O — invoiced by supplier, unpaid
+                    </p>
+                    <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#E24B4A] font-medium">
+                      <Clock size={11} className="animate-pulse" />
+                      Awaiting payment processing
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 -mx-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
+                    Supplier Invoiced — Unpaid
+                  </p>
+                  <p className="text-2xl font-bold text-gray-900 tabular-nums">฿0</p>
+                  <p className="text-xs text-gray-400 mt-1">Column O — invoiced by supplier, unpaid</p>
+                </div>
+              )}
             </div>
             {/* Col 3: Committed + Uncontracted (Column P) */}
             <div className="md:pl-6 pt-4 md:pt-0">
