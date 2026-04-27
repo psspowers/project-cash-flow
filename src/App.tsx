@@ -15,6 +15,9 @@ import VATReport from './pages/VATReport';
 import CEOAlerts from './pages/CEOAlerts';
 import CashFlowPlanner from './pages/CashFlowPlanner';
 import CostVariance from './pages/CostVariance';
+import MonthlyAnalyzerPaid from './pages/MonthlyAnalyzerPaid';
+import MonthlyAnalyzerBalanceInvoiced from './pages/MonthlyAnalyzerBalanceInvoiced';
+import MonthlyAnalyzerYetToInvoice from './pages/MonthlyAnalyzerYetToInvoice';
 
 function AppRoutes() {
 
@@ -34,6 +37,9 @@ function AppRoutes() {
       <Route path="/ceo-alerts" element={<AppLayout><CEOAlerts /></AppLayout>} />
       <Route path="/cash-flow-planner" element={<AppLayout><CashFlowPlanner /></AppLayout>} />
       <Route path="/variance" element={<AppLayout><CostVariance /></AppLayout>} />
+      <Route path="/monthly-analyzer/paid" element={<AppLayout><MonthlyAnalyzerPaid /></AppLayout>} />
+      <Route path="/monthly-analyzer/balance-invoiced" element={<AppLayout><MonthlyAnalyzerBalanceInvoiced /></AppLayout>} />
+      <Route path="/monthly-analyzer/yet-to-invoice" element={<AppLayout><MonthlyAnalyzerYetToInvoice /></AppLayout>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
