@@ -151,7 +151,7 @@ export default function MonthlyAnalysisBalance() {
           )
         )
       `)
-      .neq('status', 'paid')
+      .or('status.neq.paid,status.is.null')
       .order('planned_payment_date', { ascending: true, nullsFirst: false });
 
     if (!error && data) {
