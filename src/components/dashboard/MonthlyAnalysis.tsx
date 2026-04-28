@@ -145,14 +145,24 @@ export default function MonthlyAnalysis() {
   }
 
   const matchedInvoices: MatchedInvoice[] = (() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     // Build per-PO pool: po_id → Map<amount_key, milestone[]>
+    // Milestones are sorted ascending by planned_payment_date so earlier
+    // milestones are consumed first when multiple share the same amount.
     const pool = new Map<string, Map<string, { id: string; planned_payment_date: string | null }[]>>();
 
     for (const inv of invoices) {
       if (!inv.po_id || !inv.purchase_order?.milestones) continue;
       if (!pool.has(inv.po_id)) pool.set(inv.po_id, new Map());
       const poPool = pool.get(inv.po_id)!;
-      for (const m of inv.purchase_order.milestones) {
+      const sorted = [...inv.purchase_order.milestones].sort((a, b) => {
+        if (!a.planned_payment_date) return 1;
+        if (!b.planned_payment_date) return -1;
+        return a.planned_payment_date.localeCompare(b.planned_payment_date);
+      });
+      for (const m of sorted) {
         const amtKey = Number(m.amount_due).toFixed(2);
         if (!poPool.has(amtKey)) poPool.set(amtKey, []);
         poPool.get(amtKey)!.push({ id: m.id, planned_payment_date: m.planned_payment_date });
@@ -167,7 +177,12 @@ export default function MonthlyAnalysis() {
       const candidates = poPool.get(amtKey);
       if (candidates && candidates.length > 0) {
         const matched = candidates.shift()!;
-        return { invoice: inv, plannedPaymentDate: matched.planned_payment_date ?? inv.invoice_date };
+        const milestoneDate = matched.planned_payment_date;
+        // Cap: if the matched milestone date is in the future, use invoice_date
+        // instead — paid cash cannot land in a future column.
+        const isFuture = milestoneDate && new Date(milestoneDate) > today;
+        const effectiveDate = isFuture ? inv.invoice_date : (milestoneDate ?? inv.invoice_date);
+        return { invoice: inv, plannedPaymentDate: effectiveDate };
       }
       // No milestone match — fall back to invoice_date
       return { invoice: inv, plannedPaymentDate: inv.invoice_date };
@@ -189,7 +204,9 @@ export default function MonthlyAnalysis() {
     projectNameSet.add(invoice.purchase_order!.project!.name);
   }
 
-  const monthKeys = [...monthKeySet].sort();
+  // Cap columns at the current month — paid invoices cannot appear in future months.
+  const currentMonthKey = toMonthKey(new Date().toISOString().slice(0, 10));
+  const monthKeys = [...monthKeySet].sort().filter(mk => mk <= currentMonthKey);
   const projectNames = [...projectNameSet].sort();
 
   const cellMap = new Map<string, DrillRow[]>();
