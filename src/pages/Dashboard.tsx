@@ -1429,10 +1429,10 @@ export default function Dashboard() {
       </div>
 
       {/* Project cash positions + Approval queue */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
         {/* Project cash positions table */}
-        <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+        <div className="xl:col-span-2 bg-white rounded-lg border border-black/[0.08] p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[13px] font-semibold text-gray-800">
               Project Cash Positions
@@ -1571,7 +1571,7 @@ export default function Dashboard() {
         </div>
 
         {/* Approval queue preview */}
-        <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+        <div className="xl:col-span-1 bg-white rounded-lg border border-black/[0.08] p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[13px] font-semibold text-gray-800">
               Approval Queue
@@ -1632,20 +1632,20 @@ export default function Dashboard() {
                       DONE
                     </div>
                   )}
-                  <div className="min-w-0 flex items-start gap-2">
+                  <div className="min-w-0 flex items-start gap-2 flex-1">
                     {item.done ? (
                       <CheckSquare size={13} className="text-[#1D9E75] shrink-0 mt-0.5" />
                     ) : item.urgent ? (
                       <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
                     ) : null}
-                    <div className="min-w-0">
-                      <p className={`text-[13px] font-medium truncate max-w-[160px] ${item.done ? 'text-gray-500 line-through decoration-[#1D9E75]/50' : 'text-gray-800'}`}>
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-[13px] font-medium truncate ${item.done ? 'text-gray-500 line-through decoration-[#1D9E75]/50' : 'text-gray-800'}`}>
                         {item.label.split('–')[0].trim()}
                       </p>
-                      <p className="text-xs text-gray-400 mt-0.5">{item.sub}</p>
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">{item.sub}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 mr-6">
+                  <div className="flex items-center gap-1.5 shrink-0 mr-5">
                     <Badge
                       label={item.done ? 'approved' : item.status.replace(/_/g, ' ')}
                       variant={item.done ? 'green' : item.urgent ? 'amber' : statusVariant(item.status)}
