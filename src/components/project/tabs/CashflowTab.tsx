@@ -79,31 +79,8 @@ export default function CashflowTab() {
   interface CashOutRow {
     key: string; poNo: string; vendorName: string; category: string; msLabel: string;
     plannedDate: string | undefined; amount: number; paid: number; balance: number;
-    status: string; rowType: 'po_milestone' | 'vendor_invoice'; rowId: string;
+    status: string; rowType: 'po_milestone' | 'vendor_invoice' | 'draft_po'; rowId: string;
   }
-
-  // Build 1:1 milestone pool keyed by (po_id, amount_due) for matching against invoices
-  const milestonePool: Map<string, typeof poMilestones> = new Map();
-  poMilestones.forEach(pm => {
-    const key = `${pm.purchase_order_id}|${pm.amount_due.toFixed(2)}`;
-    if (!milestonePool.has(key)) milestonePool.set(key, []);
-    milestonePool.get(key)!.push(pm);
-  });
-
-  // Track which milestones are consumed by invoices (1:1 match)
-  const consumedMilestoneIds = new Set<string>();
-  orders.forEach(o => {
-    if (!o.has_supplier_milestones && o.invoices.length > 0) {
-      o.invoices.forEach(inv => {
-        const key = `${o.id}|${inv.invoice_amount_incl_vat.toFixed(2)}`;
-        const pool = milestonePool.get(key);
-        if (pool && pool.length > 0) {
-          const ms = pool.shift()!;
-          consumedMilestoneIds.add(ms.id);
-        }
-      });
-    }
-  });
 
   const cashOutRows: CashOutRow[] = [];
   orders.forEach(o => {
@@ -133,33 +110,13 @@ export default function CashflowTab() {
           status: inv.status, rowType: 'vendor_invoice', rowId: inv.id,
         });
       });
-      // Add surviving (yet-to-invoice) milestones for this PO
-      poMilestones
-        .filter(pm => pm.purchase_order_id === o.id && !consumedMilestoneIds.has(pm.id) && pm.status !== 'paid')
-        .sort((a, b) => a.milestone_number - b.milestone_number)
-        .forEach(pm => {
-          cashOutRows.push({
-            key: `uninv-${pm.id}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
-            msLabel: `MS${pm.milestone_number} — Yet to Invoice`,
-            plannedDate: pm.planned_payment_date, amount: pm.amount_due,
-            paid: 0, balance: pm.amount_due,
-            status: 'uninvoiced', rowType: 'po_milestone', rowId: pm.id,
-          });
-        });
-    } else {
-      // No invoices yet — all milestones for this PO are yet to invoice
-      poMilestones
-        .filter(pm => pm.purchase_order_id === o.id && pm.status !== 'paid')
-        .sort((a, b) => a.milestone_number - b.milestone_number)
-        .forEach(pm => {
-          cashOutRows.push({
-            key: `uninv-${pm.id}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
-            msLabel: `MS${pm.milestone_number} — Yet to Invoice`,
-            plannedDate: pm.planned_payment_date, amount: pm.amount_due,
-            paid: 0, balance: pm.amount_due,
-            status: 'uninvoiced', rowType: 'po_milestone', rowId: pm.id,
-          });
-        });
+    } else if ((o.pending_remaining_amount ?? 0) > 0) {
+      cashOutRows.push({
+        key: `draft-${o.id}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
+        msLabel: '—', plannedDate: o.po_date || undefined,
+        amount: o.pending_remaining_amount ?? 0, paid: 0, balance: o.pending_remaining_amount ?? 0,
+        status: 'draft', rowType: 'draft_po', rowId: o.id,
+      });
     }
   });
 
@@ -367,15 +324,17 @@ export default function CashflowTab() {
                   </td>
                   {canReschedule && (
                     <td className="px-4 py-2.5">
-                      <button
-                        onClick={() => openReschedule(
-                          row.rowType === 'po_milestone' ? 'po_milestone' : 'vendor_invoice',
-                          row.rowId, row.plannedDate, `${row.poNo} · ${row.msLabel}`,
-                        )}
-                        className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-[#1D9E75] border border-[#1D9E75]/30 rounded hover:bg-[#1D9E75]/8 transition-colors whitespace-nowrap"
-                      >
-                        <Calendar size={10} />Reschedule
-                      </button>
+                      {row.rowType !== 'draft_po' && (
+                        <button
+                          onClick={() => openReschedule(
+                            row.rowType === 'po_milestone' ? 'po_milestone' : 'vendor_invoice',
+                            row.rowId, row.plannedDate, `${row.poNo} · ${row.msLabel}`,
+                          )}
+                          className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-[#1D9E75] border border-[#1D9E75]/30 rounded hover:bg-[#1D9E75]/8 transition-colors whitespace-nowrap"
+                        >
+                          <Calendar size={10} />Reschedule
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
