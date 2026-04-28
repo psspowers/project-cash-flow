@@ -586,60 +586,35 @@ export default function Dashboard() {
     0,
   );
 
+  // ── Outstanding Receivable ────────────────────────────────────────────────
+  // Col O (receivable): client invoices pending payment — same as pending_amount sum
   const pendingReceivables = pendingReceivablesSum;
 
-  // Column P — uninvoiced milestone amounts across all active projects
-  const invoicedMilestoneIdsAll = new Set(
-    clientInvoiceReceipts.map(r => r.client_milestone_id).filter(Boolean)
-  );
-
+  // Col P (receivable): client milestones not yet invoiced (status = 'pending')
   const notYetInvoicedTotal = clientMilestonesAll
-    .filter(m =>
-      activeProjects.some(p => p.id === m.project_id) &&
-      m.status !== 'received' &&
-      !invoicedMilestoneIdsAll.has(m.id)
-    )
+    .filter(m => m.status === 'pending')
     .reduce((s, m) => s + m.payment_plan_amount, 0);
 
-  // Column O + Column P = Total Outstanding Receivable
+  // Total Outstanding Receivable = Col O + Col P
   const totalOutstandingReceivable = pendingReceivables + notYetInvoicedTotal;
 
-  // ── Payables Pipeline ──────────────────────────────────────────────────
-  // Col O (cost): vendor invoices received but not yet fully paid (status='received')
+  // ── Outstanding Payable ───────────────────────────────────────────────────
+  // Col O (payable): vendor invoices received but not yet paid — exact balance
+  // Uses the same chartReceivedInvoices array that drives the Invoice Balance pivot table.
   const colO_Cost = chartReceivedInvoices.reduce(
     (s, inv) => s + Math.max(0, Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0)),
     0,
   );
 
-  // Col P1 (cost): unmatched (uninvoiced) milestones via 1:1 matching algorithm
+  // Col P (payable): uninvoiced PO milestones that survived the 1:1 matching algorithm
+  // Uses the same chartUninvoicedMilestones array that drives the Yet-to-Invoice pivot table.
   const colP1_Cost = chartUninvoicedMilestones.reduce((s, m) => s + Number(m.amount_due), 0);
 
-  // Col P2 (cost): uncontracted budget — approved estimation cost minus total POs per project
-  let colP2_Cost = 0;
-  for (const project of activeProjects) {
-    const estimation = (pendingCostings as ProjectCosting[]).find(
-      (c) => c.project_id === project.id && c.stage === 'estimation' && c.status === 'evp_approved',
-    );
-    if (!estimation) continue;
-    const totalEstimation =
-      Number(estimation.cost_01_civil ?? 0) +
-      Number(estimation.cost_02_pv_modules ?? 0) +
-      Number(estimation.cost_03_mounting ?? 0) +
-      Number(estimation.cost_04_inverters ?? 0) +
-      Number(estimation.cost_05_hv_switchgear ?? 0) +
-      Number(estimation.cost_06_cabling ?? 0) +
-      Number(estimation.cost_07_installation ?? 0) +
-      Number(estimation.cost_08_engineering ?? 0) +
-      Number(estimation.cost_09_logistics ?? 0) +
-      Number(estimation.cost_10_testing ?? 0);
-    const totalPOs = allPOs
-      .filter((po) => po.project_id === project.id)
-      .reduce((s, po) => s + Number(po.po_amount_excl_vat ?? 0), 0);
-    colP2_Cost += Math.max(0, totalEstimation - totalPOs);
-  }
+  // Total Outstanding Payable = Col O + Col P (pivot-table exact match, no estimation gap)
+  const totalOutstandingPayable = colO_Cost + colP1_Cost;
 
-  const totalOutstandingPayable = colO_Cost + colP1_Cost + colP2_Cost;
-  const trueExposure = totalOutstandingPayable - totalOutstandingReceivable;
+  // Net Exposure: positive = receivables exceed payables (good), negative = payables exceed receivables (risk)
+  const trueExposure = totalOutstandingReceivable - totalOutstandingPayable;
 
   // ── Shared chart helpers — mirrors pivot table roll-forward logic ─────────
   const chartCurrentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1171,7 +1146,7 @@ export default function Dashboard() {
             <div className="md:pr-6 pb-4 md:pb-0">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Total Outstanding Payable</p>
               <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
-              <p className="text-xs text-gray-400 mt-1">Col O + Col P1 + Col P2 combined</p>
+              <p className="text-xs text-gray-400 mt-1">Col O + Col P — ties to Monthly Analyzer pivot tables</p>
               {totalOutstandingPayable > 0 && (
                 <div className="mt-3">
                   <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
@@ -1180,26 +1155,18 @@ export default function Dashboard() {
                       style={{ width: `${Math.round((colO_Cost / totalOutstandingPayable) * 100)}%` }}
                     />
                     <div
-                      className="h-full bg-amber-400 transition-all"
+                      className="h-full bg-amber-400 rounded-r-full transition-all"
                       style={{ width: `${Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%` }}
-                    />
-                    <div
-                      className="h-full bg-gray-300 rounded-r-full transition-all"
-                      style={{ width: `${Math.round((colP2_Cost / totalOutstandingPayable) * 100)}%` }}
                     />
                   </div>
                   <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                     <span className="flex items-center gap-1 text-[10px] text-gray-400">
                       <span className="inline-block w-2 h-2 rounded-sm bg-[#E24B4A]" />
-                      Invoiced {Math.round((colO_Cost / totalOutstandingPayable) * 100)}%
+                      Invoice Balance {Math.round((colO_Cost / totalOutstandingPayable) * 100)}%
                     </span>
                     <span className="flex items-center gap-1 text-[10px] text-gray-400">
                       <span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />
-                      Committed {Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-gray-300" />
-                      Uncontracted {Math.round((colP2_Cost / totalOutstandingPayable) * 100)}%
+                      Yet to Invoice {Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%
                     </span>
                   </div>
                 </div>
@@ -1243,20 +1210,14 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-            {/* Col 3: Committed + Uncontracted (Column P) */}
+            {/* Col 3: Yet to Invoice (Column P) */}
             <div className="md:pl-6 pt-4 md:pt-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Committed + Uncontracted</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colP1_Cost + colP2_Cost)}</p>
-              <p className="text-xs text-gray-400 mt-1">Col P1 Uninvoiced POs · Col P2 budget gap</p>
-              <div className="mt-2 space-y-1">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Uninvoiced POs (P1)</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(colP1_Cost)}</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Uncontracted budget (P2)</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(colP2_Cost)}</span>
-                </div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Yet to Invoice (Col P)</p>
+              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colP1_Cost)}</p>
+              <p className="text-xs text-gray-400 mt-1">PO milestones not yet invoiced — 1:1 matched</p>
+              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
+                <Clock size={11} />
+                Uninvoiced supplier pipeline
               </div>
             </div>
           </div>
@@ -1265,32 +1226,52 @@ export default function Dashboard() {
 
       {/* CEO Metric: True Exposure */}
       {!loading && profile?.role === 'ceo' && (
-        <div className={`rounded-lg border p-5 ${trueExposure > 0 ? 'bg-[#E24B4A]/5 border-[#E24B4A]/25' : 'bg-[#1D9E75]/5 border-[#1D9E75]/25'}`}>
+        <div className={`rounded-lg border p-5 ${trueExposure >= 0 ? 'bg-[#1D9E75]/5 border-[#1D9E75]/25' : 'bg-[#E24B4A]/5 border-[#E24B4A]/25'}`}>
           <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={14} className={trueExposure > 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'} />
-            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — True Exposure</h2>
-            <span className="text-xs text-gray-400 ml-1">Outstanding Payable minus Outstanding Receivable</span>
+            <AlertTriangle size={14} className={trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'} />
+            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — Net Position</h2>
+            <span className="text-xs text-gray-400 ml-1">Outstanding Receivable minus Outstanding Payable — pivot-table verified</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Outstanding Receivable</p>
-              <p className="text-xl font-bold text-[#1D9E75] tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Outstanding Receivable</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
               <p className="text-xs text-gray-400 mt-1">What clients still owe us</p>
+              <div className="mt-2 space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-400">Invoiced, awaiting payment</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(pendingReceivables)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-400">Not yet invoiced (pipeline)</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(notYetInvoicedTotal)}</span>
+                </div>
+              </div>
             </div>
             <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Outstanding Payable</p>
-              <p className="text-xl font-bold text-[#E24B4A] tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Outstanding Payable</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
               <p className="text-xs text-gray-400 mt-1">What we still owe suppliers</p>
+              <div className="mt-2 space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-400">Invoice Balance (Col O)</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(colO_Cost)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-gray-400">Yet to Invoice (Col P)</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(colP1_Cost)}</span>
+                </div>
+              </div>
             </div>
-            <div className={`rounded-lg border p-4 ${trueExposure > 0 ? 'bg-[#E24B4A]/8 border-[#E24B4A]/30' : 'bg-[#1D9E75]/8 border-[#1D9E75]/30'}`}>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Net Exposure</p>
-              <p className={`text-xl font-bold tabular-nums ${trueExposure > 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
-                {trueExposure > 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
+            <div className={`rounded-lg border p-4 ${trueExposure >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Net Position</p>
+              <p className={`text-xl font-bold tabular-nums ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                {trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                {trueExposure > 0
-                  ? 'Payables exceed receivables — worst-case cash requirement'
-                  : 'Receivables exceed payables — net positive position'}
+                {trueExposure >= 0
+                  ? 'Receivables exceed payables — net positive position'
+                  : 'Payables exceed receivables — cash shortfall risk'}
               </p>
             </div>
           </div>
