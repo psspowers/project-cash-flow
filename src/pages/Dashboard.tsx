@@ -768,16 +768,31 @@ export default function Dashboard() {
     };
   });
 
+  // ── Forecast Cash In by month — apply same overdue sweep as Cash Out ─────
+  const forecastCashInByMonth = (() => {
+    const map = new Map<string, number>();
+    for (const m of clientMilestonesAll) {
+      if (!m.planned_receive_date) continue;
+      const mk = chartRollForwardKey(m.planned_receive_date);
+      map.set(mk, (map.get(mk) ?? 0) + m.payment_plan_amount);
+    }
+    return map;
+  })();
+
   // ── Forecast chart: previous month (backlog bucket) through end of all forecast data ─
   const prevMonthKey = format(chartPrevMonthDate, 'yyyy-MM');
-  const forecastRangeKeys = [...new Set([prevMonthKey, ...sortedChartKeys])].sort();
+  // Include all keys from Cash In + Cash Out maps
+  const allForecastKeys = new Set([
+    ...forecastCashInByMonth.keys(),
+    ...chartBalanceByMonth.keys(),
+    ...chartUninvoicedByMonth.keys(),
+  ]);
+  const forecastRangeKeys = [...new Set([prevMonthKey, ...sortedChartKeys, ...allForecastKeys])].sort();
 
   const forecastChartDataWithCum = (() => {
     let cumNet = 0;
     return forecastRangeKeys.map(key => {
-      const inflow = clientMilestonesAll
-        .filter(m => m.planned_receive_date?.startsWith(key))
-        .reduce((s, m) => s + m.payment_plan_amount / 1_000_000, 0);
+      const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
       const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
       const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       const totalOut = outflowBalance + outflowUninvoiced;
@@ -797,21 +812,28 @@ export default function Dashboard() {
   const combinedHistoricalKeys = historicalKeys.filter(k => k < format(now, 'yyyy-MM'));
   const combinedForecastKeys = forecastRangeKeys;
 
+  // Historical Cash In by month (actual receipts)
+  const historicalCashInByMonth = (() => {
+    const map = new Map<string, number>();
+    for (const r of clientInvoiceReceipts) {
+      if (!r.receipt_date) continue;
+      const mk = r.receipt_date.slice(0, 7);
+      map.set(mk, (map.get(mk) ?? 0) + r.received_amount);
+    }
+    return map;
+  })();
+
   const combinedChartData = [
     ...combinedHistoricalKeys.map(key => ({
       month: format(new Date(key + '-15'), 'MMM yy'),
       key,
-      inflow: +(clientInvoiceReceipts
-        .filter(r => r.receipt_date?.startsWith(key))
-        .reduce((s, r) => s + r.received_amount / 1_000_000, 0)).toFixed(2),
+      inflow: +((historicalCashInByMonth.get(key) ?? 0) / 1_000_000).toFixed(2),
       outflowBalance: +((chartHistoricalByMonth.get(key) ?? 0) / 1_000_000).toFixed(2),
       outflowUninvoiced: 0,
       isForecast: false,
     })),
     ...combinedForecastKeys.map(key => {
-      const inflow = clientMilestonesAll
-        .filter(m => m.planned_receive_date?.startsWith(key))
-        .reduce((s, m) => s + m.payment_plan_amount / 1_000_000, 0);
+      const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
       const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
       const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       return {
@@ -823,7 +845,7 @@ export default function Dashboard() {
         isForecast: true,
       };
     }),
-  ].filter(d => d.inflow > 0 || d.outflowBalance > 0);
+  ].filter(d => d.inflow > 0 || d.outflowBalance > 0 || d.outflowUninvoiced > 0);
 
   // ── 90-day net position ───────────────────────────────────────────────
   const ninetyDaysFromNow = new Date(now);
@@ -834,9 +856,9 @@ export default function Dashboard() {
   const pendingClientInvoicesTotal = pendingClientInvoices.reduce((s, i) => s + i.pending_amount, 0);
 
   const plannedInflow90 =
-    clientMilestonesAll
-      .filter(m => m.planned_receive_date && m.planned_receive_date <= ninetyDayKey)
-      .reduce((s, m) => s + m.payment_plan_amount, 0)
+    [...forecastCashInByMonth.entries()]
+      .filter(([k]) => k <= ninetyDayKey.slice(0, 7))
+      .reduce((s, [, v]) => s + v, 0)
     + pendingClientInvoicesTotal;
 
   // Col O (balance) items due within 90 days — from chartBalanceByMonth (received invoices)

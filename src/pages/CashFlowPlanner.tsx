@@ -134,7 +134,8 @@ interface ChartBar {
   month: string; // MMM-yy label
   key: string;   // yyyy-MM
   cashIn: number;
-  cashOut: number;
+  outflowBalance: number;
+  outflowUninvoiced: number;
   cumNet: number;
 }
 
@@ -674,12 +675,9 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash Out: invoice balances (Col O) + uninvoiced milestones (Col P)
-  // Both with overdue sweep into prevMonthKey
-  const forecastOutByMonth = (() => {
+  // Forecast Cash Out Col O: invoice balances (received, not yet paid) with overdue sweep
+  const forecastBalanceByMonth = (() => {
     const map = new Map<string, number>();
-
-    // Col O: received invoices, balance = invoice_amount - received_amount
     const pool = buildMilestonePool(receivedInvoices);
     for (const inv of receivedInvoices) {
       const balance = Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0);
@@ -696,22 +694,25 @@ export default function CashFlowPlanner() {
       const mk = rollForward(assignedDate);
       map.set(mk, (map.get(mk) ?? 0) + balance);
     }
+    return map;
+  })();
 
-    // Col P: uninvoiced milestones
+  // Forecast Cash Out Col P: uninvoiced milestones with overdue sweep
+  const forecastUninvoicedByMonth = (() => {
+    const map = new Map<string, number>();
     for (const m of uninvoicedMs) {
       const mk = rollForward(m.planned_payment_date);
       map.set(mk, (map.get(mk) ?? 0) + Number(m.amount_due));
     }
-
     return map;
   })();
 
-  // Forecast Cash In: client milestones (planned inflow)
+  // Forecast Cash In: client milestones (planned inflow) — apply same overdue sweep
   const forecastInByMonth = (() => {
     const map = new Map<string, number>();
     for (const m of clientMs) {
       if (!m.planned_receive_date) continue;
-      const mk = m.planned_receive_date.slice(0, 7);
+      const mk = rollForward(m.planned_receive_date);
       map.set(mk, (map.get(mk) ?? 0) + Number(m.payment_plan_amount));
     }
     return map;
@@ -721,49 +722,60 @@ export default function CashFlowPlanner() {
   const allKeys = new Set([
     ...historicalOutByMonth.keys(),
     ...historicalInByMonth.keys(),
-    ...forecastOutByMonth.keys(),
+    ...forecastBalanceByMonth.keys(),
+    ...forecastUninvoicedByMonth.keys(),
     ...forecastInByMonth.keys(),
   ]);
   const sortedKeys = [...allKeys].sort();
 
   function buildChartData(mode: ChartMode): ChartBar[] {
+    const hasForecast = (k: string) =>
+      forecastBalanceByMonth.has(k) || forecastUninvoicedByMonth.has(k) || forecastInByMonth.has(k);
+    const hasHistorical = (k: string) =>
+      historicalOutByMonth.has(k) || historicalInByMonth.has(k);
+
     const keys = mode === 'historical'
-      ? sortedKeys.filter(k => historicalOutByMonth.has(k) || historicalInByMonth.has(k))
+      ? sortedKeys.filter(k => hasHistorical(k))
       : mode === 'forecast'
-      ? [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => forecastOutByMonth.has(k) || forecastInByMonth.has(k))
-      : [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k =>
-          historicalOutByMonth.has(k) || historicalInByMonth.has(k) ||
-          forecastOutByMonth.has(k) || forecastInByMonth.has(k)
-        );
+      ? [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
+      : [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
     let cumNet = 0;
     return keys.map(key => {
       let cashIn = 0;
-      let cashOut = 0;
+      let outflowBalance = 0;
+      let outflowUninvoiced = 0;
 
       if (mode === 'historical') {
         cashIn = (historicalInByMonth.get(key) ?? 0) / 1_000_000;
-        cashOut = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+        // Historical has no split — show all paid as outflowBalance
+        outflowBalance = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+        outflowUninvoiced = 0;
       } else if (mode === 'forecast') {
         cashIn = (forecastInByMonth.get(key) ?? 0) / 1_000_000;
-        cashOut = (forecastOutByMonth.get(key) ?? 0) / 1_000_000;
+        outflowBalance = (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000;
+        outflowUninvoiced = (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       } else {
-        // Combined: historical actual + forecast (non-overlapping)
-        const isCurrent = key >= format(today, 'yyyy-MM');
-        cashIn = isCurrent
+        // Combined: historical months get historical data, current+ get forecast
+        const isForecastMonth = key >= format(today, 'yyyy-MM');
+        cashIn = isForecastMonth
           ? (forecastInByMonth.get(key) ?? 0) / 1_000_000
           : (historicalInByMonth.get(key) ?? 0) / 1_000_000;
-        cashOut = isCurrent
-          ? (forecastOutByMonth.get(key) ?? 0) / 1_000_000
+        outflowBalance = isForecastMonth
+          ? (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000
           : (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+        outflowUninvoiced = isForecastMonth
+          ? (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000
+          : 0;
       }
 
-      cumNet += cashIn - cashOut;
+      cumNet += cashIn - outflowBalance - outflowUninvoiced;
       return {
         month: format(new Date(key + '-15'), 'MMM-yy'),
         key,
         cashIn: +cashIn.toFixed(2),
-        cashOut: +cashOut.toFixed(2),
+        outflowBalance: +outflowBalance.toFixed(2),
+        outflowUninvoiced: +outflowUninvoiced.toFixed(2),
         cumNet: +cumNet.toFixed(2),
       };
     });
@@ -1117,15 +1129,21 @@ export default function CashFlowPlanner() {
           </div>
 
           {/* Legend */}
-          <div className="flex items-center gap-5 mb-4">
+          <div className="flex items-center gap-5 mb-4 flex-wrap">
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span className="inline-block w-3 h-3 rounded-sm bg-[#1D9E75]" />
               Cash In
             </span>
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span className="inline-block w-3 h-3 rounded-sm bg-[#E24B4A]" />
-              Cash Out
+              Invoice Balance (Col O)
             </span>
+            {chartMode !== 'historical' && (
+              <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="inline-block w-3 h-3 rounded-sm opacity-50" style={{ background: '#E24B4A' }} />
+                Yet to Invoice (Col P)
+              </span>
+            )}
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span className="inline-block w-8 h-0.5 bg-[#3B82F6]" />
               Cumulative Net
@@ -1175,7 +1193,8 @@ export default function CashFlowPlanner() {
                   formatter={((value: number, name: string): [string, string] => [
                     `฿${value.toFixed(2)}M`,
                     name === 'cashIn' ? 'Cash In'
-                    : name === 'cashOut' ? 'Cash Out'
+                    : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
+                    : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
                     : 'Cumulative Net',
                   ]) as RechartsTooltipFormatter}
                   contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
@@ -1184,7 +1203,8 @@ export default function CashFlowPlanner() {
                 <Legend
                   formatter={(value: string) =>
                     value === 'cashIn' ? 'Cash In'
-                    : value === 'cashOut' ? 'Cash Out'
+                    : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
+                    : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
                     : 'Cumulative Net'
                   }
                   iconType="square"
@@ -1202,7 +1222,8 @@ export default function CashFlowPlanner() {
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
                 <Bar yAxisId="bars" dataKey="cashIn" fill="#1D9E75" radius={[3, 3, 0, 0]} opacity={0.9} name="cashIn" />
-                <Bar yAxisId="bars" dataKey="cashOut" fill="#E24B4A" radius={[3, 3, 0, 0]} opacity={0.9} name="cashOut" />
+                <Bar yAxisId="bars" dataKey="outflowBalance" stackId="outflow" fill="#C0392B" radius={[0, 0, 0, 0]} opacity={0.95} name="outflowBalance" />
+                <Bar yAxisId="bars" dataKey="outflowUninvoiced" stackId="outflow" fill="#E24B4A" radius={[3, 3, 0, 0]} opacity={0.5} name="outflowUninvoiced" />
                 <Line
                   yAxisId="line"
                   type="monotone"
@@ -1222,8 +1243,8 @@ export default function CashFlowPlanner() {
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? 'Cash Out = Invoice Balance (Col O) + Yet-to-Invoice (Col P). Dates older than this month are swept into the prior-month backlog column.'
-              : 'Past months show actual settled cash. Current month onwards shows forecast pipeline.'}
+              ? 'Dark red = Invoice Balance (Col O, received but unpaid). Faded red = Yet to Invoice (Col P, uninvoiced milestones). Both use overdue sweep. Cash In also swept. Grand totals tie to Monthly Analyzer pivot tables.'
+              : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded).'}
           </p>
         </div>
       </div>
