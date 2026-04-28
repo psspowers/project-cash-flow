@@ -19,12 +19,17 @@ interface RawInvoice {
     description: string | null;
     supplier_name_raw: string | null;
     project: { id: string; name: string } | null;
+    milestones: {
+      id: string;
+      amount_due: number;
+      planned_payment_date: string | null;
+    }[];
   } | null;
 }
 
 interface BalanceDrillRow {
   project: string;
-  monthLabel: string;
+  monthLabel: string;   // derived from planned_payment_date
   poNo: string;
   supplier: string;
   description: string;
@@ -66,7 +71,7 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose }: { rows: BalanceDril
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3">Month</th>
+                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Payment Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
                 <th className="text-left px-4 py-3">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
@@ -123,11 +128,11 @@ export default function MonthlyAnalysisBalance() {
         id, po_id, invoice_date, invoice_amount_incl_vat, received_amount, vendor_invoice_no,
         purchase_order:purchase_orders (
           pss_po_no, description, supplier_name_raw,
-          project:projects ( id, name )
+          project:projects ( id, name ),
+          milestones:po_milestones ( id, amount_due, planned_payment_date )
         )
       `)
       .eq('status', 'received')
-      .not('invoice_date', 'is', null)
       .order('invoice_date', { ascending: true });
 
     if (!error && data) setInvoices(data as unknown as RawInvoice[]);
@@ -136,19 +141,64 @@ export default function MonthlyAnalysisBalance() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ── Match each invoice to its milestone via 1:1 amount matching ──────────
+  //
+  // For each PO, build a pool of milestones sorted ascending by
+  // planned_payment_date so the earliest milestone is consumed first.
+  // The matched milestone's planned_payment_date drives the X-axis column.
+  // Invoices with no milestone match fall back to invoice_date.
+
+  interface MatchedInvoice {
+    invoice: RawInvoice;
+    plannedPaymentDate: string | null;
+  }
+
+  const matchedInvoices: MatchedInvoice[] = (() => {
+    const pool = new Map<string, Map<string, { id: string; planned_payment_date: string | null }[]>>();
+
+    for (const inv of invoices) {
+      if (!inv.po_id || !inv.purchase_order?.milestones) continue;
+      if (!pool.has(inv.po_id)) pool.set(inv.po_id, new Map());
+      const poPool = pool.get(inv.po_id)!;
+      const sorted = [...inv.purchase_order.milestones].sort((a, b) => {
+        if (!a.planned_payment_date) return 1;
+        if (!b.planned_payment_date) return -1;
+        return a.planned_payment_date.localeCompare(b.planned_payment_date);
+      });
+      for (const m of sorted) {
+        const amtKey = Number(m.amount_due).toFixed(2);
+        if (!poPool.has(amtKey)) poPool.set(amtKey, []);
+        poPool.get(amtKey)!.push({ id: m.id, planned_payment_date: m.planned_payment_date });
+      }
+    }
+
+    return invoices.map(inv => {
+      if (!inv.po_id) return { invoice: inv, plannedPaymentDate: inv.invoice_date };
+      const poPool = pool.get(inv.po_id);
+      if (!poPool) return { invoice: inv, plannedPaymentDate: inv.invoice_date };
+      const amtKey = Number(inv.invoice_amount_incl_vat).toFixed(2);
+      const candidates = poPool.get(amtKey);
+      if (candidates && candidates.length > 0) {
+        const matched = candidates.shift()!;
+        return { invoice: inv, plannedPaymentDate: matched.planned_payment_date ?? inv.invoice_date };
+      }
+      return { invoice: inv, plannedPaymentDate: inv.invoice_date };
+    });
+  })();
+
   // ── Build pivot (only rows where balance > 0) ────────────────────────────
 
-  const validInvoices = invoices.filter(inv => {
-    const balance = Number(inv.invoice_amount_incl_vat ?? 0) - Number(inv.received_amount ?? 0);
-    return balance > 0 && inv.invoice_date && inv.purchase_order?.project?.name;
+  const validMatches = matchedInvoices.filter(({ invoice, plannedPaymentDate }) => {
+    const balance = Number(invoice.invoice_amount_incl_vat ?? 0) - Number(invoice.received_amount ?? 0);
+    return balance > 0 && plannedPaymentDate && invoice.purchase_order?.project?.name;
   });
 
   const monthKeySet = new Set<string>();
   const projectNameSet = new Set<string>();
 
-  for (const inv of validInvoices) {
-    monthKeySet.add(toMonthKey(inv.invoice_date!));
-    projectNameSet.add(inv.purchase_order!.project!.name);
+  for (const { invoice, plannedPaymentDate } of validMatches) {
+    monthKeySet.add(toMonthKey(plannedPaymentDate!));
+    projectNameSet.add(invoice.purchase_order!.project!.name);
   }
 
   const monthKeys = [...monthKeySet].sort();
@@ -156,20 +206,20 @@ export default function MonthlyAnalysisBalance() {
 
   const cellMap = new Map<string, BalanceDrillRow[]>();
 
-  for (const inv of validInvoices) {
-    const mk = toMonthKey(inv.invoice_date!);
-    const project = inv.purchase_order!.project!.name;
+  for (const { invoice, plannedPaymentDate } of validMatches) {
+    const mk = toMonthKey(plannedPaymentDate!);
+    const project = invoice.purchase_order!.project!.name;
     const key = `${project}||${mk}`;
     if (!cellMap.has(key)) cellMap.set(key, []);
-    const invoiceAmount = Number(inv.invoice_amount_incl_vat ?? 0);
-    const receivedAmount = Number(inv.received_amount ?? 0);
+    const invoiceAmount = Number(invoice.invoice_amount_incl_vat ?? 0);
+    const receivedAmount = Number(invoice.received_amount ?? 0);
     cellMap.get(key)!.push({
       project,
       monthLabel: toMonthLabel(mk),
-      poNo: inv.purchase_order!.pss_po_no ?? '',
-      supplier: inv.purchase_order!.supplier_name_raw ?? '',
-      description: inv.purchase_order!.description ?? '',
-      invoiceNo: inv.vendor_invoice_no ?? '',
+      poNo: invoice.purchase_order!.pss_po_no ?? '',
+      supplier: invoice.purchase_order!.supplier_name_raw ?? '',
+      description: invoice.purchase_order!.description ?? '',
+      invoiceNo: invoice.vendor_invoice_no ?? '',
       invoiceAmount,
       receivedAmount,
       balance: invoiceAmount - receivedAmount,
@@ -223,7 +273,7 @@ export default function MonthlyAnalysisBalance() {
           <div className="space-y-2 py-4">
             {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />)}
           </div>
-        ) : validInvoices.length === 0 ? (
+        ) : validMatches.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2">
             <AlertCircle size={28} className="text-gray-200" />
             <p className="text-[13px] text-gray-400">No outstanding invoice balances</p>
