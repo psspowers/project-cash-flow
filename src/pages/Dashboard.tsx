@@ -354,12 +354,14 @@ export default function Dashboard() {
   }
   interface ChartReceivedInvoice {
     po_id: string | null;
+    project_id: string | null;
     invoice_amount_incl_vat: number;
     received_amount: number;
     milestones: { amount_due: number; planned_payment_date: string | null }[];
   }
   interface ChartUninvoicedMilestone {
     purchase_order_id: string;
+    project_id: string | null;
     amount_due: number;
     planned_payment_date: string | null;
   }
@@ -458,12 +460,12 @@ export default function Dashboard() {
         // Chart-specific: received (not yet paid) invoices with milestone relations (mirrors MonthlyAnalysisBalance pivot)
         supabase
           .from('vendor_invoices')
-          .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
+          .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(project_id, milestones:po_milestones(amount_due, planned_payment_date))')
           .eq('status', 'received'),
         // Chart-specific: all po_milestones for uninvoiced matching (mirrors MonthlyAnalysisUninvoiced)
         supabase
           .from('po_milestones')
-          .select('purchase_order_id, amount_due, planned_payment_date')
+          .select('purchase_order_id, amount_due, planned_payment_date, purchase_order:purchase_orders!purchase_order_id(project_id)')
           .order('planned_payment_date', { ascending: true, nullsFirst: false }),
         // Chart-specific: all vendor_invoices amounts for uninvoiced subtraction
         supabase
@@ -515,6 +517,7 @@ export default function Dashboard() {
       setChartReceivedInvoices(
         (chartReceivedRaw ?? []).map((vi: any) => ({
           po_id: vi.po_id,
+          project_id: vi.purchase_order?.project_id ?? null,
           invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
           received_amount: vi.received_amount ?? 0,
           milestones: vi.purchase_order?.milestones ?? [],
@@ -529,7 +532,7 @@ export default function Dashboard() {
       );
       // Compute uninvoiced milestones using 1:1 matching (same as MonthlyAnalysisUninvoiced)
       const allInvoicesForChart = (chartAllInvoicesRaw ?? []) as { po_id: string | null; invoice_amount_incl_vat: number }[];
-      const allMsForChart = (chartMilestonesRaw ?? []) as { purchase_order_id: string; amount_due: number; planned_payment_date: string | null }[];
+      const allMsForChart = (chartMilestonesRaw ?? []) as { purchase_order_id: string; amount_due: number; planned_payment_date: string | null; purchase_order: { project_id: string } | null }[];
       const availableByKey2 = new Map<string, number[]>();
       allMsForChart.forEach((m, idx) => {
         const key = `${m.purchase_order_id}::${Number(m.amount_due).toFixed(2)}`;
@@ -547,6 +550,12 @@ export default function Dashboard() {
         allMsForChart
           .filter((_, idx) => !consumed2.has(idx))
           .filter(m => Number(m.amount_due) > 0)
+          .map(m => ({
+            purchase_order_id: m.purchase_order_id,
+            project_id: m.purchase_order?.project_id ?? null,
+            amount_due: m.amount_due,
+            planned_payment_date: m.planned_payment_date,
+          }))
       );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
@@ -1472,18 +1481,17 @@ export default function Dashboard() {
                   const projPendingInvsTotal = pendingClientInvoices
                     .filter(i => i.project_id === project.id)
                     .reduce((s, i) => s + i.pending_amount, 0);
-                  // Col O balance: received-but-unpaid invoices for this project's POs
-                  const projBalanceInvoicesTotal = chartReceivedInvoices
-                    .filter(inv => {
-                      const ms = chartRawMilestones.filter(m => m.purchase_order_id === inv.po_id);
-                      return ms.length > 0;
-                    })
+                  // Col O balance: received-but-unpaid invoices for this project
+                  const projReceivedInvoices = chartReceivedInvoices.filter(inv => inv.project_id === project.id);
+                  const projBalanceInvoicesTotal = projReceivedInvoices
                     .reduce((s, inv) => s + Math.max(0, Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0)), 0);
+                  // Uninvoiced milestones for this project
+                  const projUninvoiced = chartUninvoicedMilestones.filter(m => m.project_id === project.id);
                   const nextIn = clientMilestonesAll
                     .filter(m => m.project_id === project.id && m.planned_receive_date)
                     .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? ''))
                     [0];
-                  const nextOutMilestone = chartUninvoicedMilestones
+                  const nextOutMilestone = projUninvoiced
                     .filter(m => m.planned_payment_date)
                     .sort((a, b) => (a.planned_payment_date ?? '').localeCompare(b.planned_payment_date ?? ''))
                     [0];
@@ -1493,7 +1501,7 @@ export default function Dashboard() {
                       .reduce((s, m) => s + m.payment_plan_amount, 0)
                     + projPendingInvsTotal;
                   const net30Out =
-                    chartUninvoicedMilestones
+                    projUninvoiced
                       .filter(m => m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
                       .reduce((s, m) => s + Number(m.amount_due), 0)
                     + projBalanceInvoicesTotal;
