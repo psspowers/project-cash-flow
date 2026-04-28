@@ -67,7 +67,7 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: { rows: Uninvoic
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3">Month</th>
+                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Payment Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
                 <th className="text-left px-4 py-3">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
@@ -213,9 +213,14 @@ export default function MonthlyAnalysisUninvoiced() {
     const project = m.purchase_order!.project!.name;
     const key = `${project}||${mk}`;
     if (!cellMap.has(key)) cellMap.set(key, []);
+    // monthLabel shows the *original* planned_payment_date so the drill-down
+    // reveals exactly how old each overdue item is, not the bucket label.
+    const originalLabel = m.planned_payment_date
+      ? toMonthLabel(toMonthKey(m.planned_payment_date))
+      : '—';
     cellMap.get(key)!.push({
       project,
-      monthLabel: toMonthLabel(mk),
+      monthLabel: originalLabel,
       poNo: m.purchase_order!.pss_po_no ?? '',
       supplier: m.purchase_order!.supplier_name_raw ?? '',
       description: m.purchase_order!.description ?? '',

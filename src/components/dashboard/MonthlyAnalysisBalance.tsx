@@ -29,7 +29,7 @@ interface RawInvoice {
 
 interface BalanceDrillRow {
   project: string;
-  monthLabel: string;   // derived from planned_payment_date
+  monthLabel: string;         // original planned_payment_date, for forensic display
   poNo: string;
   supplier: string;
   description: string;
@@ -226,9 +226,14 @@ export default function MonthlyAnalysisBalance() {
     if (!cellMap.has(key)) cellMap.set(key, []);
     const invoiceAmount = Number(invoice.invoice_amount_incl_vat ?? 0);
     const receivedAmount = Number(invoice.received_amount ?? 0);
+    // monthLabel shows the *original* planned_payment_date so the drill-down
+    // reveals exactly how old each overdue item is, not the bucket label.
+    const originalLabel = plannedPaymentDate
+      ? toMonthLabel(toMonthKey(plannedPaymentDate))
+      : '—';
     cellMap.get(key)!.push({
       project,
-      monthLabel: toMonthLabel(mk),
+      monthLabel: originalLabel,
       poNo: invoice.purchase_order!.pss_po_no ?? '',
       supplier: invoice.purchase_order!.supplier_name_raw ?? '',
       description: invoice.purchase_order!.description ?? '',
