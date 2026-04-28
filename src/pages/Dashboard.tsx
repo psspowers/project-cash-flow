@@ -343,14 +343,12 @@ export default function Dashboard() {
   const [clientMilestonesAll, setClientMilestonesAll] = useState<
     { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[]
   >([]);
-  const [poMilestonesAll, setPoMilestonesAll] = useState<
-    { project_id: string; purchase_order_id: string; amount_due: number; paid_amount: number; planned_payment_date: string | null; status: string; is_approved: boolean }[]
+  // chart state — received invoices (balance > 0), uninvoiced milestones
+  const [chartReceivedInvoices, setChartReceivedInvoices] = useState<
+    { project_id: string; invoice_amount_incl_vat: number; received_amount: number; planned_payment_date: string | null }[]
   >([]);
-  const [vendorInvoicesUnpaid, setVendorInvoicesUnpaid] = useState<
-    { project_id: string; balance: number; planned_payment_date: string | null; approved_by: string | null }[]
-  >([]);
-  const [uninvoicedPOs, setUninvoicedPOs] = useState<
-    { project_id: string; pending_remaining_amount: number; po_date: string | null; approved_by: string | null }[]
+  const [chartUninvoicedMilestones, setChartUninvoicedMilestones] = useState<
+    { project_id: string; amount_due: number; planned_payment_date: string | null }[]
   >([]);
   const [allPOs, setAllPOs] = useState<{ project_id: string; po_amount_excl_vat: number }[]>([]);
 
@@ -377,10 +375,9 @@ export default function Dashboard() {
         { data: viewRows },
         { data: viRaw, error: e8 },
         { data: cmAll, error: e9 },
-        { data: pmAll, error: e10 },
-        { data: viUnpaidRaw, error: e11 },
-        { data: poSimpleRaw, error: e12 },
-        { data: poRaw, error: e13 },
+        { data: viReceivedRaw, error: e10 },
+        { data: uninvoicedMsRaw, error: e11 },
+        { data: poRaw, error: e12 },
       ] = await Promise.all([
         supabase
           .from('projects')
@@ -432,24 +429,21 @@ export default function Dashboard() {
           .select('id, project_id, payment_plan_amount, planned_receive_date, status')
           .neq('status', 'received'),
         supabase
-          .from('po_milestones')
-          .select('purchase_order_id, amount_due, paid_amount, planned_payment_date, status, purchase_order:purchase_orders!purchase_order_id(project_id, approved_by)')
-          .neq('status', 'paid'),
-        supabase
           .from('vendor_invoices')
-          .select('planned_payment_date, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders!po_id(project_id, approved_by)')
+          .select('invoice_amount_incl_vat, received_amount, planned_payment_date, purchase_order:purchase_orders!po_id(project_id)')
+          .eq('status', 'received')
           .gt('invoice_amount_incl_vat', 0),
         supabase
-          .from('purchase_orders')
-          .select('project_id, pending_remaining_amount, po_date, approved_by, has_supplier_milestones')
-          .gt('pending_remaining_amount', 0),
+          .from('po_milestones')
+          .select('amount_due, planned_payment_date, purchase_order:purchase_orders!purchase_order_id(project_id)')
+          .not('status', 'in', '("paid","invoiced","received")'),
         supabase
           .from('purchase_orders')
           .select('project_id, po_amount_excl_vat')
           .neq('status', 'cancelled'),
       ]);
 
-      const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8 || e9 || e10 || e11 || e12 || e13;
+      const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8 || e9 || e10 || e11 || e12;
       if (firstError) throw firstError;
 
       const viewMap: Record<string, number> = {};
@@ -480,30 +474,25 @@ export default function Dashboard() {
       );
       setClientMilestonesAll((cmAll ?? []) as typeof clientMilestonesAll);
 
-      const normalizedPmAll = (pmAll ?? [])
-        .map((pm: { purchase_order_id: string; amount_due: number; paid_amount: number; planned_payment_date: string | null; status: string; purchase_order: { project_id: string; approved_by: string | null } | null }) => ({
-          project_id: pm.purchase_order?.project_id ?? '',
-          purchase_order_id: pm.purchase_order_id,
-          amount_due: pm.amount_due,
-          paid_amount: pm.paid_amount,
-          planned_payment_date: pm.planned_payment_date,
-          status: pm.status,
-          is_approved: pm.purchase_order?.approved_by != null,
+      const normalizedReceivedInvs = (viReceivedRaw ?? [])
+        .map((vi: { invoice_amount_incl_vat: number; received_amount: number; planned_payment_date: string | null; purchase_order: { project_id: string } | null }) => ({
+          project_id: vi.purchase_order?.project_id ?? '',
+          invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
+          received_amount: vi.received_amount ?? 0,
+          planned_payment_date: vi.planned_payment_date,
         }))
-        .filter((pm: { project_id: string }) => pm.project_id !== '');
-      setPoMilestonesAll(normalizedPmAll);
+        .filter((vi: { project_id: string }) => vi.project_id !== '');
+      setChartReceivedInvoices(normalizedReceivedInvs);
 
-      const normalizedUnpaidInvoices = (viUnpaidRaw ?? [])
-        .map((vi: { project_id?: string | null; planned_payment_date: string | null; invoice_amount_incl_vat: number; received_amount: number; purchase_order: { project_id: string; approved_by: string | null } | null }) => ({
-          project_id: vi.project_id ?? vi.purchase_order?.project_id ?? '',
-          balance: (vi.invoice_amount_incl_vat ?? 0) - (vi.received_amount ?? 0),
-          planned_payment_date: vi.planned_payment_date ?? null,
-          approved_by: vi.purchase_order?.approved_by ?? null,
+      const normalizedUninvoicedMs = (uninvoicedMsRaw ?? [])
+        .map((ms: { amount_due: number; planned_payment_date: string | null; purchase_order: { project_id: string } | null }) => ({
+          project_id: ms.purchase_order?.project_id ?? '',
+          amount_due: ms.amount_due,
+          planned_payment_date: ms.planned_payment_date,
         }))
-        .filter((vi: { project_id: string; balance: number }) => vi.project_id !== '' && vi.balance > 0);
-      setVendorInvoicesUnpaid(normalizedUnpaidInvoices);
+        .filter((ms: { project_id: string }) => ms.project_id !== '');
+      setChartUninvoicedMilestones(normalizedUninvoicedMs);
 
-      setUninvoicedPOs((poSimpleRaw ?? []) as typeof uninvoicedPOs);
       setAllPOs((poRaw as any) ?? []);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
@@ -553,14 +542,16 @@ export default function Dashboard() {
   const totalOutstandingReceivable = pendingReceivables + notYetInvoicedTotal;
 
   // ── Payables Pipeline ──────────────────────────────────────────────────
-  // Col O (cost): vendor invoices issued but not yet fully paid
-  const colO_Cost = vendorInvoicesUnpaid.reduce((s, vi) => s + Number(vi.balance), 0);
+  // Col O (cost): vendor invoices received but not yet fully paid
+  const colO_Cost = chartReceivedInvoices.reduce(
+    (s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount), 0,
+  );
 
-  // Col P1 (cost): uninvoiced balance across all POs (pending_remaining_amount covers both milestone and non-milestone POs)
+  // Col P1 (cost): po milestones not yet invoiced (surviving after matching)
   const activeProjectIds = new Set(activeProjects.map(p => p.id));
-  const colP1_Cost = uninvoicedPOs
-    .filter(po => activeProjectIds.has(po.project_id))
-    .reduce((s, po) => s + Number(po.pending_remaining_amount || 0), 0);
+  const colP1_Cost = chartUninvoicedMilestones
+    .filter(ms => activeProjectIds.has(ms.project_id))
+    .reduce((s, ms) => s + Number(ms.amount_due || 0), 0);
 
   // Col P2 (cost): uncontracted budget — approved estimation cost minus total POs per project
   let colP2_Cost = 0;
@@ -598,35 +589,24 @@ export default function Dashboard() {
     const inflow = clientMilestonesAll
       .filter(m => m.planned_receive_date?.startsWith(key))
       .reduce((s, m) => s + m.payment_plan_amount / 1_000_000, 0);
-    // Source 3: PO milestones (existing)
-    const outflowApproved = poMilestonesAll
-      .filter(m => m.planned_payment_date?.startsWith(key) && m.is_approved)
-      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)) / 1_000_000, 0);
-    const outflowDraft = poMilestonesAll
-      .filter(m => m.planned_payment_date?.startsWith(key) && !m.is_approved)
-      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)) / 1_000_000, 0);
-    // Source 1: Unpaid vendor invoices (col O) — invoiced by supplier, not yet paid
-    const outflowColO = vendorInvoicesUnpaid
+    const outflowBalance = chartReceivedInvoices
       .filter(vi => vi.planned_payment_date?.startsWith(key))
-      .reduce((s, vi) => s + vi.balance / 1_000_000, 0);
-    // Source 2: Simple POs with no invoice yet — use po_date as proxy
-    const outflowSimplePO = uninvoicedPOs
-      .filter(po => po.po_date?.startsWith(key))
-      .reduce((s, po) => s + (po.pending_remaining_amount ?? 0) / 1_000_000, 0);
+      .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount) / 1_000_000, 0);
+    const outflowUninvoiced = chartUninvoicedMilestones
+      .filter(ms => ms.planned_payment_date?.startsWith(key))
+      .reduce((s, ms) => s + ms.amount_due / 1_000_000, 0);
     return {
       month: format(new Date(key + '-01'), 'MMM yy'),
       key,
       inflow: +inflow.toFixed(2),
-      outflowColO: +outflowColO.toFixed(2),
-      outflowApproved: +outflowApproved.toFixed(2),
-      outflowDraft: +outflowDraft.toFixed(2),
-      outflowSimplePO: +outflowSimplePO.toFixed(2),
+      outflowBalance: +outflowBalance.toFixed(2),
+      outflowUninvoiced: +outflowUninvoiced.toFixed(2),
     };
   });
 
   let cumNet = 0;
   const forecastChartDataWithCum = forecastChartData.map(d => {
-    const totalOut = d.outflowColO + d.outflowApproved + d.outflowDraft + d.outflowSimplePO;
+    const totalOut = d.outflowBalance + d.outflowUninvoiced;
     cumNet += d.inflow - totalOut;
     return { ...d, cumNet: +cumNet.toFixed(2) };
   });
@@ -648,8 +628,8 @@ export default function Dashboard() {
         month: format(month, 'MMM yy'),
         key,
         inflow: +inflow.toFixed(2),
-        outflowApproved: +cashOutActual.toFixed(2),
-        outflowDraft: 0,
+        outflowBalance: +cashOutActual.toFixed(2),
+        outflowUninvoiced: 0,
         isForecast: false,
       };
     }),
@@ -658,18 +638,18 @@ export default function Dashboard() {
       const inflow = clientMilestonesAll
         .filter(m => m.planned_receive_date?.startsWith(key))
         .reduce((s, m) => s + m.payment_plan_amount / 1_000_000, 0);
-      const outflowApproved = poMilestonesAll
-        .filter(m => m.planned_payment_date?.startsWith(key) && m.is_approved)
-        .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)) / 1_000_000, 0);
-      const outflowDraft = poMilestonesAll
-        .filter(m => m.planned_payment_date?.startsWith(key) && !m.is_approved)
-        .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)) / 1_000_000, 0);
+      const outflowBalance = chartReceivedInvoices
+        .filter(vi => vi.planned_payment_date?.startsWith(key))
+        .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount) / 1_000_000, 0);
+      const outflowUninvoiced = chartUninvoicedMilestones
+        .filter(ms => ms.planned_payment_date?.startsWith(key))
+        .reduce((s, ms) => s + ms.amount_due / 1_000_000, 0);
       return {
         month: format(month, 'MMM yy'),
         key,
         inflow: +inflow.toFixed(2),
-        outflowApproved: +outflowApproved.toFixed(2),
-        outflowDraft: +outflowDraft.toFixed(2),
+        outflowBalance: +outflowBalance.toFixed(2),
+        outflowUninvoiced: +outflowUninvoiced.toFixed(2),
         isForecast: true,
       };
     }),
@@ -689,17 +669,13 @@ export default function Dashboard() {
       .reduce((s, m) => s + m.payment_plan_amount, 0)
     + pendingClientInvoicesTotal;
 
-  // Unpaid vendor invoices are outstanding payables due now — always counted in 90-day window
-  const vendorInvoicesUnpaidTotal = vendorInvoicesUnpaid.reduce((s, vi) => s + vi.balance, 0);
-
   const plannedOutflow90 =
-    poMilestonesAll
-      .filter(m => m.planned_payment_date && m.planned_payment_date <= ninetyDayKey)
-      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
-    + vendorInvoicesUnpaidTotal
-    + uninvoicedPOs
-      .filter(po => po.po_date && po.po_date <= ninetyDayKey)
-      .reduce((s, po) => s + (po.pending_remaining_amount ?? 0), 0);
+    chartReceivedInvoices
+      .filter(vi => vi.planned_payment_date && vi.planned_payment_date <= ninetyDayKey)
+      .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount), 0)
+    + chartUninvoicedMilestones
+      .filter(ms => ms.planned_payment_date && ms.planned_payment_date <= ninetyDayKey)
+      .reduce((s, ms) => s + ms.amount_due, 0);
 
   const netPosition90 = plannedInflow90 - plannedOutflow90;
 
@@ -709,9 +685,13 @@ export default function Dashboard() {
     const nextIn = clientMilestonesAll
       .filter(m => m.project_id === p.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
       .reduce((s, m) => s + m.payment_plan_amount, 0);
-    const nextOut = poMilestonesAll
-      .filter(m => m.project_id === p.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
-      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0);
+    const nextOut =
+      chartReceivedInvoices
+        .filter(vi => vi.project_id === p.id && vi.planned_payment_date && vi.planned_payment_date <= thirtyDayKey)
+        .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount), 0)
+      + chartUninvoicedMilestones
+        .filter(ms => ms.project_id === p.id && ms.planned_payment_date && ms.planned_payment_date <= thirtyDayKey)
+        .reduce((s, ms) => s + ms.amount_due, 0);
     return nextOut > nextIn;
   }).length;
 
@@ -1151,9 +1131,9 @@ export default function Dashboard() {
       <div className="bg-white rounded-lg border border-black/[0.08] p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-[13px] font-semibold text-gray-800">
-            {chartMode === 'historical' && 'Monthly Cash Flow — last 13 months (฿M)'}
-            {chartMode === 'forecast' && 'Cash Flow Forecast — next 9 months (฿M)'}
-            {chartMode === 'combined' && 'Cash Flow — last 3 months + next 6 months (฿M)'}
+            {chartMode === 'historical' && 'Monthly Cash Flow — Historical (฿M)'}
+            {chartMode === 'forecast' && 'Cash Flow Forecast — Upcoming (฿M)'}
+            {chartMode === 'combined' && 'Cash Flow — Actual + Forecast (฿M)'}
           </h2>
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             {(['historical', 'forecast', 'combined'] as const).map(mode => (
@@ -1207,10 +1187,8 @@ export default function Dashboard() {
                     formatter={((value: number, name: string): [string, string] => [
                       `฿${value.toFixed(2)}M`,
                       name === 'inflow' ? 'Planned In'
-                      : name === 'outflowColO' ? 'Invoiced — Awaiting Payment'
-                      : name === 'outflowApproved' ? 'Committed (Approved POs)'
-                      : name === 'outflowDraft' ? 'Committed (Draft POs)'
-                      : name === 'outflowSimplePO' ? 'PO Outstanding Balance'
+                      : name === 'outflowBalance' ? 'Invoice Balance — Awaiting Payment'
+                      : name === 'outflowUninvoiced' ? 'Yet to Invoice'
                       : 'Cumulative Net',
                     ]) as RechartsTooltipFormatter}
                     contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
@@ -1218,20 +1196,16 @@ export default function Dashboard() {
                   <Legend
                     formatter={(value: string) =>
                       value === 'inflow' ? 'Planned In'
-                      : value === 'outflowColO' ? 'Invoiced — Awaiting Payment'
-                      : value === 'outflowApproved' ? 'Committed (Approved POs)'
-                      : value === 'outflowDraft' ? 'Draft POs'
-                      : value === 'outflowSimplePO' ? 'PO Outstanding Balance'
+                      : value === 'outflowBalance' ? 'Invoice Balance — Awaiting Payment'
+                      : value === 'outflowUninvoiced' ? 'Yet to Invoice'
                       : 'Cumulative Net'
                     }
                     iconType="square"
                     wrapperStyle={{ fontSize: 12 }}
                   />
                   <Bar dataKey="inflow" fill="#1D9E75" radius={[2, 2, 0, 0]} opacity={0.85} />
-                  <Bar dataKey="outflowColO" stackId="out" fill="#E24B4A" opacity={0.85} radius={[0, 0, 0, 0]} name="outflowColO" />
-                  <Bar dataKey="outflowApproved" stackId="out" fill="#E24B4A" opacity={0.65} radius={[0, 0, 0, 0]} name="outflowApproved" />
-                  <Bar dataKey="outflowDraft" stackId="out" fill="#E24B4A" opacity={0.4} radius={[0, 0, 0, 0]} name="outflowDraft" />
-                  <Bar dataKey="outflowSimplePO" stackId="out" fill="#E24B4A" opacity={0.25} radius={[2, 2, 0, 0]} name="outflowSimplePO" />
+                  <Bar dataKey="outflowBalance" stackId="out" fill="#E24B4A" opacity={0.85} radius={[0, 0, 0, 0]} name="outflowBalance" />
+                  <Bar dataKey="outflowUninvoiced" stackId="out" fill="#E24B4A" opacity={0.4} radius={[2, 2, 0, 0]} name="outflowUninvoiced" />
                   <Line type="monotone" dataKey="cumNet" stroke="#3B82F6" strokeWidth={2} dot={false} name="cumNet" />
                   <ReferenceLine y={0} stroke="#E24B4A" strokeDasharray="4 2" strokeWidth={1} />
                 </ComposedChart>
@@ -1250,16 +1224,16 @@ export default function Dashboard() {
                       formatter={((value: number, name: string): [string, string] => [
                         `฿${value.toFixed(2)}M`,
                         name === 'inflow' ? 'Cash In / Planned In'
-                        : name === 'outflowApproved' ? 'Committed Out (Approved)'
-                        : 'Draft POs (unconfirmed)',
+                        : name === 'outflowBalance' ? 'Invoice Balance — Paid / Awaiting'
+                        : 'Yet to Invoice',
                       ]) as RechartsTooltipFormatter}
                       contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
                     />
                     <Legend
                       formatter={(value: string) =>
                         value === 'inflow' ? 'Cash In / Planned In'
-                        : value === 'outflowApproved' ? 'Committed Out'
-                        : 'Draft POs (unconfirmed)'
+                        : value === 'outflowBalance' ? 'Invoice Balance'
+                        : 'Yet to Invoice'
                       }
                       iconType="square"
                       wrapperStyle={{ fontSize: 12 }}
@@ -1279,7 +1253,7 @@ export default function Dashboard() {
                       }}
                     />
                     <Bar
-                      dataKey="outflowApproved"
+                      dataKey="outflowBalance"
                       stackId="out"
                       shape={(props: { x?: number; y?: number; width?: number; height?: number; isForecast?: boolean }) => {
                         const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
@@ -1287,7 +1261,7 @@ export default function Dashboard() {
                       }}
                     />
                     <Bar
-                      dataKey="outflowDraft"
+                      dataKey="outflowUninvoiced"
                       stackId="out"
                       radius={[2, 2, 0, 0]}
                       shape={(props: { x?: number; y?: number; width?: number; height?: number; isForecast?: boolean }) => {
@@ -1359,27 +1333,33 @@ export default function Dashboard() {
                   const projPendingInvsTotal = pendingClientInvoices
                     .filter(i => i.project_id === project.id)
                     .reduce((s, i) => s + i.pending_amount, 0);
-                  const projUnpaidVendorInvsTotal = vendorInvoicesUnpaid
+                  const projUnpaidVendorInvsTotal = chartReceivedInvoices
                     .filter(vi => vi.project_id === project.id)
-                    .reduce((s, vi) => s + vi.balance, 0);
+                    .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount), 0);
                   const nextIn = clientMilestonesAll
                     .filter(m => m.project_id === project.id && m.planned_receive_date)
                     .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? ''))
                     [0];
-                  const nextOut = poMilestonesAll
-                    .filter(m => m.project_id === project.id && m.planned_payment_date)
-                    .sort((a, b) => (a.planned_payment_date ?? '').localeCompare(b.planned_payment_date ?? ''))
-                    [0];
+                  const nextOutMs = [
+                    ...chartReceivedInvoices
+                      .filter(vi => vi.project_id === project.id && vi.planned_payment_date)
+                      .map(vi => ({ date: vi.planned_payment_date!, amount: Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount) })),
+                    ...chartUninvoicedMilestones
+                      .filter(ms => ms.project_id === project.id && ms.planned_payment_date)
+                      .map(ms => ({ date: ms.planned_payment_date!, amount: ms.amount_due })),
+                  ].sort((a, b) => a.date.localeCompare(b.date))[0];
                   const net30In =
                     clientMilestonesAll
                       .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
                       .reduce((s, m) => s + m.payment_plan_amount, 0)
                     + projPendingInvsTotal;
                   const net30Out =
-                    poMilestonesAll
-                      .filter(m => m.project_id === project.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
-                      .reduce((s, m) => s + (m.amount_due - (m.paid_amount ?? 0)), 0)
-                    + projUnpaidVendorInvsTotal;
+                    chartReceivedInvoices
+                      .filter(vi => vi.project_id === project.id && vi.planned_payment_date && vi.planned_payment_date <= thirtyDayKey)
+                      .reduce((s, vi) => s + Math.max(0, vi.invoice_amount_incl_vat - vi.received_amount), 0)
+                    + chartUninvoicedMilestones
+                      .filter(ms => ms.project_id === project.id && ms.planned_payment_date && ms.planned_payment_date <= thirtyDayKey)
+                      .reduce((s, ms) => s + ms.amount_due, 0);
                   const net30 = net30In - net30Out;
                   const isAtRisk = net30 < 0;
 
@@ -1422,10 +1402,10 @@ export default function Dashboard() {
                             <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(projUnpaidVendorInvsTotal)}</p>
                             <p className="text-[10px] text-[#E24B4A]/70">Supplier Invoiced</p>
                           </div>
-                        ) : nextOut ? (
+                        ) : nextOutMs ? (
                           <div>
-                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(nextOut.amount_due - (nextOut.paid_amount ?? 0))}</p>
-                            <p className="text-[10px] text-gray-400">{formatDate(nextOut.planned_payment_date)}</p>
+                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(nextOutMs.amount)}</p>
+                            <p className="text-[10px] text-gray-400">{formatDate(nextOutMs.date)}</p>
                           </div>
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
