@@ -728,6 +728,16 @@ export default function CashFlowPlanner() {
   ]);
   const sortedKeys = [...allKeys].sort();
 
+  // Opening balance = net of all historical settled cash (paid invoices vs actual receipts).
+  // Used to seed the Forecast cumulative line so it continues from where history ended.
+  const historicalOpeningBalance = (() => {
+    let totalIn = 0;
+    let totalOut = 0;
+    for (const v of historicalInByMonth.values()) totalIn += v;
+    for (const v of historicalOutByMonth.values()) totalOut += v;
+    return (totalIn - totalOut) / 1_000_000;
+  })();
+
   function buildChartData(mode: ChartMode): ChartBar[] {
     const hasForecast = (k: string) =>
       forecastBalanceByMonth.has(k) || forecastUninvoicedByMonth.has(k) || forecastInByMonth.has(k);
@@ -740,7 +750,8 @@ export default function CashFlowPlanner() {
       ? [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
       : [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
-    let cumNet = 0;
+    // Forecast seeds from historical net; combined naturally accumulates from first historical month
+    let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
     return keys.map(key => {
       let cashIn = 0;
       let outflowBalance = 0;
@@ -1243,8 +1254,8 @@ export default function CashFlowPlanner() {
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? 'Dark red = Invoice Balance (Col O, received but unpaid). Faded red = Yet to Invoice (Col P, uninvoiced milestones). Both use overdue sweep. Cash In also swept. Grand totals tie to Monthly Analyzer pivot tables.'
-              : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded).'}
+              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(2)}M (total settled receipts minus paid invoices). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
+              : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded). Cumulative Net runs continuously across both periods.'}
           </p>
         </div>
       </div>
