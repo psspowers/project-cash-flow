@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, CalendarClock } from 'lucide-react';
+import { X, CalendarClock, Pencil, Check, XCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { toMonthKey, toMonthLabel, fmtTHB2dp } from './AnalysisPivotTable';
+import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,14 +35,67 @@ interface UninvoicedDrillRow {
   description: string;
   milestoneNo: number;
   amountDue: number;
+  milestoneId: string;
 }
 
 // ---------------------------------------------------------------------------
 // DrillDownModal
 // ---------------------------------------------------------------------------
 
-function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: { rows: UninvoicedDrillRow[]; cellLabel: string; onClose: () => void }) {
-  const total = rows.reduce((s, r) => s + r.amountDue, 0);
+interface UninvoicedEditState {
+  rowIndex: number;
+  paymentDate: string;
+  amount: string;
+}
+
+function DrillDownUninvoicedModal({ rows, cellLabel, onClose, onRefresh }: { rows: UninvoicedDrillRow[]; cellLabel: string; onClose: () => void; onRefresh?: () => void }) {
+  const [localRows, setLocalRows] = useState<UninvoicedDrillRow[]>(rows);
+  const [editing, setEditing] = useState<UninvoicedEditState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const total = localRows.reduce((s, r) => s + r.amountDue, 0);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  }
+
+  function startEdit(i: number) {
+    const r = localRows[i];
+    setEditing({ rowIndex: i, paymentDate: '', amount: String(r.amountDue) });
+  }
+
+  function cancelEdit() { setEditing(null); }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const r = localRows[editing.rowIndex];
+    setSaving(true);
+    const newAmount = parseFloat(editing.amount);
+    const patch: Record<string, unknown> = {};
+    if (!isNaN(newAmount) && newAmount !== r.amountDue) patch.amount_due = newAmount;
+    if (editing.paymentDate) patch.planned_payment_date = editing.paymentDate;
+
+    if (Object.keys(patch).length > 0) {
+      await supabase.from('po_milestones').update(patch).eq('id', r.milestoneId);
+    }
+
+    setSaving(false);
+    setLocalRows(prev => prev.map((row, i) => {
+      if (i !== editing.rowIndex) return row;
+      return {
+        ...row,
+        amountDue: !isNaN(newAmount) ? newAmount : row.amountDue,
+        monthLabel: editing.paymentDate
+          ? toMonthLabel(toMonthKey(editing.paymentDate))
+          : row.monthLabel,
+      };
+    }));
+    setEditing(null);
+    showToast('Update saved successfully.');
+    onRefresh?.();
+  }
 
   return (
     <div
@@ -50,9 +103,14 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: { rows: Uninvoic
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col border border-black/[0.08]"
+        className="relative bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col border border-black/[0.08]"
         onClick={(e) => e.stopPropagation()}
       >
+        {toast && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-[#1D9E75] text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg">
+            {toast}
+          </div>
+        )}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Yet to Invoice — Drill-Down</h3>
@@ -67,30 +125,58 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose }: { rows: Uninvoic
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Payment Month</th>
+                <th className="text-left px-4 py-3 whitespace-nowrap">Pymt Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
-                <th className="text-left px-4 py-3">Supplier</th>
+                <th className="text-left px-4 py-3 min-w-[180px]">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
-                <th className="text-center px-4 py-3 whitespace-nowrap">Milestone #</th>
+                <th className="text-center px-4 py-3 whitespace-nowrap">MS #</th>
                 <th className="text-right px-4 py-3 whitespace-nowrap">Not Yet Invoiced</th>
+                <th className="px-3 py-3 w-8" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b border-gray-50 hover:bg-[#F8F8F7] transition-colors">
-                  <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{r.project}</td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.monthLabel}</td>
-                  <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.supplier || '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500 max-w-[180px] truncate">{r.description || '—'}</td>
-                  <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
-                  <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">{fmtTHB2dp(r.amountDue)}</td>
-                </tr>
-              ))}
+              {localRows.map((r, i) => {
+                const isEditing = editing?.rowIndex === i;
+                return (
+                  <tr key={i} className={`border-b border-gray-50 transition-colors ${isEditing ? 'bg-blue-50' : 'hover:bg-[#F8F8F7]'}`}>
+                    <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{formatProjectName(r.project)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
+                      {isEditing
+                        ? <input type="date" value={editing.paymentDate} onChange={e => setEditing(s => s && ({ ...s, paymentDate: e.target.value }))} className="border border-blue-300 rounded px-2 py-1 text-xs w-32 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        : r.monthLabel}
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-500 min-w-[180px]">{r.supplier || '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-500 max-w-[180px] truncate">{r.description || '—'}</td>
+                    <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">
+                      {isEditing
+                        ? <input type="number" value={editing.amount} onChange={e => setEditing(s => s && ({ ...s, amount: e.target.value }))} className="border border-blue-300 rounded px-2 py-1 text-xs w-36 text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        : fmtTHB2dp(r.amountDue)}
+                    </td>
+                    <td className="px-3 py-2.5 text-center w-8">
+                      {isEditing ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <button onClick={saveEdit} disabled={saving} className="p-1 rounded text-[#1D9E75] hover:bg-[#1D9E75]/10 transition-colors disabled:opacity-40">
+                            <Check size={14} />
+                          </button>
+                          <button onClick={cancelEdit} className="p-1 rounded text-gray-400 hover:bg-gray-100 transition-colors">
+                            <XCircle size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => startEdit(i)} className="p-1 rounded text-gray-300 hover:text-[#378ADD] hover:bg-blue-50 transition-colors">
+                          <Pencil size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-amber-50 border-t-2 border-amber-200">
-                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</td>
+                <td colSpan={7} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</td>
                 <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums text-[13px]">{fmtTHB2dp(total)}</td>
               </tr>
             </tfoot>
@@ -226,6 +312,7 @@ export default function MonthlyAnalysisUninvoiced() {
       description: m.purchase_order!.description ?? '',
       milestoneNo: m.milestone_number,
       amountDue: Number(m.amount_due),
+      milestoneId: m.id,
     });
   }
 
@@ -369,7 +456,7 @@ export default function MonthlyAnalysisUninvoiced() {
         )}
       </div>
 
-      {drill && <DrillDownUninvoicedModal rows={drill.rows} cellLabel={drill.label} onClose={() => setDrill(null)} />}
+      {drill && <DrillDownUninvoicedModal rows={drill.rows} cellLabel={drill.label} onClose={() => setDrill(null)} onRefresh={loadData} />}
     </>
   );
 }

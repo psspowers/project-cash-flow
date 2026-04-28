@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { X } from 'lucide-react';
+import { X, Pencil, Check, XCircle } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -14,6 +15,9 @@ export interface PivotDrillRow {
   description: string;
   milestoneNo: string; // string so caller can pass "—" for invoice-only rows
   amount: number;
+  // IDs for inline editing (optional — callers that have them should populate)
+  milestoneId?: string;
+  vendorInvoiceId?: string;
 }
 
 export interface PivotDataRow {
@@ -44,6 +48,12 @@ export function fmtTHB2dp(n: number): string {
   return '฿' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Strips suffixes like "p Rooftop", "p Solar System", "MWp Rooftop" etc.
+// "Nanapan – 2.5 MWp Rooftop" → "Nanapan – 2.5 MW"
+export function formatProjectName(name: string): string {
+  return name.replace(/\s*MWp\s+\w+.*$/i, ' MW').replace(/\s*p\s+(Rooftop|Solar\s+System|Ground[- ]?Mount)\s*$/i, '').trim();
+}
+
 // ---------------------------------------------------------------------------
 // DrillDownModal
 // ---------------------------------------------------------------------------
@@ -52,10 +62,73 @@ interface DrillDownModalProps {
   rows: PivotDrillRow[];
   cellLabel: string;
   onClose: () => void;
+  onRefresh?: () => void;
 }
 
-export function DrillDownModal({ rows, cellLabel, onClose }: DrillDownModalProps) {
-  const total = rows.reduce((s, r) => s + r.amount, 0);
+interface EditState {
+  rowIndex: number;
+  paymentDate: string;
+  amount: string;
+}
+
+export function DrillDownModal({ rows, cellLabel, onClose, onRefresh }: DrillDownModalProps) {
+  const [localRows, setLocalRows] = useState<PivotDrillRow[]>(rows);
+  const [editing, setEditing] = useState<EditState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const total = localRows.reduce((s, r) => s + r.amount, 0);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  }
+
+  function startEdit(i: number) {
+    const r = localRows[i];
+    setEditing({ rowIndex: i, paymentDate: '', amount: String(r.amount) });
+  }
+
+  function cancelEdit() { setEditing(null); }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const r = localRows[editing.rowIndex];
+    setSaving(true);
+    const newAmount = parseFloat(editing.amount);
+
+    const updates: Promise<unknown>[] = [];
+
+    if (r.milestoneId && editing.paymentDate) {
+      updates.push(
+        supabase.from('po_milestones').update({ planned_payment_date: editing.paymentDate }).eq('id', r.milestoneId)
+      );
+    }
+    if (r.milestoneId && !isNaN(newAmount) && newAmount !== r.amount) {
+      updates.push(
+        supabase.from('po_milestones').update({ amount_due: newAmount }).eq('id', r.milestoneId)
+      );
+    }
+
+    await Promise.all(updates);
+    setSaving(false);
+
+    // Optimistically update local row
+    setLocalRows(prev => prev.map((row, i) =>
+      i === editing.rowIndex
+        ? {
+            ...row,
+            amount: !isNaN(newAmount) ? newAmount : row.amount,
+            monthLabel: editing.paymentDate
+              ? toMonthLabel(toMonthKey(editing.paymentDate))
+              : row.monthLabel,
+          }
+        : row
+    ));
+    setEditing(null);
+    showToast('Update saved successfully.');
+    onRefresh?.();
+  }
 
   return (
     <div
@@ -66,6 +139,13 @@ export function DrillDownModal({ rows, cellLabel, onClose }: DrillDownModalProps
         className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col border border-black/[0.08]"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Toast */}
+        {toast && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-[#1D9E75] text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg">
+            {toast}
+          </div>
+        )}
+
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Drill-Down Detail</h3>
@@ -86,30 +166,56 @@ export function DrillDownModal({ rows, cellLabel, onClose }: DrillDownModalProps
                 <th className="text-left px-4 py-3">Project</th>
                 <th className="text-left px-4 py-3">Month</th>
                 <th className="text-left px-4 py-3">PO Number</th>
-                <th className="text-left px-4 py-3">Supplier</th>
+                <th className="text-left px-4 py-3 min-w-[180px]">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[200px]">Description</th>
-                <th className="text-center px-4 py-3">Milestone #</th>
+                <th className="text-center px-4 py-3">MS #</th>
                 <th className="text-right px-4 py-3">Amount</th>
+                <th className="px-3 py-3 w-8" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b border-gray-50 hover:bg-[#F8F8F7] transition-colors">
-                  <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{r.project}</td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.monthLabel}</td>
-                  <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.supplier || '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500 max-w-[200px] truncate">{r.description || '—'}</td>
-                  <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
-                  <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">
-                    {fmtTHB2dp(r.amount)}
-                  </td>
-                </tr>
-              ))}
+              {localRows.map((r, i) => {
+                const isEditing = editing?.rowIndex === i;
+                return (
+                  <tr key={i} className={`border-b border-gray-50 transition-colors ${isEditing ? 'bg-blue-50' : 'hover:bg-[#F8F8F7]'}`}>
+                    <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{formatProjectName(r.project)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
+                      {isEditing
+                        ? <input type="date" value={editing.paymentDate} onChange={e => setEditing(s => s && ({ ...s, paymentDate: e.target.value }))} className="border border-blue-300 rounded px-2 py-1 text-xs w-32 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        : r.monthLabel}
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-500 min-w-[180px]">{r.supplier || '—'}</td>
+                    <td className="px-4 py-2.5 text-gray-500 max-w-[200px] truncate">{r.description || '—'}</td>
+                    <td className="px-4 py-2.5 text-center text-gray-500">{r.milestoneNo}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">
+                      {isEditing
+                        ? <input type="number" value={editing.amount} onChange={e => setEditing(s => s && ({ ...s, amount: e.target.value }))} className="border border-blue-300 rounded px-2 py-1 text-xs w-36 text-right focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                        : fmtTHB2dp(r.amount)}
+                    </td>
+                    <td className="px-3 py-2.5 text-center w-8">
+                      {isEditing ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <button onClick={saveEdit} disabled={saving} className="p-1 rounded text-[#1D9E75] hover:bg-[#1D9E75]/10 transition-colors disabled:opacity-40">
+                            <Check size={14} />
+                          </button>
+                          <button onClick={cancelEdit} className="p-1 rounded text-gray-400 hover:bg-gray-100 transition-colors">
+                            <XCircle size={14} />
+                          </button>
+                        </div>
+                      ) : (r.milestoneId || r.vendorInvoiceId) ? (
+                        <button onClick={() => startEdit(i)} className="p-1 rounded text-gray-300 hover:text-[#378ADD] hover:bg-blue-50 transition-colors">
+                          <Pencil size={13} />
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-[#1D9E75]/5 border-t-2 border-[#1D9E75]/20">
-                <td colSpan={6} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                <td colSpan={7} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   Total
                 </td>
                 <td className="px-4 py-2.5 text-right font-bold text-gray-900 tabular-nums text-[13px]">

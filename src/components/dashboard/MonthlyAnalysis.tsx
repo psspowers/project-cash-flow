@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { X, BarChart2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { toMonthKey, toMonthLabel, fmtTHB2dp } from './AnalysisPivotTable';
+import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,9 +67,9 @@ function DrillDownModal({ rows, cellLabel, onClose }: { rows: DrillRow[]; cellLa
             <thead>
               <tr className="text-xs font-medium text-gray-400 uppercase tracking-wide border-b border-gray-100 bg-[#F8F8F7] sticky top-0">
                 <th className="text-left px-4 py-3">Project</th>
-                <th className="text-left px-4 py-3 whitespace-nowrap">Expected Payment Month</th>
+                <th className="text-left px-4 py-3 whitespace-nowrap">Pymt Month</th>
                 <th className="text-left px-4 py-3 whitespace-nowrap">PO Number</th>
-                <th className="text-left px-4 py-3">Supplier</th>
+                <th className="text-left px-4 py-3 min-w-[180px]">Supplier</th>
                 <th className="text-left px-4 py-3 max-w-[180px]">Description</th>
                 <th className="text-center px-4 py-3 whitespace-nowrap">Invoice #</th>
                 <th className="text-right px-4 py-3 whitespace-nowrap">Paid Amount</th>
@@ -78,10 +78,10 @@ function DrillDownModal({ rows, cellLabel, onClose }: { rows: DrillRow[]; cellLa
             <tbody>
               {rows.map((r, i) => (
                 <tr key={i} className="border-b border-gray-50 hover:bg-[#F8F8F7] transition-colors">
-                  <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{r.project}</td>
+                  <td className="px-4 py-2.5 font-medium text-gray-700 whitespace-nowrap">{formatProjectName(r.project)}</td>
                   <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.monthLabel}</td>
                   <td className="px-4 py-2.5 text-gray-700 font-mono text-xs whitespace-nowrap">{r.poNo || '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{r.supplier || '—'}</td>
+                  <td className="px-4 py-2.5 text-gray-500 min-w-[180px]">{r.supplier || '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500 max-w-[180px] truncate">{r.description || '—'}</td>
                   <td className="px-4 py-2.5 text-center text-gray-500 font-mono text-xs">{r.invoiceNo || '—'}</td>
                   <td className="px-4 py-2.5 text-right font-medium text-gray-800 tabular-nums whitespace-nowrap">{fmtTHB2dp(r.paidAmount)}</td>
