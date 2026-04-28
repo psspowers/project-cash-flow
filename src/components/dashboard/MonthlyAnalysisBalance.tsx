@@ -153,6 +153,19 @@ export default function MonthlyAnalysisBalance() {
     plannedPaymentDate: string | null;
   }
 
+  // Roll-forward: any date strictly before the current month is swept into
+  // the previous month's bucket as an overdue backlog.
+  const today = new Date();
+  const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+  function rollForwardKey(dateStr: string | null): string {
+    const fallback = dateStr ?? today.toISOString().slice(0, 10);
+    const d = new Date(fallback);
+    const effective = d < currentMonthStart ? previousMonthDate : d;
+    return toMonthKey(effective.toISOString().slice(0, 10));
+  }
+
   const matchedInvoices: MatchedInvoice[] = (() => {
     const pool = new Map<string, Map<string, { id: string; planned_payment_date: string | null }[]>>();
 
@@ -197,7 +210,7 @@ export default function MonthlyAnalysisBalance() {
   const projectNameSet = new Set<string>();
 
   for (const { invoice, plannedPaymentDate } of validMatches) {
-    monthKeySet.add(toMonthKey(plannedPaymentDate!));
+    monthKeySet.add(rollForwardKey(plannedPaymentDate));
     projectNameSet.add(invoice.purchase_order!.project!.name);
   }
 
@@ -207,7 +220,7 @@ export default function MonthlyAnalysisBalance() {
   const cellMap = new Map<string, BalanceDrillRow[]>();
 
   for (const { invoice, plannedPaymentDate } of validMatches) {
-    const mk = toMonthKey(plannedPaymentDate!);
+    const mk = rollForwardKey(plannedPaymentDate);
     const project = invoice.purchase_order!.project!.name;
     const key = `${project}||${mk}`;
     if (!cellMap.has(key)) cellMap.set(key, []);

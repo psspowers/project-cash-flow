@@ -182,12 +182,24 @@ export default function MonthlyAnalysisUninvoiced() {
     Number(m.amount_due) > 0
   );
 
+  // Roll-forward: any date strictly before the current month is swept into
+  // the previous month's bucket as an overdue backlog.
+  const today = new Date();
+  const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+  function rollForwardKey(dateStr: string | null): string {
+    const fallback = dateStr ?? today.toISOString().slice(0, 10);
+    const d = new Date(fallback);
+    const effective = d < currentMonthStart ? previousMonthDate : d;
+    return toMonthKey(effective.toISOString().slice(0, 10));
+  }
+
   const monthKeySet = new Set<string>();
   const projectNameSet = new Set<string>();
 
   for (const m of validRows) {
-    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
-    monthKeySet.add(toMonthKey(dateStr));
+    monthKeySet.add(rollForwardKey(m.planned_payment_date));
     projectNameSet.add(m.purchase_order!.project!.name);
   }
 
@@ -197,8 +209,7 @@ export default function MonthlyAnalysisUninvoiced() {
   const cellMap = new Map<string, UninvoicedDrillRow[]>();
 
   for (const m of validRows) {
-    const dateStr = m.planned_payment_date ?? new Date().toISOString().slice(0, 10);
-    const mk = toMonthKey(dateStr);
+    const mk = rollForwardKey(m.planned_payment_date);
     const project = m.purchase_order!.project!.name;
     const key = `${project}||${mk}`;
     if (!cellMap.has(key)) cellMap.set(key, []);
