@@ -79,8 +79,26 @@ export default function CashflowTab() {
   interface CashOutRow {
     key: string; poNo: string; vendorName: string; category: string; msLabel: string;
     plannedDate: string | undefined; amount: number; paid: number; balance: number;
-    status: string; rowType: 'po_milestone' | 'vendor_invoice' | 'draft_po'; rowId: string;
+    status: string; rowType: 'po_milestone' | 'vendor_invoice' | 'uninvoiced_milestone'; rowId: string;
   }
+
+  // 1:1 milestone matching: consume one milestone per invoice by (po_id, amount) key
+  const milestonePools = new Map<string, { idx: number; m: typeof poMilestones[0] }[]>();
+  poMilestones.forEach((m, idx) => {
+    const key = `${m.purchase_order_id}::${Number(m.amount_due).toFixed(2)}`;
+    if (!milestonePools.has(key)) milestonePools.set(key, []);
+    milestonePools.get(key)!.push({ idx, m });
+  });
+  const consumedMilestoneIdxs = new Set<number>();
+  orders.forEach(o => {
+    if (!o.has_supplier_milestones) {
+      o.invoices.forEach(inv => {
+        const key = `${o.id}::${Number(inv.invoice_amount_incl_vat).toFixed(2)}`;
+        const pool = milestonePools.get(key);
+        if (pool && pool.length > 0) consumedMilestoneIdxs.add(pool.shift()!.idx);
+      });
+    }
+  });
 
   const cashOutRows: CashOutRow[] = [];
   orders.forEach(o => {
@@ -110,13 +128,31 @@ export default function CashflowTab() {
           status: inv.status, rowType: 'vendor_invoice', rowId: inv.id,
         });
       });
-    } else if ((o.pending_remaining_amount ?? 0) > 0) {
-      cashOutRows.push({
-        key: `draft-${o.id}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
-        msLabel: '—', plannedDate: o.po_date || undefined,
-        amount: o.pending_remaining_amount ?? 0, paid: 0, balance: o.pending_remaining_amount ?? 0,
-        status: 'draft', rowType: 'draft_po', rowId: o.id,
-      });
+      // Show surviving (uninvoiced) milestones for this PO after invoices
+      poMilestones
+        .filter((pm, idx) => pm.purchase_order_id === o.id && !consumedMilestoneIdxs.has(idx) && Number(pm.amount_due) > 0)
+        .forEach((pm, i) => {
+          cashOutRows.push({
+            key: `uninv-${o.id}-${i}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
+            msLabel: `MS${pm.milestone_number} (uninvoiced)`,
+            plannedDate: pm.planned_payment_date ?? undefined,
+            amount: pm.amount_due, paid: 0, balance: pm.amount_due,
+            status: 'pending', rowType: 'uninvoiced_milestone', rowId: pm.id,
+          });
+        });
+    } else {
+      // No invoices: all surviving milestones are uninvoiced
+      poMilestones
+        .filter((pm, idx) => pm.purchase_order_id === o.id && !consumedMilestoneIdxs.has(idx) && Number(pm.amount_due) > 0)
+        .forEach((pm, i) => {
+          cashOutRows.push({
+            key: `uninv-${o.id}-${i}`, poNo: o.pss_po_no ?? '—', vendorName, category: cat,
+            msLabel: `MS${pm.milestone_number} (uninvoiced)`,
+            plannedDate: pm.planned_payment_date ?? undefined,
+            amount: pm.amount_due, paid: 0, balance: pm.amount_due,
+            status: 'pending', rowType: 'uninvoiced_milestone', rowId: pm.id,
+          });
+        });
     }
   });
 
@@ -324,7 +360,7 @@ export default function CashflowTab() {
                   </td>
                   {canReschedule && (
                     <td className="px-4 py-2.5">
-                      {row.rowType !== 'draft_po' && (
+                      {row.rowType !== 'uninvoiced_milestone' && (
                         <button
                           onClick={() => openReschedule(
                             row.rowType === 'po_milestone' ? 'po_milestone' : 'vendor_invoice',
