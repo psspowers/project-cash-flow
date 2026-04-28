@@ -113,7 +113,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
   const groupOpen = analyzerOpen || onAnalyzerPage;
 
   return (
-    <aside className="w-[220px] min-h-screen bg-[#0f1923] flex flex-col shrink-0 border-r border-white/5">
+    <aside className="fixed top-0 left-0 w-[220px] h-screen bg-[#0f1923] flex flex-col shrink-0 border-r border-white/5 z-40">
 
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/10">

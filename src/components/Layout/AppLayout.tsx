@@ -81,7 +81,7 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
         role={profile.role}
         badges={{ approvals: pendingApprovals, payments: pendingPayments, alerts: ceoAlerts }}
       />
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 ml-[220px]">
         <Topbar
           notifications={notifications}
           onNotificationRead={handleNotificationRead}
