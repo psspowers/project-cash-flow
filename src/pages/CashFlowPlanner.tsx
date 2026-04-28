@@ -19,6 +19,7 @@ import {
   GripVertical,
   X,
   Check,
+  CalendarRange,
 } from 'lucide-react';
 import {
   format,
@@ -28,8 +29,26 @@ import {
   parseISO,
   isSameWeek,
 } from 'date-fns';
+import {
+  ComposedChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+  ReferenceLine,
+} from 'recharts';
 import { supabase } from '../lib/supabase';
 import { VendorInvoice, Project, fmtTHB, fmtTHBCompact } from '../types';
+import { toMonthKey, toMonthLabel } from '../components/dashboard/AnalysisPivotTable';
+import { useAuth } from '../context/AuthContext';
+
+// ---------------------------------------------------------------------------
+// Kanban types (preserved)
+// ---------------------------------------------------------------------------
 
 interface ClientMilestoneRow {
   id: string;
@@ -41,7 +60,6 @@ interface ClientMilestoneRow {
   status: string;
   project?: Project;
 }
-import { useAuth } from '../context/AuthContext';
 
 type CardType = 'milestone' | 'invoice';
 
@@ -84,6 +102,243 @@ interface MessageOverride {
   text: string;
   color: 'green' | 'red';
 }
+
+// ---------------------------------------------------------------------------
+// Chart types
+// ---------------------------------------------------------------------------
+
+interface ChartBar {
+  month: string;   // "MMM-yy" label
+  key: string;     // "yyyy-MM" sort key
+  cashIn: number;  // ฿M
+  cashOut: number; // ฿M
+  cumNet: number;  // ฿M running total
+  isForecast?: boolean;
+}
+
+// Raw data shapes from Supabase
+interface PaidInvoiceRaw {
+  id: string;
+  po_id: string | null;
+  invoice_date: string | null;
+  invoice_amount_incl_vat: number;
+  vendor_invoice_no: string | null;
+  purchase_order: {
+    milestones: { amount_due: number; planned_payment_date: string | null }[];
+  } | null;
+}
+
+interface ReceivedInvoiceRaw {
+  id: string;
+  po_id: string | null;
+  invoice_amount_incl_vat: number;
+  received_amount: number;
+  planned_payment_date: string | null;
+  purchase_order: {
+    milestones: { amount_due: number; planned_payment_date: string | null }[];
+  } | null;
+}
+
+interface AllMilestoneRaw {
+  id: string;
+  purchase_order_id: string;
+  amount_due: number;
+  planned_payment_date: string | null;
+}
+
+interface ClientMilestoneChartRaw {
+  id: string;
+  project_id: string;
+  payment_plan_amount: number;
+  planned_receive_date: string | null;
+  status: string;
+}
+
+interface ClientReceiptRaw {
+  received_amount: number;
+  receipt_date: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Overdue sweep helper
+// ---------------------------------------------------------------------------
+
+const today = new Date();
+const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 15);
+
+function rollForward(dateStr: string | null): string {
+  const d = dateStr ? new Date(dateStr) : today;
+  const effective = d < currentMonthStart ? previousMonthDate : d;
+  return toMonthKey(effective.toISOString().slice(0, 10));
+}
+
+// ---------------------------------------------------------------------------
+// 1:1 milestone pool builder (mirrors MonthlyAnalysisUninvoiced)
+// ---------------------------------------------------------------------------
+
+function buildMilestonePool(milestones: AllMilestoneRaw[]): Map<string, AllMilestoneRaw[]> {
+  const pool = new Map<string, AllMilestoneRaw[]>();
+  for (const ms of milestones) {
+    const key = `${ms.purchase_order_id}::${Number(ms.amount_due).toFixed(2)}`;
+    if (!pool.has(key)) pool.set(key, []);
+    pool.get(key)!.push(ms);
+  }
+  return pool;
+}
+
+// ---------------------------------------------------------------------------
+// Chart aggregation
+// ---------------------------------------------------------------------------
+
+function buildChartData(
+  mode: 'historical' | 'forecast' | 'combined',
+  paidInvoices: PaidInvoiceRaw[],
+  receivedInvoices: ReceivedInvoiceRaw[],
+  allMilestones: AllMilestoneRaw[],
+  clientMilestones: ClientMilestoneChartRaw[],
+  clientReceipts: ClientReceiptRaw[],
+): ChartBar[] {
+  // ── 1:1 matching to find uninvoiced milestones ──────────────────────────
+  const pool = buildMilestonePool(allMilestones);
+  const consumedIds = new Set<string>();
+
+  // Consume milestones matched by paid invoices
+  for (const inv of paidInvoices) {
+    if (!inv.po_id) continue;
+    const key = `${inv.po_id}::${Number(inv.invoice_amount_incl_vat).toFixed(2)}`;
+    const avail = pool.get(key);
+    if (avail && avail.length > 0) consumedIds.add(avail.shift()!.id);
+  }
+  // Consume milestones matched by received invoices
+  for (const inv of receivedInvoices) {
+    if (!inv.po_id) continue;
+    const key = `${inv.po_id}::${Number(inv.invoice_amount_incl_vat).toFixed(2)}`;
+    const avail = pool.get(key);
+    if (avail && avail.length > 0) consumedIds.add(avail.shift()!.id);
+  }
+  const uninvoicedMilestones = allMilestones.filter(ms => !consumedIds.has(ms.id));
+
+  // ── Aggregate into monthly maps ─────────────────────────────────────────
+
+  // Historical Cash Out: paid invoices → use matched milestone's planned_payment_date
+  // (mirrors MonthlyAnalysis.tsx: planned_payment_date drives the X-axis key)
+  const historicalOutByMonth = new Map<string, number>();
+  for (const inv of paidInvoices) {
+    if (!inv.po_id) continue;
+    // find matched milestone's planned_payment_date from the purchase_order join
+    const msList = inv.purchase_order?.milestones ?? [];
+    const matchedMs = msList.find(
+      ms => Number(ms.amount_due).toFixed(2) === Number(inv.invoice_amount_incl_vat).toFixed(2)
+    );
+    // Use milestone date if found; cap future-dated milestones to invoice_date
+    let dateStr: string | null = matchedMs?.planned_payment_date ?? inv.invoice_date;
+    if (matchedMs?.planned_payment_date && inv.invoice_date) {
+      // If milestone date is in the future relative to invoice_date, cap to invoice_date
+      if (matchedMs.planned_payment_date > inv.invoice_date) {
+        dateStr = inv.invoice_date;
+      } else {
+        dateStr = matchedMs.planned_payment_date;
+      }
+    }
+    const mk = toMonthKey(dateStr ?? inv.invoice_date ?? today.toISOString().slice(0, 10));
+    historicalOutByMonth.set(mk, (historicalOutByMonth.get(mk) ?? 0) + inv.invoice_amount_incl_vat / 1_000_000);
+  }
+
+  // Historical Cash In: actual client receipts by receipt_date
+  const historicalInByMonth = new Map<string, number>();
+  for (const r of clientReceipts) {
+    if (!r.receipt_date) continue;
+    const mk = toMonthKey(r.receipt_date);
+    historicalInByMonth.set(mk, (historicalInByMonth.get(mk) ?? 0) + r.received_amount / 1_000_000);
+  }
+
+  // Forecast Cash Out = Invoice Balance (received invoices) + Yet to Invoice (uninvoiced milestones)
+  // Both use overdue sweep
+  const forecastOutByMonth = new Map<string, number>();
+  for (const inv of receivedInvoices) {
+    const balance = Math.max(0, inv.invoice_amount_incl_vat - (inv.received_amount ?? 0));
+    if (balance <= 0) continue;
+    const mk = rollForward(inv.planned_payment_date);
+    forecastOutByMonth.set(mk, (forecastOutByMonth.get(mk) ?? 0) + balance / 1_000_000);
+  }
+  for (const ms of uninvoicedMilestones) {
+    const mk = rollForward(ms.planned_payment_date);
+    forecastOutByMonth.set(mk, (forecastOutByMonth.get(mk) ?? 0) + ms.amount_due / 1_000_000);
+  }
+
+  // Forecast Cash In: uninvoiced client milestones by planned_receive_date, with overdue sweep
+  const forecastInByMonth = new Map<string, number>();
+  for (const cm of clientMilestones) {
+    if (cm.status === 'received') continue;
+    const mk = rollForward(cm.planned_receive_date);
+    forecastInByMonth.set(mk, (forecastInByMonth.get(mk) ?? 0) + cm.payment_plan_amount / 1_000_000);
+  }
+
+  // ── Union all month keys for the selected mode ──────────────────────────
+  let allKeys: string[] = [];
+
+  if (mode === 'historical') {
+    allKeys = [...new Set([...historicalOutByMonth.keys(), ...historicalInByMonth.keys()])];
+  } else if (mode === 'forecast') {
+    allKeys = [...new Set([...forecastOutByMonth.keys(), ...forecastInByMonth.keys()])];
+  } else {
+    allKeys = [...new Set([
+      ...historicalOutByMonth.keys(),
+      ...historicalInByMonth.keys(),
+      ...forecastOutByMonth.keys(),
+      ...forecastInByMonth.keys(),
+    ])];
+  }
+
+  allKeys.sort();
+
+  // ── Build chart bars ─────────────────────────────────────────────────────
+  const todayKey = toMonthKey(today.toISOString().slice(0, 10));
+
+  let cumNet = 0;
+  return allKeys.map(key => {
+    let cashIn = 0;
+    let cashOut = 0;
+    const isForecast = key >= todayKey;
+
+    if (mode === 'historical') {
+      cashIn = historicalInByMonth.get(key) ?? 0;
+      cashOut = historicalOutByMonth.get(key) ?? 0;
+    } else if (mode === 'forecast') {
+      cashIn = forecastInByMonth.get(key) ?? 0;
+      cashOut = forecastOutByMonth.get(key) ?? 0;
+    } else {
+      // Combined: historical for past months, forecast for current+future
+      if (!isForecast) {
+        cashIn = historicalInByMonth.get(key) ?? 0;
+        cashOut = historicalOutByMonth.get(key) ?? 0;
+      } else {
+        cashIn = forecastInByMonth.get(key) ?? 0;
+        cashOut = forecastOutByMonth.get(key) ?? 0;
+      }
+    }
+
+    cumNet += cashIn - cashOut;
+    return {
+      month: toMonthLabel(key),
+      key,
+      cashIn: +cashIn.toFixed(2),
+      cashOut: +cashOut.toFixed(2),
+      cumNet: +cumNet.toFixed(2),
+      isForecast,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Recharts tooltip formatter type shim
+// ---------------------------------------------------------------------------
+type RechartsTooltipFormatter = (value: number, name: string) => [string, string];
+
+// ---------------------------------------------------------------------------
+// Kanban sub-components (preserved exactly)
+// ---------------------------------------------------------------------------
 
 const PULSE_STYLE = `
 @keyframes pulseBorder {
@@ -147,6 +402,36 @@ function DraggableCard({
       </div>
     </div>
   );
+}
+
+function getClosingBalanceStyle(balance: number): {
+  bg: string;
+  text: string;
+  label: string;
+  bold: boolean;
+  pulse: boolean;
+  tooltip?: string;
+} {
+  if (balance > 5_000_000) {
+    return { bg: '#E8F5E9', text: '#1D9E75', label: fmtTHBCompact(balance), bold: false, pulse: false };
+  } else if (balance >= 0) {
+    return {
+      bg: '#FFF8E1',
+      text: '#EF9F27',
+      label: `${fmtTHBCompact(balance)} — low`,
+      bold: false,
+      pulse: false,
+      tooltip: 'Cash position is below ฿5M this week. Consider moving a payment or bringing forward income.',
+    };
+  } else {
+    return {
+      bg: '#FFEBEE',
+      text: '#E24B4A',
+      label: `-฿${Math.abs(balance).toLocaleString('en-US', { maximumFractionDigits: 0 })} DEFICIT`,
+      bold: true,
+      pulse: true,
+    };
+  }
 }
 
 function WeekColumnDropZone({
@@ -325,39 +610,14 @@ function UnscheduledDropZone({ cards }: { cards: DraggableCard[] }) {
   );
 }
 
-function getClosingBalanceStyle(balance: number): {
-  bg: string;
-  text: string;
-  label: string;
-  bold: boolean;
-  pulse: boolean;
-  tooltip?: string;
-} {
-  if (balance > 5_000_000) {
-    return { bg: '#E8F5E9', text: '#1D9E75', label: fmtTHBCompact(balance), bold: false, pulse: false };
-  } else if (balance >= 0) {
-    return {
-      bg: '#FFF8E1',
-      text: '#EF9F27',
-      label: `${fmtTHBCompact(balance)} — low`,
-      bold: false,
-      pulse: false,
-      tooltip: 'Cash position is below ฿5M this week. Consider moving a payment or bringing forward income.',
-    };
-  } else {
-    return {
-      bg: '#FFEBEE',
-      text: '#E24B4A',
-      label: `-฿${Math.abs(balance).toLocaleString('en-US', { maximumFractionDigits: 0 })} DEFICIT`,
-      bold: true,
-      pulse: true,
-    };
-  }
-}
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export default function CashFlowPlanner() {
   useAuth();
 
+  // ── Kanban state ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([]);
   const [milestones, setMilestones] = useState<ClientMilestoneRow[]>([]);
   const [invoices, setInvoices] = useState<(VendorInvoice & { vendor?: { name: string }; project?: Project })[]>([]);
@@ -378,6 +638,15 @@ export default function CashFlowPlanner() {
   const [messageOverride, setMessageOverride] = useState<MessageOverride | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Chart state ───────────────────────────────────────────────────────────
+  const [chartMode, setChartMode] = useState<'historical' | 'forecast' | 'combined'>('forecast');
+  const [chartLoading, setChartLoading] = useState(true);
+  const [paidInvoices, setPaidInvoices] = useState<PaidInvoiceRaw[]>([]);
+  const [receivedInvoices, setReceivedInvoices] = useState<ReceivedInvoiceRaw[]>([]);
+  const [allMilestones, setAllMilestones] = useState<AllMilestoneRaw[]>([]);
+  const [clientMilestonesChart, setClientMilestonesChart] = useState<ClientMilestoneChartRaw[]>([]);
+  const [clientReceipts, setClientReceipts] = useState<ClientReceiptRaw[]>([]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
@@ -387,10 +656,68 @@ export default function CashFlowPlanner() {
   );
 
   useEffect(() => {
-    loadData();
+    loadChartData();
+    loadKanbanData();
   }, []);
 
-  async function loadData() {
+  // ── Chart data fetch ──────────────────────────────────────────────────────
+
+  async function loadChartData() {
+    setChartLoading(true);
+    const [paidRes, receivedRes, milestonesRes, cmRes, receiptsRes] = await Promise.all([
+      // Paid invoices with their PO milestones for date lookup
+      supabase
+        .from('vendor_invoices')
+        .select(`
+          id, po_id, invoice_date, invoice_amount_incl_vat, vendor_invoice_no,
+          purchase_order:purchase_orders!po_id(
+            milestones:po_milestones(amount_due, planned_payment_date)
+          )
+        `)
+        .eq('status', 'paid')
+        .gt('invoice_amount_incl_vat', 0),
+
+      // Received invoices (balance = invoice - received_amount) with planned_payment_date
+      supabase
+        .from('vendor_invoices')
+        .select(`
+          id, po_id, invoice_amount_incl_vat, received_amount, planned_payment_date,
+          purchase_order:purchase_orders!po_id(
+            milestones:po_milestones(amount_due, planned_payment_date)
+          )
+        `)
+        .eq('status', 'received')
+        .gt('invoice_amount_incl_vat', 0),
+
+      // ALL po_milestones for 1:1 matching (to find uninvoiced)
+      supabase
+        .from('po_milestones')
+        .select('id, purchase_order_id, amount_due, planned_payment_date'),
+
+      // Uninvoiced client milestones for forecast cash in
+      supabase
+        .from('client_milestones')
+        .select('id, project_id, payment_plan_amount, planned_receive_date, status')
+        .neq('status', 'received'),
+
+      // Actual client receipts for historical cash in
+      supabase
+        .from('client_invoices')
+        .select('received_amount, receipt_date')
+        .gt('received_amount', 0),
+    ]);
+
+    if (paidRes.data) setPaidInvoices(paidRes.data as unknown as PaidInvoiceRaw[]);
+    if (receivedRes.data) setReceivedInvoices(receivedRes.data as unknown as ReceivedInvoiceRaw[]);
+    if (milestonesRes.data) setAllMilestones(milestonesRes.data as AllMilestoneRaw[]);
+    if (cmRes.data) setClientMilestonesChart(cmRes.data as ClientMilestoneChartRaw[]);
+    if (receiptsRes.data) setClientReceipts(receiptsRes.data as ClientReceiptRaw[]);
+    setChartLoading(false);
+  }
+
+  // ── Kanban data fetch ─────────────────────────────────────────────────────
+
+  async function loadKanbanData() {
     setLoading(true);
     const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes] = await Promise.all([
       supabase.from('projects').select('*').order('name'),
@@ -423,6 +750,8 @@ export default function CashFlowPlanner() {
     );
     setLoading(false);
   }
+
+  // ── Kanban helpers ────────────────────────────────────────────────────────
 
   const buildCards = useCallback((): DraggableCard[] => {
     const cards: DraggableCard[] = [];
@@ -563,7 +892,7 @@ export default function CashFlowPlanner() {
       }
     }
 
-    await loadData();
+    await loadKanbanData();
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -648,19 +977,191 @@ export default function CashFlowPlanner() {
   const totalPayments = weekColumns.slice(0, 4).reduce((s, c) => s + c.paymentTotal, 0);
   const net = totalIncome - totalPayments;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  // ── Chart data ────────────────────────────────────────────────────────────
+
+  const chartData = buildChartData(
+    chartMode,
+    paidInvoices,
+    receivedInvoices,
+    allMilestones,
+    clientMilestonesChart,
+    clientReceipts,
+  );
+
+  const todayMonthLabel = toMonthLabel(toMonthKey(today.toISOString().slice(0, 10)));
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-[#F8F8F7]">
       <style>{PULSE_STYLE}</style>
 
-      <div className="px-6 py-5 border-b border-gray-200 bg-white">
+      {/* ── Chart Section ──────────────────────────────────────────────────── */}
+      <div className="px-6 pt-6 pb-2">
+        <div className="bg-white rounded-xl border border-black/[0.08] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-[#1D9E75]/10 flex items-center justify-center">
+                <CalendarRange size={14} className="text-[#1D9E75]" />
+              </div>
+              <div>
+                <h2 className="text-[13px] font-semibold text-gray-800">
+                  {chartMode === 'historical' && 'Cash Flow — Historical'}
+                  {chartMode === 'forecast' && 'Cash Flow Forecast'}
+                  {chartMode === 'combined' && 'Cash Flow — Actual + Forecast'}
+                  <span className="text-gray-400 font-normal ml-1">(฿M)</span>
+                </h2>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {chartMode === 'historical' && 'Actual cash in/out from paid invoices and received receipts'}
+                  {chartMode === 'forecast' && 'Invoice balance + yet-to-invoice milestones vs client payment plan'}
+                  {chartMode === 'combined' && 'Actual data for past months, forecast for current and future'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+              {(['historical', 'forecast', 'combined'] as const).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setChartMode(mode)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    chartMode === mode
+                      ? 'bg-white text-[#0f1923] shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {chartLoading ? (
+            <div className="h-[240px] flex items-center justify-center">
+              <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : chartData.length === 0 ? (
+            <div className="h-[240px] flex items-center justify-center">
+              <p className="text-sm text-gray-400">No data available for this view</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={chartData} barGap={2} barCategoryGap="32%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  yAxisId="bars"
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v: number) => `฿${v}M`}
+                />
+                <YAxis
+                  yAxisId="line"
+                  orientation="right"
+                  tick={{ fontSize: 11, fill: '#3B82F6' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v: number) => `฿${v}M`}
+                />
+                <Tooltip
+                  formatter={((value: number, name: string): [string, string] => [
+                    `฿${value.toFixed(2)}M`,
+                    name === 'cashIn' ? 'Cash In'
+                    : name === 'cashOut' ? 'Cash Out'
+                    : 'Cumulative Net',
+                  ]) as RechartsTooltipFormatter}
+                  contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
+                />
+                <Legend
+                  formatter={(value: string) =>
+                    value === 'cashIn' ? 'Cash In'
+                    : value === 'cashOut' ? 'Cash Out'
+                    : 'Cumulative Net'
+                  }
+                  iconType="square"
+                  wrapperStyle={{ fontSize: 12 }}
+                />
+                {/* Today reference line for combined mode */}
+                {chartMode === 'combined' && (
+                  <ReferenceLine
+                    x={todayMonthLabel}
+                    yAxisId="bars"
+                    stroke="#9ca3af"
+                    strokeDasharray="4 2"
+                    label={{ value: 'Today', position: 'top', fontSize: 10, fill: '#9ca3af' }}
+                  />
+                )}
+                <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="4 2" strokeWidth={1} />
+                <Bar
+                  yAxisId="bars"
+                  dataKey="cashIn"
+                  fill="#1D9E75"
+                  radius={[3, 3, 0, 0]}
+                  name="cashIn"
+                  opacity={0.9}
+                  shape={(props: {
+                    x?: number; y?: number; width?: number; height?: number; isForecast?: boolean;
+                  }) => {
+                    const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
+                    return (
+                      <rect
+                        x={x} y={y} width={width} height={height}
+                        fill="#1D9E75"
+                        opacity={chartMode === 'combined' && isForecast ? 0.4 : 0.9}
+                        rx={3}
+                      />
+                    );
+                  }}
+                />
+                <Bar
+                  yAxisId="bars"
+                  dataKey="cashOut"
+                  fill="#E24B4A"
+                  radius={[3, 3, 0, 0]}
+                  name="cashOut"
+                  opacity={0.85}
+                  shape={(props: {
+                    x?: number; y?: number; width?: number; height?: number; isForecast?: boolean;
+                  }) => {
+                    const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
+                    return (
+                      <rect
+                        x={x} y={y} width={width} height={height}
+                        fill="#E24B4A"
+                        opacity={chartMode === 'combined' && isForecast ? 0.35 : 0.85}
+                        rx={3}
+                      />
+                    );
+                  }}
+                />
+                <Line
+                  yAxisId="line"
+                  type="monotone"
+                  dataKey="cumNet"
+                  stroke="#3B82F6"
+                  strokeWidth={2}
+                  dot={false}
+                  name="cumNet"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+
+          {chartMode === 'combined' && !chartLoading && chartData.length > 0 && (
+            <p className="text-[11px] text-gray-400 mt-2 px-1">
+              Solid bars = actual · Faded bars = forecast based on planned dates
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Kanban Section ─────────────────────────────────────────────────── */}
+      <div className="px-6 py-5 border-b border-gray-200 bg-white mt-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0f1923]">Cash Flow Planner</h1>
@@ -731,54 +1232,60 @@ export default function CashFlowPlanner() {
         )}
       </div>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={pointerWithin}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver as never}
-        onDragEnd={handleDragEnd}
-      >
-        <div className="p-6 overflow-x-auto">
-          <div className="flex gap-3 min-w-max pb-4">
-            {weekColumns.map((col) => {
-              const weekKey = format(col.weekStart, 'yyyy-MM-dd');
-              const isNegative = col.closingBalance < 0;
-              const showBanner = isNegative && !dismissedWeeks.has(weekKey);
-
-              return (
-                <WeekColumnDropZone
-                  key={col.weekIndex}
-                  col={col}
-                  weekKey={weekKey}
-                  isOver={overWeekIndex === col.weekIndex}
-                  showBanner={showBanner}
-                  onDismissBanner={() => {
-                    setDismissedWeeks((prev) => {
-                      const next = new Set(prev);
-                      next.add(weekKey);
-                      return next;
-                    });
-                  }}
-                />
-              );
-            })}
-          </div>
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="w-8 h-8 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
         </div>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={pointerWithin}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver as never}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="p-6 overflow-x-auto">
+            <div className="flex gap-3 min-w-max pb-4">
+              {weekColumns.map((col) => {
+                const weekKey = format(col.weekStart, 'yyyy-MM-dd');
+                const isNegative = col.closingBalance < 0;
+                const showBanner = isNegative && !dismissedWeeks.has(weekKey);
 
-        <div className="px-6 pb-8">
-          <div className="border-t border-gray-200 pt-6">
-            <h2 className="text-sm font-semibold text-[#0f1923] mb-3 flex items-center gap-2">
-              <AlertTriangle size={14} className="text-[#EF9F27]" />
-              Unscheduled ({unscheduledCards.length})
-            </h2>
-            <UnscheduledDropZone cards={unscheduledCards} />
+                return (
+                  <WeekColumnDropZone
+                    key={col.weekIndex}
+                    col={col}
+                    weekKey={weekKey}
+                    isOver={overWeekIndex === col.weekIndex}
+                    showBanner={showBanner}
+                    onDismissBanner={() => {
+                      setDismissedWeeks((prev) => {
+                        const next = new Set(prev);
+                        next.add(weekKey);
+                        return next;
+                      });
+                    }}
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        <DragOverlay dropAnimation={null}>
-          {activeCard ? <DraggableCard card={activeCard} isDragOverlay /> : null}
-        </DragOverlay>
-      </DndContext>
+          <div className="px-6 pb-8">
+            <div className="border-t border-gray-200 pt-6">
+              <h2 className="text-sm font-semibold text-[#0f1923] mb-3 flex items-center gap-2">
+                <AlertTriangle size={14} className="text-[#EF9F27]" />
+                Unscheduled ({unscheduledCards.length})
+              </h2>
+              <UnscheduledDropZone cards={unscheduledCards} />
+            </div>
+          </div>
+
+          <DragOverlay dropAnimation={null}>
+            {activeCard ? <DraggableCard card={activeCard} isDragOverlay /> : null}
+          </DragOverlay>
+        </DndContext>
+      )}
 
       {warningModal.open && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
