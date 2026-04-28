@@ -186,7 +186,7 @@ export default function MonthlyAnalysisUninvoiced() {
   // the previous month's bucket as an overdue backlog.
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 15);
 
   function rollForwardKey(dateStr: string | null): string {
     const fallback = dateStr ?? today.toISOString().slice(0, 10);
