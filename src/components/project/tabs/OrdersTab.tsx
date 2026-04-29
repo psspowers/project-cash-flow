@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Pencil, Save, XCircle as XCircleIcon } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import {
@@ -24,111 +24,9 @@ interface OverrunInfo {
   categoryLabel: string;
 }
 
-// ── Inline-edit primitives ────────────────────────────────────────────────────
-
-function InlineNum({
-  value, onSave, active,
-}: {
-  value: number;
-  onSave: (v: number) => Promise<void>;
-  active: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  if (!active) return <>{fmtTHB(value)}</>;
-
-  if (editing) {
-    const commit = async () => {
-      setSaving(true);
-      await onSave(parseFloat(draft) || 0);
-      setSaving(false);
-      setEditing(false);
-    };
-    return (
-      <span className="inline-flex items-center gap-1" onClick={e => e.stopPropagation()}>
-        <input
-          autoFocus
-          type="number"
-          min="0"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
-          className="w-28 text-right border border-[#378ADD]/60 bg-[#378ADD]/5 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#378ADD]/30"
-        />
-        <button onClick={commit} disabled={saving} className="text-[#1D9E75] hover:text-[#178a64] disabled:opacity-40"><Save size={11} /></button>
-        <button onClick={() => setEditing(false)} className="text-gray-400 hover:text-gray-600"><XCircleIcon size={11} /></button>
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="group inline-flex items-center gap-1 cursor-pointer rounded px-1 -mx-1 hover:bg-[#378ADD]/8 transition-colors"
-      onDoubleClick={e => { e.stopPropagation(); setDraft(String(value)); setEditing(true); }}
-      title="Double-click to edit"
-    >
-      {fmtTHB(value)}
-      <Pencil size={9} className="text-gray-300 group-hover:text-[#378ADD] transition-colors shrink-0" />
-    </span>
-  );
-}
-
-function InlineDate({
-  value, onSave, active,
-}: {
-  value: string | undefined;
-  onSave: (v: string) => Promise<void>;
-  active: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const display = value ? formatDate(value) : <span className="text-gray-400 italic text-[10px]">Unscheduled</span>;
-
-  if (!active) return <>{display}</>;
-
-  if (editing) {
-    const commit = async () => {
-      if (draft) { setSaving(true); await onSave(`${draft}-01`); setSaving(false); }
-      setEditing(false);
-    };
-    return (
-      <span className="inline-flex items-center gap-1" onClick={e => e.stopPropagation()}>
-        <input
-          autoFocus
-          type="month"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          className="border border-[#378ADD]/60 bg-[#378ADD]/5 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#378ADD]/30"
-        />
-        <button onClick={commit} disabled={saving} className="text-[#1D9E75] hover:text-[#178a64] disabled:opacity-40"><Save size={11} /></button>
-        <button onClick={() => setEditing(false)} className="text-gray-400 hover:text-gray-600"><XCircleIcon size={11} /></button>
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="group inline-flex items-center gap-1 cursor-pointer rounded px-1 -mx-1 hover:bg-[#378ADD]/8 transition-colors whitespace-nowrap"
-      onDoubleClick={e => { e.stopPropagation(); setDraft(value ? value.substring(0, 7) : ''); setEditing(true); }}
-      title="Double-click to edit"
-    >
-      {display}
-      <Pencil size={9} className="text-gray-300 group-hover:text-[#378ADD] transition-colors shrink-0" />
-    </span>
-  );
-}
-
-// ── Main tab ──────────────────────────────────────────────────────────────────
-
 export default function OrdersTab() {
-  const { project, orders, poMilestones, vendors, budget, vos, reload, isCostController, isCM, isFinancialsLocked } = useProjectDetail();
+  const { project, orders, poMilestones, vendors, budget, vos, reload, isCostController, isCM } = useProjectDetail();
   const { user } = useAuth();
-
-  const canEdit = isCostController && !isFinancialsLocked;
 
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
   const [showNewPO, setShowNewPO] = useState(false);
@@ -208,26 +106,6 @@ export default function OrdersTab() {
     await reload();
   }
 
-  async function savePOAmount(poId: string, newExcl: number) {
-    const vat = newExcl * 0.07;
-    await supabase.from('purchase_orders').update({
-      po_amount_excl_vat: newExcl,
-      vat_7pct: vat,
-      po_amount_incl_vat: newExcl + vat,
-    }).eq('id', poId);
-    await reload();
-  }
-
-  async function saveMilestoneField(id: string, field: 'amount_due' | 'planned_payment_date', value: number | string) {
-    await supabase.from('po_milestones').update({ [field]: value }).eq('id', id);
-    await reload();
-  }
-
-  async function saveInvoiceField(id: string, field: 'invoice_amount_incl_vat' | 'planned_payment_date', value: number | string) {
-    await supabase.from('vendor_invoices').update({ [field]: value }).eq('id', id);
-    await reload();
-  }
-
   async function submitPO() {
     if (!project?.id) return;
     setFormError('');
@@ -272,20 +150,7 @@ export default function OrdersTab() {
 
   return (
     <div className="space-y-4">
-      {isFinancialsLocked && (
-        <div className="flex items-center gap-2 bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-4 py-2.5">
-          <span className="text-xs font-medium text-[#E24B4A]">Financials are locked — all data is read-only.</span>
-        </div>
-      )}
-
-      {canEdit && (
-        <div className="flex items-center gap-2 bg-[#378ADD]/5 border border-[#378ADD]/20 rounded-lg px-4 py-2.5">
-          <Pencil size={12} className="text-[#378ADD] shrink-0" />
-          <span className="text-xs text-[#378ADD] font-medium">Reconciliation mode — double-click any amount or date to edit inline.</span>
-        </div>
-      )}
-
-      {project?.status === 'active' && isCostController && !isFinancialsLocked && (
+      {project?.status === 'active' && isCostController && (
         <div className="flex justify-end">
           <button
             onClick={() => setShowNewPO(true)}
@@ -300,7 +165,7 @@ export default function OrdersTab() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-              {['', 'PO No.', 'Vendor', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total (incl VAT)', 'Balance Due', 'Status'].map(h => (
+              {['', 'PO No.', 'Vendor', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status'].map(h => (
                 <th key={h} className={`px-4 py-2.5 text-left font-medium text-gray-500 ${h === 'Balance Due' ? 'text-[#E24B4A]' : ''}`}>{h}</th>
               ))}
             </tr>
@@ -321,13 +186,7 @@ export default function OrdersTab() {
                   </td>
                   <td className="px-4 py-2.5 text-gray-600">{(o.vendor as Entity | undefined)?.name ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500">{o.cost_category.replace(/_/g, ' ')}</td>
-                  <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
-                    <InlineNum
-                      value={o.po_amount_excl_vat}
-                      active={canEdit}
-                      onSave={v => savePOAmount(o.id, v)}
-                    />
-                  </td>
+                  <td className="px-4 py-2.5">{fmtTHB(o.po_amount_excl_vat)}</td>
                   <td className="px-4 py-2.5 text-gray-500">{fmtTHB(o.vat_7pct)}</td>
                   <td className="px-4 py-2.5 font-medium">{fmtTHB(o.po_amount_incl_vat)}</td>
                   <td className="px-4 py-2.5 font-medium text-[#E24B4A]">{fmtTHB(
@@ -353,22 +212,8 @@ export default function OrdersTab() {
                             <div className="flex items-center gap-4 text-xs text-gray-600 flex-1 flex-wrap">
                               <span className="font-semibold text-[#0f1923]">MS{pm.milestone_number}</span>
                               <span>{pm.milestone_pct != null ? `${(pm.milestone_pct * 100).toFixed(0)}%` : '—'}</span>
-                              <span className="flex items-center gap-1">
-                                <span className="text-gray-400">Due: </span>
-                                <InlineNum
-                                  value={pm.amount_due}
-                                  active={canEdit}
-                                  onSave={v => saveMilestoneField(pm.id, 'amount_due', v)}
-                                />
-                              </span>
-                              <span className="flex items-center gap-1">
-                                <span className="text-gray-400">Planned: </span>
-                                <InlineDate
-                                  value={pm.planned_payment_date}
-                                  active={canEdit}
-                                  onSave={v => saveMilestoneField(pm.id, 'planned_payment_date', v)}
-                                />
-                              </span>
+                              <span><span className="text-gray-400">Due: </span>{fmtTHB(pm.amount_due)}</span>
+                              <span><span className="text-gray-400">Planned: </span>{formatDate(pm.planned_payment_date)}</span>
                               <Badge
                                 label={pm.status}
                                 variant={pm.status === 'paid' ? 'green' : pm.status === 'invoiced' ? 'amber' : 'gray'}
@@ -400,24 +245,10 @@ export default function OrdersTab() {
                         <div className="grid grid-cols-6 gap-4 text-xs text-gray-600">
                           <span><span className="text-gray-400">Invoice: </span>{inv.vendor_invoice_no ?? '—'}</span>
                           <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
-                          <span className="flex items-center gap-1">
-                            <span className="text-gray-400">Total Invoice: </span>
-                            <InlineNum
-                              value={inv.invoice_amount_incl_vat}
-                              active={canEdit}
-                              onSave={v => saveInvoiceField(inv.id, 'invoice_amount_incl_vat', v)}
-                            />
-                          </span>
+                          <span><span className="text-gray-400">Total Invoice: </span>{fmtTHB(inv.invoice_amount_incl_vat)}</span>
                           <span><span className="text-gray-400">WHT 3%: </span>{fmtTHB(inv.wht_3pct)}</span>
                           <span><span className="text-gray-400">Paid to date: </span><span className="text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount ?? 0)}</span></span>
-                          <span className="flex items-center gap-1">
-                            <span className="text-gray-400">Planned pmt: </span>
-                            <InlineDate
-                              value={inv.planned_payment_date ?? undefined}
-                              active={canEdit}
-                              onSave={v => saveInvoiceField(inv.id, 'planned_payment_date', v)}
-                            />
-                          </span>
+                          <span><span className="text-gray-400">Balance due: </span><span className="text-[#E24B4A] font-medium">{fmtTHB(inv.invoice_amount_incl_vat - (inv.received_amount ?? 0))}</span></span>
                         </div>
                         <div className="mt-1.5">
                           <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />

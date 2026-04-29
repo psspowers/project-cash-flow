@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Calendar, Lock, X } from 'lucide-react';
+import { Calendar, X } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import { fmtTHB } from '../../../types';
@@ -11,10 +11,8 @@ import { CAT_LABELS } from '../projectDetailConstants';
 export default function CashflowTab() {
   const {
     project, clientMilestones, clientInvoices, orders, poMilestones,
-    orphanVendorInvoices, canReschedule, isFinancialsLocked, reload,
+    orphanVendorInvoices, canReschedule, reload,
   } = useProjectDetail();
-
-  const canEdit = canReschedule && !isFinancialsLocked;
 
   const [rescheduleModal, setRescheduleModal] = useState<{
     open: boolean;
@@ -207,12 +205,6 @@ export default function CashflowTab() {
 
   return (
     <div className="space-y-5">
-      {isFinancialsLocked && (
-        <div className="rounded-xl border border-[#E24B4A]/30 bg-[#E24B4A]/5 px-4 py-3 flex items-center gap-2">
-          <Lock size={13} className="text-[#E24B4A] shrink-0" />
-          <p className="text-xs font-medium text-[#E24B4A]">Financials are locked — this project is read-only. Rescheduling is disabled.</p>
-        </div>
-      )}
       {/* Reschedule modal */}
       {rescheduleModal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -251,13 +243,13 @@ export default function CashflowTab() {
             <h2 className="text-sm font-semibold text-[#0f1923]">Cash In — Client Revenue Plan</h2>
             <p className="text-xs text-gray-400 mt-0.5">Client milestone invoicing schedule</p>
           </div>
-          {canEdit && <span className="text-xs text-[#1D9E75] bg-[#1D9E75]/8 px-2.5 py-1 rounded-full font-medium">Edit enabled</span>}
+          {canReschedule && <span className="text-xs text-[#1D9E75] bg-[#1D9E75]/8 px-2.5 py-1 rounded-full font-medium">Edit enabled</span>}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-                {['#', 'Description', '%', 'Planned Date', 'Invoice No.', 'Amount', 'Received', 'Status', ...(canEdit ? [''] : [])].map(h => (
+                {['#', 'Description', '%', 'Planned Date', 'Invoice No.', 'Amount', 'Received', 'Status', ...(canReschedule ? [''] : [])].map(h => (
                   <th key={h} className="px-4 py-2.5 text-left font-medium text-gray-500 whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -287,7 +279,7 @@ export default function CashflowTab() {
                     <td className="px-4 py-2.5">
                       <Badge label={ms.status} variant={ms.status === 'received' ? 'green' : ms.status === 'invoiced' ? 'amber' : 'gray'} />
                     </td>
-                    {canEdit && (
+                    {canReschedule && (
                       <td className="px-4 py-2.5">
                         <button
                           onClick={() => openReschedule('client_milestone', ms.id, ms.planned_receive_date, `MS${ms.milestone_number} — ${ms.milestone_description ?? ''}`)}
@@ -309,7 +301,7 @@ export default function CashflowTab() {
                 <td colSpan={5} className="px-4 py-2.5 text-xs font-semibold text-gray-600">Totals</td>
                 <td className="px-4 py-2.5 font-bold text-[#0f1923] whitespace-nowrap">{fmtTHB(contract)}</td>
                 <td className="px-4 py-2.5 font-semibold text-[#1D9E75] whitespace-nowrap">{fmtTHB(totalCIReceived)}</td>
-                <td colSpan={canEdit ? 2 : 1} />
+                <td colSpan={canReschedule ? 2 : 1} />
               </tr>
               {[
                 { label: 'Already received', value: totalCIReceived, color: 'text-[#1D9E75]' },
@@ -320,7 +312,7 @@ export default function CashflowTab() {
                   <td colSpan={4} className="px-4 pb-3" />
                   <td className="px-4 pb-3 text-xs text-gray-400">{label}</td>
                   <td className={`px-4 pb-3 font-medium ${color} text-xs whitespace-nowrap`}>{fmtTHB(value)}</td>
-                  <td colSpan={canEdit ? 3 : 2} />
+                  <td colSpan={canReschedule ? 3 : 2} />
                 </tr>
               ))}
             </tfoot>
@@ -335,13 +327,13 @@ export default function CashflowTab() {
             <h2 className="text-sm font-semibold text-[#0f1923]">Cash Out — Supplier Payment Schedule</h2>
             <p className="text-xs text-gray-400 mt-0.5">Planned payments to vendors and subcontractors</p>
           </div>
-          {canEdit && <span className="text-xs text-[#1D9E75] bg-[#1D9E75]/8 px-2.5 py-1 rounded-full font-medium">Edit enabled</span>}
+          {canReschedule && <span className="text-xs text-[#1D9E75] bg-[#1D9E75]/8 px-2.5 py-1 rounded-full font-medium">Edit enabled</span>}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-                {['PO No.', 'Supplier', 'Category', 'Line', 'Planned Date', 'Amount', 'Paid', 'Balance', 'Status', ...(canEdit ? [''] : [])].map(h => (
+                {['PO No.', 'Supplier', 'Category', 'Line', 'Planned Date', 'Amount', 'Paid', 'Balance', 'Status', ...(canReschedule ? [''] : [])].map(h => (
                   <th key={h} className="px-4 py-2.5 text-left font-medium text-gray-500 whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -366,7 +358,7 @@ export default function CashflowTab() {
                   <td className="px-4 py-2.5">
                     <Badge label={row.status.replace(/_/g, ' ')} variant={statusBadgeVariant(row.status)} />
                   </td>
-                  {canEdit && (
+                  {canReschedule && (
                     <td className="px-4 py-2.5">
                       {row.rowType !== 'uninvoiced_milestone' && (
                         <button
@@ -393,7 +385,7 @@ export default function CashflowTab() {
                 <td className="px-4 py-2.5" />
                 <td className="px-4 py-2.5 font-semibold text-[#1D9E75] whitespace-nowrap">{fmtTHB(totalCOPaid)}</td>
                 <td className="px-4 py-2.5 font-bold text-[#E24B4A] whitespace-nowrap">{fmtTHB(totalCOBalance)}</td>
-                <td colSpan={canEdit ? 2 : 1} />
+                <td colSpan={canReschedule ? 2 : 1} />
               </tr>
             </tfoot>
           </table>

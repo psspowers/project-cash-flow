@@ -16,7 +16,6 @@ export default function CostingTab() {
   const {
     project, estimation, budget, vos,
     isCostController, isCM, isEVP, isCEO,
-    isFinancialsLocked,
     profileName, voTotalCost, reload,
   } = useProjectDetail();
 
@@ -316,16 +315,8 @@ export default function CostingTab() {
 
   const hasEither = !!(estimation || budget);
 
-  const canEdit = isCostController && !isFinancialsLocked;
-
   return (
     <div className="space-y-5">
-      {isFinancialsLocked && (
-        <div className="rounded-xl border border-[#E24B4A]/30 bg-[#E24B4A]/5 px-4 py-3 flex items-center gap-2">
-          <Lock size={13} className="text-[#E24B4A] shrink-0" />
-          <p className="text-xs font-medium text-[#E24B4A]">Financials are locked — this project is read-only. No edits can be made to costings or variation orders.</p>
-        </div>
-      )}
       {showRejectionBanner && (
         <div className="rounded-xl border border-[#E24B4A]/30 bg-[#E24B4A]/5 p-4">
           <p className="text-xs font-semibold text-[#E24B4A] mb-1">Rejected at {project.last_rejected_stage}</p>
@@ -361,7 +352,7 @@ export default function CostingTab() {
         {!hasEither ? (
           <div className="p-8 flex flex-col items-center justify-center gap-3">
             <span className="text-gray-400 text-sm">No estimation yet</span>
-            {canEdit && status === 'estimation_draft' && (
+            {isCostController && status === 'estimation_draft' && (
               <button
                 onClick={() => setShowNewCostingForm(true)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-[#378ADD] text-white text-xs rounded-lg hover:bg-[#2a6fb5] transition-colors"
@@ -517,7 +508,7 @@ export default function CostingTab() {
 
             {/* Action buttons */}
             <div className="px-5 py-4 border-t border-[rgba(0,0,0,0.06)] flex flex-wrap gap-2">
-              {canEdit && status === 'estimation_draft' && estimation?.status === 'draft' && (
+              {isCostController && status === 'estimation_draft' && estimation?.status === 'draft' && (
                 <button onClick={submitEstimation} disabled={actionLoading} className="px-4 py-2 bg-[#EF9F27] text-white text-xs rounded-lg hover:bg-[#d4891f] transition-colors disabled:opacity-60">
                   Submit Estimation for CM Review
                 </button>
@@ -534,13 +525,13 @@ export default function CostingTab() {
                   <button onClick={approveEVPEstimation} disabled={actionLoading} className="px-3 py-2 bg-[#1D9E75] text-white text-xs rounded-lg hover:bg-[#178a64] transition-colors disabled:opacity-60">Final Approve Estimation</button>
                 </>
               )}
-              {canEdit && status === 'budget_draft' && budget?.status === 'draft' && !editingBudget && (
+              {isCostController && status === 'budget_draft' && budget?.status === 'draft' && !editingBudget && (
                 <>
                   <button onClick={openBudgetEdit} className="px-4 py-2 border border-[#378ADD] text-[#378ADD] text-xs rounded-lg hover:bg-[#378ADD]/5 transition-colors">Edit Budget</button>
                   <button onClick={submitBudget} disabled={actionLoading} className="px-4 py-2 bg-[#EF9F27] text-white text-xs rounded-lg hover:bg-[#d4891f] transition-colors disabled:opacity-60">Submit Budget for Review</button>
                 </>
               )}
-              {editingBudget && canEdit && budget?.status === 'draft' && (
+              {editingBudget && isCostController && budget?.status === 'draft' && (
                 <>
                   <button onClick={() => setEditingBudget(false)} className="px-4 py-2 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
                   <button onClick={saveBudgetEdit} disabled={actionLoading} className="px-4 py-2 bg-[#1D9E75] text-white text-xs rounded-lg hover:bg-[#178a64] transition-colors disabled:opacity-60">{actionLoading ? 'Saving...' : 'Save Changes'}</button>
@@ -571,7 +562,7 @@ export default function CostingTab() {
         <div className="bg-white border border-[rgba(0,0,0,0.08)] rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-[rgba(0,0,0,0.06)] flex items-center justify-between">
             <h2 className="text-sm font-semibold text-[#0f1923]">Variation Orders</h2>
-            {canEdit && status === 'active' && (
+            {isCostController && status === 'active' && (
               <button
                 onClick={() => setShowNewVO(true)}
                 className="flex items-center gap-1 px-3 py-1.5 bg-[#1D9E75] text-white text-xs rounded-lg hover:bg-[#178a64] transition-colors"
