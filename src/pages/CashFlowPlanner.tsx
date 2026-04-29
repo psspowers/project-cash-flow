@@ -134,6 +134,7 @@ interface ChartBar {
   month: string; // MMM-yy label
   key: string;   // yyyy-MM
   cashIn: number;
+  outflowPaid: number;
   outflowBalance: number;
   outflowUninvoiced: number;
   cumNet: number;
@@ -754,16 +755,18 @@ export default function CashFlowPlanner() {
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
     return keys.map(key => {
       let cashIn = 0;
+      let outflowPaid = 0;
       let outflowBalance = 0;
       let outflowUninvoiced = 0;
 
       if (mode === 'historical') {
         cashIn = (historicalInByMonth.get(key) ?? 0) / 1_000_000;
-        // Historical has no split — show all paid as outflowBalance
-        outflowBalance = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+        outflowPaid = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+        outflowBalance = 0;
         outflowUninvoiced = 0;
       } else if (mode === 'forecast') {
         cashIn = (forecastInByMonth.get(key) ?? 0) / 1_000_000;
+        outflowPaid = (forecastPartialPaidByMonth.get(key) ?? 0) / 1_000_000;
         outflowBalance = (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000;
         outflowUninvoiced = (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       } else {
@@ -772,19 +775,23 @@ export default function CashFlowPlanner() {
         cashIn = isForecastMonth
           ? (forecastInByMonth.get(key) ?? 0) / 1_000_000
           : (historicalInByMonth.get(key) ?? 0) / 1_000_000;
+        outflowPaid = isForecastMonth
+          ? (forecastPartialPaidByMonth.get(key) ?? 0) / 1_000_000
+          : (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
         outflowBalance = isForecastMonth
           ? (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000
-          : (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
+          : 0;
         outflowUninvoiced = isForecastMonth
           ? (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000
           : 0;
       }
 
-      cumNet += cashIn - outflowBalance - outflowUninvoiced;
+      cumNet += cashIn - outflowPaid - outflowBalance - outflowUninvoiced;
       return {
         month: format(new Date(key + '-15'), 'MMM-yy'),
         key,
         cashIn: +cashIn.toFixed(2),
+        outflowPaid: +outflowPaid.toFixed(2),
         outflowBalance: +outflowBalance.toFixed(2),
         outflowUninvoiced: +outflowUninvoiced.toFixed(2),
         cumNet: +cumNet.toFixed(2),
@@ -1146,7 +1153,11 @@ export default function CashFlowPlanner() {
               Cash In
             </span>
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <span className="inline-block w-3 h-3 rounded-sm bg-[#E24B4A]" />
+              <span className="inline-block w-3 h-3 rounded-sm bg-[#64748B]" />
+              Paid
+            </span>
+            <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+              <span className="inline-block w-3 h-3 rounded-sm bg-[#C0392B]" />
               Invoice Balance (Col O)
             </span>
             {chartMode !== 'historical' && (
@@ -1204,22 +1215,13 @@ export default function CashFlowPlanner() {
                   formatter={((value: number, name: string): [string, string] => [
                     `฿${value.toFixed(2)}M`,
                     name === 'cashIn' ? 'Cash In'
+                    : name === 'outflowPaid' ? 'Paid'
                     : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
                     : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
                     : 'Cumulative Net',
                   ]) as RechartsTooltipFormatter}
                   contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
                   cursor={{ fill: 'rgba(0,0,0,0.03)' }}
-                />
-                <Legend
-                  formatter={(value: string) =>
-                    value === 'cashIn' ? 'Cash In'
-                    : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                    : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                    : 'Cumulative Net'
-                  }
-                  iconType="square"
-                  wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
                 />
                 {/* Today reference line — only visible in combined mode */}
                 {chartMode === 'combined' && (
@@ -1233,6 +1235,7 @@ export default function CashFlowPlanner() {
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
                 <Bar yAxisId="bars" dataKey="cashIn" fill="#1D9E75" radius={[3, 3, 0, 0]} opacity={0.9} name="cashIn" />
+                <Bar yAxisId="bars" dataKey="outflowPaid" stackId="outflow" fill="#64748B" radius={[0, 0, 0, 0]} opacity={0.85} name="outflowPaid" />
                 <Bar yAxisId="bars" dataKey="outflowBalance" stackId="outflow" fill="#C0392B" radius={[0, 0, 0, 0]} opacity={0.95} name="outflowBalance" />
                 <Bar yAxisId="bars" dataKey="outflowUninvoiced" stackId="outflow" fill="#E24B4A" radius={[3, 3, 0, 0]} opacity={0.5} name="outflowUninvoiced" />
                 <Line
