@@ -11,7 +11,9 @@ export interface ProjectDetailContextValue extends ProjectData {
   isCM: boolean;
   isEVP: boolean;
   isCEO: boolean;
+  isPO: boolean;
   canReschedule: boolean;
+  isFinancialsLocked: boolean;
   totalReceived: number;
   totalPaid: number;
   profileName: (uid?: string | null) => string;

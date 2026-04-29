@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Lock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COSTING_CATEGORY_KEYS, PROJECT_STATUS_LABELS } from '../types';
 import Badge, { statusVariant } from '../components/ui/Badge';
@@ -39,6 +39,9 @@ export default function ProjectDetail() {
   const data = useProjectData(id);
   const { project, costings, vos, orders, orphanVendorInvoices, clientInvoices, profiles, loading } = data;
 
+  const [showLockConfirm, setShowLockConfirm] = useState(false);
+  const [lockSaving, setLockSaving] = useState(false);
+
   // Track project view for personalised sorting
   useEffect(() => {
     if (!id || !user?.id) return;
@@ -53,6 +56,18 @@ export default function ProjectDetail() {
   const isCM = profile?.role === 'construction_manager';
   const isEVP = profile?.role === 'evp';
   const isCEO = profile?.role === 'ceo';
+  const isPO = isCEO || isEVP;
+
+  const isFinancialsLocked = project?.is_financials_locked ?? false;
+
+  async function handleLockFinancials() {
+    if (!project) return;
+    setLockSaving(true);
+    await supabase.from('projects').update({ is_financials_locked: true }).eq('id', project.id);
+    setShowLockConfirm(false);
+    setLockSaving(false);
+    await data.reload();
+  }
 
   const totalReceived = clientInvoices.reduce((s, i) => s + (i.received_amount ?? 0), 0);
   const totalPaid = useMemo(
@@ -80,7 +95,9 @@ export default function ProjectDetail() {
     isCM,
     isEVP,
     isCEO,
+    isPO,
     canReschedule,
+    isFinancialsLocked,
     totalReceived,
     totalPaid,
     profileName,
@@ -115,11 +132,29 @@ export default function ProjectDetail() {
           </button>
 
           <div className="mb-5">
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-xl font-bold text-[#0f1923]">{project.name}</h1>
-              <Badge label={PROJECT_STATUS_LABELS[project.status]} variant={statusVariant(project.status)} />
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-3 mb-1 flex-wrap">
+                  <h1 className="text-xl font-bold text-[#0f1923]">{project.name}</h1>
+                  {isFinancialsLocked && (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-[#E24B4A] bg-[#E24B4A]/8 border border-[#E24B4A]/20 rounded-full px-2.5 py-0.5">
+                      <Lock size={11} /> Financials Locked
+                    </span>
+                  )}
+                  <Badge label={PROJECT_STATUS_LABELS[project.status]} variant={statusVariant(project.status)} />
+                </div>
+                <p className="text-sm text-gray-500">{(project.client as { name?: string } | undefined)?.name ?? '—'}</p>
+              </div>
+
+              {isPO && !isFinancialsLocked && (
+                <button
+                  onClick={() => setShowLockConfirm(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-[#E24B4A]/40 text-[#E24B4A] text-xs font-medium rounded-lg hover:bg-[#E24B4A]/5 transition-colors shrink-0 mt-0.5"
+                >
+                  <Lock size={12} /> Lock Financials
+                </button>
+              )}
             </div>
-            <p className="text-sm text-gray-500">{(project.client as { name?: string } | undefined)?.name ?? '—'}</p>
           </div>
 
           <div className="flex border-b border-[rgba(0,0,0,0.08)] mb-6">
@@ -146,6 +181,46 @@ export default function ProjectDetail() {
           {tab === 'timeline' && <TimelineTab />}
         </div>
       </div>
+
+      {/* Lock Financials confirmation modal */}
+      {showLockConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-2xl">
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-[#E24B4A]/10 flex items-center justify-center shrink-0">
+                <Lock size={16} className="text-[#E24B4A]" />
+              </div>
+              <h2 className="text-base font-bold text-gray-900">Lock Financials?</h2>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              <p className="text-sm text-gray-700 leading-relaxed">
+                Are you sure? <span className="font-semibold">Locking financials will permanently disable editing</span> for all Budgets, POs, and Invoices on this project.
+              </p>
+              <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-4 py-3 space-y-1">
+                <p className="text-xs font-semibold text-[#E24B4A]">This action cannot be undone.</p>
+                <p className="text-xs text-[#c73d3c]">The data will be permanently read-only. The Cost Controller will no longer be able to make inline edits to any financial records on this project.</p>
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowLockConfirm(false)}
+                disabled={lockSaving}
+                className="flex-1 border border-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLockFinancials}
+                disabled={lockSaving}
+                className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#c73d3c] disabled:opacity-60 transition-colors"
+              >
+                <Lock size={14} />
+                {lockSaving ? 'Locking...' : 'Yes, Lock Financials'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </ProjectDetailContext.Provider>
   );
 }
