@@ -628,13 +628,13 @@ export default function CashFlowPlanner() {
 
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  // 15th of prior month — same anchor used in all pivot tables
-  const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 15);
-  const prevMonthKey = format(prevMonthDate, 'yyyy-MM');
+  // Overdue sweep anchor: 15th of CURRENT month
+  const sweepDate = new Date(today.getFullYear(), today.getMonth(), 15);
+  const sweepKey = format(sweepDate, 'yyyy-MM');
 
   function rollForward(dateStr: string | null): string {
     const d = dateStr ? new Date(dateStr) : today;
-    const effective = d < currentMonthStart ? prevMonthDate : d;
+    const effective = d < currentMonthStart ? sweepDate : d;
     return format(effective, 'yyyy-MM');
   }
 
@@ -747,8 +747,8 @@ export default function CashFlowPlanner() {
     const keys = mode === 'historical'
       ? sortedKeys.filter(k => hasHistorical(k))
       : mode === 'forecast'
-      ? [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
-      : [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
+      ? [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
+      : [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
     // Forecast seeds from historical net; combined naturally accumulates from first historical month
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
@@ -1161,7 +1161,7 @@ export default function CashFlowPlanner() {
             </span>
             {chartMode !== 'historical' && (
               <span className="ml-auto text-[11px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full">
-                Overdue items swept into {format(prevMonthDate, 'MMM-yy')}
+                Overdue items swept into {format(sweepDate, 'MMM-yy')}
               </span>
             )}
           </div>
