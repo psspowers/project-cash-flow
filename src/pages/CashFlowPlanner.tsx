@@ -126,6 +126,7 @@ interface ChartUninvoicedMs {
 }
 
 interface ChartClientMs {
+  id: string;
   payment_plan_amount: number;
   planned_receive_date: string | null;
 }
@@ -565,15 +566,14 @@ export default function CashFlowPlanner() {
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat'),
-      // Cash In: client milestones (forecast inflow)
+      // Cash In: client milestones (forecast inflow base)
       supabase
         .from('client_milestones')
-        .select('payment_plan_amount, planned_receive_date')
-        .neq('status', 'received'),
-      // Cash In: client invoice receipts (historical inflow)
+        .select('id, payment_plan_amount, planned_receive_date'),
+      // Cash In: client invoice receipts (historical inflow & deduction source)
       supabase
         .from('client_invoices')
-        .select('received_amount, receipt_date')
+        .select('client_milestone_id, received_amount, receipt_date, invoice_date')
         .gt('received_amount', 0),
     ]);
 
@@ -619,8 +619,40 @@ export default function CashFlowPlanner() {
         .filter(m => Number(m.amount_due) > 0)
     );
 
-    setClientMs((clientMsRes.data ?? []) as ChartClientMs[]);
-    setClientReceipts((clientReceiptsRes.data ?? []) as { received_amount: number; receipt_date: string | null }[]);
+    const rawClientMs = (clientMsRes.data ?? []);
+    const rawClientReceipts = (clientReceiptsRes.data ?? []);
+
+    // 1. Plot Historical Receipts (using receipt_date falling back to invoice_date)
+    setClientReceipts(
+      rawClientReceipts.map((r: any) => ({
+        received_amount: r.received_amount,
+        receipt_date: r.receipt_date || r.invoice_date,
+      }))
+    );
+
+    // 2. Map total received cash by Milestone ID
+    const receivedByMilestone = new Map<string, number>();
+    for (const r of rawClientReceipts) {
+      if (r.client_milestone_id) {
+        const current = receivedByMilestone.get(r.client_milestone_id) || 0;
+        receivedByMilestone.set(r.client_milestone_id, current + Number(r.received_amount));
+      }
+    }
+
+    // 3. Deduct received cash from milestones to find the TRUE remaining forecast
+    const trueForecastMs: ChartClientMs[] = rawClientMs
+      .map((m: any) => {
+        const alreadyReceived = receivedByMilestone.get(m.id) || 0;
+        const remaining = Number(m.payment_plan_amount) - alreadyReceived;
+        return {
+          id: m.id,
+          payment_plan_amount: remaining,
+          planned_receive_date: m.planned_receive_date,
+        };
+      })
+      .filter((m: ChartClientMs) => m.payment_plan_amount > 0);
+
+    setClientMs(trueForecastMs);
     setChartLoading(false);
   }
 
