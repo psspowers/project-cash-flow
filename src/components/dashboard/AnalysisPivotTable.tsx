@@ -123,6 +123,20 @@ export function DrillDownModal({ rows, cellLabel, onClose, onRefresh, isLocked }
     }
 
     await Promise.all(updates);
+
+    // Recalculate PO pending_remaining_amount if a vendor invoice amount changed
+    if (r.vendorInvoiceId && !isNaN(newAmount) && newAmount !== r.amount) {
+      const { data: invData } = await supabase.from('vendor_invoices').select('po_id').eq('id', r.vendorInvoiceId).single();
+      if (invData?.po_id) {
+        const { data: allInvs } = await supabase.from('vendor_invoices').select('invoice_amount_incl_vat').eq('po_id', invData.po_id);
+        const sum = (allInvs || []).reduce((acc: number, inv: { invoice_amount_incl_vat: number }) => acc + (inv.invoice_amount_incl_vat ?? 0), 0);
+        const { data: poData } = await supabase.from('purchase_orders').select('po_amount_incl_vat').eq('id', invData.po_id).single();
+        if (poData) {
+          await supabase.from('purchase_orders').update({ pending_remaining_amount: poData.po_amount_incl_vat - sum }).eq('id', invData.po_id);
+        }
+      }
+    }
+
     setSaving(false);
 
     // Optimistically update local row
