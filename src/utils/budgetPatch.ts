@@ -13,12 +13,14 @@ const TARGET_BUDGETS: Record<string, number> = {
 
 export async function executeBudgetPatch() {
   const { data: projects } = await supabase.from('projects').select('*');
-  if (!projects) return;
+  if (!projects) return alert('No projects found.');
+
+  let successCount = 0;
 
   for (const proj of projects) {
     let target = 0;
     if (proj.name.includes('LPF2')) target = TARGET_BUDGETS['LPF2'];
-    else if (proj.name.includes('LPF')) target = TARGET_BUDGETS['LPF']; // Must be checked after LPF2
+    else if (proj.name.includes('LPF')) target = TARGET_BUDGETS['LPF'];
     else if (proj.name.includes('RCP')) target = TARGET_BUDGETS['RCP'];
     else if (proj.name.includes('KKU')) target = TARGET_BUDGETS['KKU'];
     else if (proj.name.includes('Walailak')) target = TARGET_BUDGETS['Walailak'];
@@ -28,7 +30,6 @@ export async function executeBudgetPatch() {
 
     if (!target) continue;
 
-    // Get the latest costing to use as baseline for the pro-rata math
     const { data: costings } = await supabase.from('project_costings')
       .select('*')
       .eq('project_id', proj.id)
@@ -38,7 +39,7 @@ export async function executeBudgetPatch() {
     if (!costings || costings.length === 0) continue;
     const baseline = costings[0];
 
-    const oldTotal = baseline.total_cost_excl_vat || 1; // avoid division by zero
+    const oldTotal = baseline.total_cost_excl_vat || 1;
     const factor = target / oldTotal;
 
     const patch = {
@@ -61,19 +62,21 @@ export async function executeBudgetPatch() {
       gross_margin_amount: baseline.sales_price_excl_vat - target,
       gross_margin_pct: (baseline.sales_price_excl_vat - target) / baseline.sales_price_excl_vat,
       evp_approved_at: new Date().toISOString(),
-      evp_approved_by: 'System Admin (Data Migration)',
+      evp_approved_by: 'System Admin',
     };
 
-    // Check if 'budget' row already exists
     const { data: existingBudget } = await supabase.from('project_costings')
-      .select('id').eq('project_id', proj.id).eq('stage', 'budget').single();
+      .select('id').eq('project_id', proj.id).eq('stage', 'budget').maybeSingle();
 
     if (existingBudget) {
-      await supabase.from('project_costings').update(patch).eq('id', existingBudget.id);
+      const { error } = await supabase.from('project_costings').update(patch).eq('id', existingBudget.id);
+      if (error) { alert(`Failed to update ${proj.name}: ${error.message}`); return; }
     } else {
-      await supabase.from('project_costings').insert([patch]);
+      const { error } = await supabase.from('project_costings').insert([patch]);
+      if (error) { alert(`Failed to insert ${proj.name}: ${error.message}`); return; }
     }
+    successCount++;
   }
 
-  alert('DATABASE PATCH COMPLETE: Budgets successfully scaled and EVP-Approved.');
+  alert(`DATABASE PATCH COMPLETE: ${successCount} budgets successfully scaled and EVP-Approved.`);
 }
