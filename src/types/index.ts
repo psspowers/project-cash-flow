@@ -53,6 +53,7 @@ export interface Project {
   last_rejected_by?: string;
   last_rejected_at?: string;
   last_rejected_stage?: string;
+  is_financials_locked: boolean;
 }
 
 export type CostingStatus = 'draft' | 'submitted' | 'cm_approved' | 'cm_rejected' | 'evp_approved' | 'evp_rejected';

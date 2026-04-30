@@ -63,6 +63,7 @@ interface DrillDownModalProps {
   cellLabel: string;
   onClose: () => void;
   onRefresh?: () => void;
+  isLocked?: boolean;
 }
 
 interface EditState {
@@ -71,7 +72,7 @@ interface EditState {
   amount: string;
 }
 
-export function DrillDownModal({ rows, cellLabel, onClose, onRefresh }: DrillDownModalProps) {
+export function DrillDownModal({ rows, cellLabel, onClose, onRefresh, isLocked }: DrillDownModalProps) {
   const [localRows, setLocalRows] = useState<PivotDrillRow[]>(rows);
   const [editing, setEditing] = useState<EditState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -107,6 +108,17 @@ export function DrillDownModal({ rows, cellLabel, onClose, onRefresh }: DrillDow
     if (r.milestoneId && !isNaN(newAmount) && newAmount !== r.amount) {
       updates.push(
         supabase.from('po_milestones').update({ amount_due: newAmount }).eq('id', r.milestoneId)
+      );
+    }
+
+    if (r.vendorInvoiceId && editing.paymentDate) {
+      updates.push(
+        supabase.from('vendor_invoices').update({ planned_payment_date: editing.paymentDate }).eq('id', r.vendorInvoiceId)
+      );
+    }
+    if (r.vendorInvoiceId && !isNaN(newAmount) && newAmount !== r.amount) {
+      updates.push(
+        supabase.from('vendor_invoices').update({ invoice_amount_incl_vat: newAmount }).eq('id', r.vendorInvoiceId)
       );
     }
 
@@ -203,7 +215,7 @@ export function DrillDownModal({ rows, cellLabel, onClose, onRefresh }: DrillDow
                             <XCircle size={14} />
                           </button>
                         </div>
-                      ) : (r.milestoneId || r.vendorInvoiceId) ? (
+                      ) : (!isLocked && (r.milestoneId || r.vendorInvoiceId)) ? (
                         <button onClick={() => startEdit(i)} className="p-1 rounded text-gray-300 hover:text-[#378ADD] hover:bg-blue-50 transition-colors">
                           <Pencil size={13} />
                         </button>
@@ -238,9 +250,10 @@ interface PivotTableProps {
   data: PivotDataRow[];
   loading: boolean;
   emptyMessage?: string;
+  isLocked?: boolean;
 }
 
-export function PivotTable({ data, loading, emptyMessage = 'No data found' }: PivotTableProps) {
+export function PivotTable({ data, loading, emptyMessage = 'No data found', isLocked }: PivotTableProps) {
   const [drill, setDrill] = useState<{ rows: PivotDrillRow[]; label: string } | null>(null);
 
   // Build pivot structure
@@ -409,6 +422,7 @@ export function PivotTable({ data, loading, emptyMessage = 'No data found' }: Pi
           rows={drill.rows}
           cellLabel={drill.label}
           onClose={() => setDrill(null)}
+          isLocked={isLocked}
         />
       )}
     </>
