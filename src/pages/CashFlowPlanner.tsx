@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   DndContext,
   DragEndEvent,
@@ -184,7 +184,7 @@ function buildMilestonePool(
     });
     for (const m of sorted) {
       const k = Number(m.amount_due).toFixed(2);
-      if (!poPool.has(k)) poPool.set(k, []);
+      if (!poPool.has(k)) poPool.set(k,[]);
       poPool.get(k)!.push({ planned_payment_date: m.planned_payment_date });
     }
   }
@@ -462,14 +462,14 @@ export default function CashFlowPlanner() {
 
   // ── Kanban state (unchanged) ─────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([]);
-  const [milestones, setMilestones] = useState<ClientMilestoneRow[]>([]);
+  const[milestones, setMilestones] = useState<ClientMilestoneRow[]>([]);
   const [invoices, setInvoices] = useState<(VendorInvoice & { vendor?: { name: string }; project?: Project })[]>([]);
   const [totalReceipts, setTotalReceipts] = useState(0);
-  const [totalVouchersPaid, setTotalVouchersPaid] = useState(0);
+  const[totalVouchersPaid, setTotalVouchersPaid] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
-  const [activeCard, setActiveCard] = useState<DraggableCard | null>(null);
-  const [overWeekIndex, setOverWeekIndex] = useState<number | null>(null);
+  const[activeCard, setActiveCard] = useState<DraggableCard | null>(null);
+  const[overWeekIndex, setOverWeekIndex] = useState<number | null>(null);
   const [warningModal, setWarningModal] = useState<WarningModal>({
     open: false,
     weekLabel: '',
@@ -482,13 +482,13 @@ export default function CashFlowPlanner() {
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Chart state ──────────────────────────────────────────────────────────
-  const [chartMode, setChartMode] = useState<ChartMode>('forecast');
-  const [chartLoading, setChartLoading] = useState(true);
+  const[chartMode, setChartMode] = useState<ChartMode>('forecast');
+  const[chartLoading, setChartLoading] = useState(true);
   const [paidInvoices, setPaidInvoices] = useState<ChartPaidInvoice[]>([]);
   const [receivedInvoices, setReceivedInvoices] = useState<ChartReceivedInvoice[]>([]);
   const [uninvoicedMs, setUninvoicedMs] = useState<ChartUninvoicedMs[]>([]);
   const [clientMs, setClientMs] = useState<ChartClientMs[]>([]);
-  const [clientReceipts, setClientReceipts] = useState<{ received_amount: number; receipt_date: string | null }[]>([]);
+  const[clientReceipts, setClientReceipts] = useState<{ received_amount: number; receipt_date: string | null; invoice_date: string | null }[]>([]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -501,13 +501,13 @@ export default function CashFlowPlanner() {
   useEffect(() => {
     loadData();
     loadChartData();
-  }, []);
+  },[]);
 
   // ── Kanban data load (unchanged) ─────────────────────────────────────────
 
   async function loadData() {
     setLoading(true);
-    const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes] = await Promise.all([
+    const[projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes] = await Promise.all([
       supabase.from('projects').select('*').order('name'),
       supabase
         .from('client_milestones')
@@ -516,7 +516,7 @@ export default function CashFlowPlanner() {
       supabase
         .from('vendor_invoices')
         .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(*)')
-        .in('status', ['released', 'approved_evp']),
+        .in('status',['released', 'approved_evp']),
       supabase
         .from('client_invoices')
         .select('received_amount')
@@ -527,42 +527,40 @@ export default function CashFlowPlanner() {
         .eq('status', 'issued'),
     ]);
 
-    setProjects(projectsRes.data ?? []);
+    setProjects(projectsRes.data ??[]);
     setMilestones((milestonesRes.data ?? []) as ClientMilestoneRow[]);
-    setInvoices(invoicesRes.data ?? []);
+    setInvoices(invoicesRes.data ??[]);
     setTotalReceipts(
-      (receiptsRes.data ?? []).reduce((s: number, r: { received_amount: number }) => s + (r.received_amount ?? 0), 0)
+      (receiptsRes.data ??[]).reduce((s: number, r: { received_amount: number }) => s + (r.received_amount ?? 0), 0)
     );
     setTotalVouchersPaid(
-      (vouchersRes.data ?? []).reduce((s: number, v: { net_paid: number }) => s + (v.net_paid ?? 0), 0)
+      (vouchersRes.data ??[]).reduce((s: number, v: { net_paid: number }) => s + (v.net_paid ?? 0), 0)
     );
     setLoading(false);
   }
 
   // ── Chart data load ───────────────────────────────────────────────────────
-  // Mirrors the exact same query shape used by MonthlyAnalysis / MonthlyAnalysisBalance
-  // / MonthlyAnalysisUninvoiced pivot tables.
 
   async function loadChartData() {
     setChartLoading(true);
 
-    const [paidRes, receivedRes, allMsRes, allInvRes, clientMsRes, clientReceiptsRes] = await Promise.all([
-      // Historical: paid invoices with their PO milestone relations for 1:1 matching
+    const[paidRes, receivedRes, allMsRes, allInvRes, clientMsRes, clientReceiptsRes] = await Promise.all([
+      // Historical Out: paid invoices
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_date, invoice_amount_incl_vat, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
         .eq('status', 'paid'),
-      // Forecast Balance: received-but-unpaid invoices with milestone relations
+      // Forecast Balance: received invoices
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
-        .eq('status', 'received'),
-      // For uninvoiced matching: all milestones
+        .in('status', ['received', 'pending']),
+      // Uninvoiced base: all milestones
       supabase
         .from('po_milestones')
         .select('purchase_order_id, amount_due, planned_payment_date')
         .order('planned_payment_date', { ascending: true, nullsFirst: false }),
-      // For uninvoiced matching: all invoices (to consume milestones)
+      // Uninvoiced consumption: all invoices
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat'),
@@ -570,41 +568,39 @@ export default function CashFlowPlanner() {
       supabase
         .from('client_milestones')
         .select('payment_plan_amount, planned_receive_date')
-        .neq('status', 'received'),
-      // Cash In: client invoice receipts (historical inflow)
+        .in('status', ['pending', 'partially_received']),
+      // Cash In: client invoices (historical inflow) - FIXED to include invoice_date fallback
       supabase
         .from('client_invoices')
-        .select('received_amount, receipt_date')
+        .select('received_amount, receipt_date, invoice_date')
         .gt('received_amount', 0),
     ]);
 
-    // Normalize paid invoices
     setPaidInvoices(
-      (paidRes.data ?? []).map((vi: any) => ({
+      (paidRes.data ??[]).map((vi: any) => ({
         po_id: vi.po_id,
         invoice_date: vi.invoice_date,
         invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
-        milestones: vi.purchase_order?.milestones ?? [],
+        milestones: vi.purchase_order?.milestones ??[],
       }))
     );
 
-    // Normalize received invoices
     setReceivedInvoices(
-      (receivedRes.data ?? []).map((vi: any) => ({
+      (receivedRes.data ??[]).map((vi: any) => ({
         po_id: vi.po_id,
         invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
         received_amount: vi.received_amount ?? 0,
-        milestones: vi.purchase_order?.milestones ?? [],
+        milestones: vi.purchase_order?.milestones ??[],
       }))
     );
 
-    // Compute uninvoiced milestones via 1:1 subtraction (mirrors MonthlyAnalysisUninvoiced)
-    const allMs = (allMsRes.data ?? []) as { purchase_order_id: string; amount_due: number; planned_payment_date: string | null }[];
-    const allInvs = (allInvRes.data ?? []) as { po_id: string | null; invoice_amount_incl_vat: number }[];
+    // Compute uninvoiced milestones via 1:1 subtraction
+    const allMs = (allMsRes.data ??[]) as { purchase_order_id: string; amount_due: number; planned_payment_date: string | null }[];
+    const allInvs = (allInvRes.data ??[]) as { po_id: string | null; invoice_amount_incl_vat: number }[];
     const availByKey = new Map<string, number[]>();
     allMs.forEach((m, idx) => {
       const k = `${m.purchase_order_id}::${Number(m.amount_due).toFixed(2)}`;
-      if (!availByKey.has(k)) availByKey.set(k, []);
+      if (!availByKey.has(k)) availByKey.set(k,[]);
       availByKey.get(k)!.push(idx);
     });
     const consumed = new Set<number>();
@@ -621,7 +617,7 @@ export default function CashFlowPlanner() {
     );
 
     setClientMs((clientMsRes.data ?? []) as ChartClientMs[]);
-    setClientReceipts((clientReceiptsRes.data ?? []) as { received_amount: number; receipt_date: string | null }[]);
+    setClientReceipts((clientReceiptsRes.data ??[]) as { received_amount: number; receipt_date: string | null; invoice_date: string | null }[]);
     setChartLoading(false);
   }
 
@@ -629,7 +625,7 @@ export default function CashFlowPlanner() {
 
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  // 15th of the CURRENT month — overdue items sweep here so they appear immediately payable
+  // OVERDUE SWEEP: 15th of the CURRENT month 
   const sweepBucketDate = new Date(today.getFullYear(), today.getMonth(), 15);
   const sweepBucketKey = format(sweepBucketDate, 'yyyy-MM');
 
@@ -639,7 +635,7 @@ export default function CashFlowPlanner() {
     return format(effective, 'yyyy-MM');
   }
 
-  // Historical Cash Out: paid invoices, 1:1 matched to milestone planned_payment_date
+  // Historical Cash Out: paid invoices, 1:1 matched
   const historicalOutByMonth = (() => {
     const pool = buildMilestonePool(paidInvoices);
     const map = new Map<string, number>();
@@ -652,7 +648,6 @@ export default function CashFlowPlanner() {
           const cands = poPool.get(k);
           if (cands && cands.length > 0) {
             const matched = cands.shift()!;
-            // Cap future-dated milestones to invoice_date for historical paid rows
             const isFuture = matched.planned_payment_date && new Date(matched.planned_payment_date) > today;
             assignedDate = isFuture ? inv.invoice_date : (matched.planned_payment_date ?? inv.invoice_date);
           }
@@ -665,18 +660,19 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Historical Cash In: actual client invoice receipts
+  // Historical Cash In: actual client invoice receipts (FIXED fallback)
   const historicalInByMonth = (() => {
     const map = new Map<string, number>();
     for (const r of clientReceipts) {
-      if (!r.receipt_date) continue;
-      const mk = r.receipt_date.slice(0, 7);
+      const dateToUse = r.receipt_date || r.invoice_date;
+      if (!dateToUse) continue;
+      const mk = dateToUse.slice(0, 7);
       map.set(mk, (map.get(mk) ?? 0) + Number(r.received_amount));
     }
     return map;
   })();
 
-  // Forecast Cash Out Col O: invoice balances (received, not yet paid) with overdue sweep
+  // Forecast Cash Out Col O: invoice balances (received, not yet paid)
   const forecastBalanceByMonth = (() => {
     const map = new Map<string, number>();
     const pool = buildMilestonePool(receivedInvoices);
@@ -698,7 +694,7 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash Out Col P: uninvoiced milestones with overdue sweep
+  // Forecast Cash Out Col P: uninvoiced milestones
   const forecastUninvoicedByMonth = (() => {
     const map = new Map<string, number>();
     for (const m of uninvoicedMs) {
@@ -708,7 +704,7 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash In: client milestones (planned inflow) — apply same overdue sweep
+  // Forecast Cash In
   const forecastInByMonth = (() => {
     const map = new Map<string, number>();
     for (const m of clientMs) {
@@ -719,7 +715,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Build unified sorted month keys across all datasets
   const allKeys = new Set([
     ...historicalOutByMonth.keys(),
     ...historicalInByMonth.keys(),
@@ -729,8 +724,7 @@ export default function CashFlowPlanner() {
   ]);
   const sortedKeys = [...allKeys].sort();
 
-  // Opening balance = net of all historical settled cash (paid invoices vs actual receipts).
-  // Used to seed the Forecast cumulative line so it continues from where history ended.
+  // ── HISTORICAL OPENING BALANCE (Seeds the Blue Line) ───────────────────
   const historicalOpeningBalance = (() => {
     let totalIn = 0;
     let totalOut = 0;
@@ -751,8 +745,9 @@ export default function CashFlowPlanner() {
       ? [...new Set([sweepBucketKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
       : [...new Set([sweepBucketKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
-    // Forecast seeds from historical net; combined naturally accumulates from first historical month
+    // SEED: If forecast, start running total from the historical net cash
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
+
     return keys.map(key => {
       let cashIn = 0;
       let outflowPaid = 0;
@@ -762,21 +757,18 @@ export default function CashFlowPlanner() {
       if (mode === 'historical') {
         cashIn = (historicalInByMonth.get(key) ?? 0) / 1_000_000;
         outflowPaid = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
-        outflowBalance = 0;
-        outflowUninvoiced = 0;
       } else if (mode === 'forecast') {
         cashIn = (forecastInByMonth.get(key) ?? 0) / 1_000_000;
-        outflowPaid = (forecastPartialPaidByMonth.get(key) ?? 0) / 1_000_000;
+        outflowPaid = 0; // FIX: No paid cash in forecast
         outflowBalance = (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000;
         outflowUninvoiced = (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       } else {
-        // Combined: historical months get historical data, current+ get forecast
         const isForecastMonth = key >= format(today, 'yyyy-MM');
         cashIn = isForecastMonth
           ? (forecastInByMonth.get(key) ?? 0) / 1_000_000
           : (historicalInByMonth.get(key) ?? 0) / 1_000_000;
         outflowPaid = isForecastMonth
-          ? (forecastPartialPaidByMonth.get(key) ?? 0) / 1_000_000
+          ? 0 // FIX: No paid cash in forecast months
           : (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
         outflowBalance = isForecastMonth
           ? (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000
@@ -805,7 +797,7 @@ export default function CashFlowPlanner() {
   // ── Kanban derived values (unchanged) ────────────────────────────────────
 
   const buildCards = useCallback((): DraggableCard[] => {
-    const cards: DraggableCard[] = [];
+    const cards: DraggableCard[] =[];
     for (const m of milestones) {
       if (selectedProjectId !== 'all' && m.project_id !== selectedProjectId) continue;
       const d = m.planned_receive_date;
@@ -849,7 +841,7 @@ export default function CashFlowPlanner() {
       weekIndex: i,
       label: `Week ${i + 1} · ${format(ws, 'EEE dd MMM')} – ${format(addDays(ws, 6), 'EEE dd MMM')}`,
       incomeCards: [],
-      paymentCards: [],
+      paymentCards:[],
       openingBalance: 0,
       incomeTotal: 0,
       paymentTotal: 0,
@@ -1037,8 +1029,8 @@ export default function CashFlowPlanner() {
   }
 
   const chartSubtitle: Record<ChartMode, string> = {
-    historical: 'Settled cash — paid invoices by expected payment month',
-    forecast: 'Future liabilities — invoice balances + uninvoiced pipeline with overdue sweep',
+    historical: 'Settled cash — paid invoices and actual receipts',
+    forecast: 'Future liabilities and pipeline — seeded with historical opening balance',
     combined: 'Complete timeline — historical actual + forecast pipeline',
   };
 
@@ -1152,19 +1144,23 @@ export default function CashFlowPlanner() {
               <span className="inline-block w-3 h-3 rounded-sm bg-[#1D9E75]" />
               Cash In
             </span>
-            <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <span className="inline-block w-3 h-3 rounded-sm bg-[#64748B]" />
-              Paid
-            </span>
-            <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <span className="inline-block w-3 h-3 rounded-sm bg-[#C0392B]" />
-              Invoice Balance (Col O)
-            </span>
-            {chartMode !== 'historical' && (
+            {chartMode === 'historical' && (
               <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                <span className="inline-block w-3 h-3 rounded-sm opacity-50" style={{ background: '#E24B4A' }} />
-                Yet to Invoice (Col P)
+                <span className="inline-block w-3 h-3 rounded-sm bg-[#64748B]" />
+                Paid Cash Out
               </span>
+            )}
+            {chartMode !== 'historical' && (
+              <>
+                <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                  <span className="inline-block w-3 h-3 rounded-sm bg-[#C0392B]" />
+                  Invoice Balance (Col O)
+                </span>
+                <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                  <span className="inline-block w-3 h-3 rounded-sm opacity-50" style={{ background: '#E24B4A' }} />
+                  Yet to Invoice (Col P)
+                </span>
+              </>
             )}
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span className="inline-block w-8 h-0.5 bg-[#3B82F6]" />
@@ -1212,7 +1208,7 @@ export default function CashFlowPlanner() {
                   tickFormatter={(v: number) => `฿${v}M`}
                 />
                 <Tooltip
-                  formatter={((value: number, name: string): [string, string] => [
+                  formatter={((value: number, name: string): [string, string] =>[
                     `฿${value.toFixed(2)}M`,
                     name === 'cashIn' ? 'Cash In'
                     : name === 'outflowPaid' ? 'Paid'
@@ -1234,10 +1230,15 @@ export default function CashFlowPlanner() {
                   />
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
+                
+                {/* Green Cash In Bar */}
                 <Bar yAxisId="bars" dataKey="cashIn" fill="#1D9E75" radius={[3, 3, 0, 0]} opacity={0.9} name="cashIn" />
-                <Bar yAxisId="bars" dataKey="outflowPaid" stackId="outflow" fill="#64748B" radius={[0, 0, 0, 0]} opacity={0.85} name="outflowPaid" />
+                
+                {/* Red Cash Out Bars (Stacked) */}
+                <Bar yAxisId="bars" dataKey="outflowPaid" stackId="outflow" fill="#64748B" radius={[3, 3, 0, 0]} opacity={0.85} name="outflowPaid" />
                 <Bar yAxisId="bars" dataKey="outflowBalance" stackId="outflow" fill="#C0392B" radius={[0, 0, 0, 0]} opacity={0.95} name="outflowBalance" />
                 <Bar yAxisId="bars" dataKey="outflowUninvoiced" stackId="outflow" fill="#E24B4A" radius={[3, 3, 0, 0]} opacity={0.5} name="outflowUninvoiced" />
+                
                 <Line
                   yAxisId="line"
                   type="monotone"
@@ -1255,10 +1256,10 @@ export default function CashFlowPlanner() {
           {/* Footer note */}
           <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
             {chartMode === 'historical'
-              ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
+              ? 'Cash Out grouped by milestone expected payment month. Cash In uses actual receipt date.'
               : chartMode === 'forecast'
               ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(2)}M. Overdue items swept into ${format(sweepBucketDate, 'MMM-yy')} (current month). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
-              : `Past months show actual settled cash. ${format(sweepBucketDate, 'MMM-yy')} onwards shows forecast — overdue items appear immediately in the current month.`}
+              : `Past months show actual settled cash. ${format(sweepBucketDate, 'MMM-yy')} onwards shows forecast.`}
           </p>
         </div>
       </div>
