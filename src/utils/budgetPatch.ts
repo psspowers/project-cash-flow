@@ -60,7 +60,7 @@ export async function executeBudgetPatch() {
       cost_10_testing: Number((baseline.cost_10_testing * factor).toFixed(2)),
       total_cost_excl_vat: target,
       gross_margin_amount: baseline.sales_price_excl_vat - target,
-      gross_margin_pct: (baseline.sales_price_excl_vat - target) / baseline.sales_price_excl_vat,
+      gross_margin_pct: ((baseline.sales_price_excl_vat - target) / baseline.sales_price_excl_vat) * 100,
       evp_approved_at: new Date().toISOString(),
       evp_approved_by: 'System Admin',
     };
