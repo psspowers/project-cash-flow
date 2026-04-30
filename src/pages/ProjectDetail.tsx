@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Lock, Unlock, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COSTING_CATEGORY_KEYS, PROJECT_STATUS_LABELS } from '../types';
 import Badge, { statusVariant } from '../components/ui/Badge';
@@ -35,11 +35,11 @@ export default function ProjectDetail() {
 
   const initialTab = (searchParams.get('tab') as Tab | null) ?? 'overview';
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [isTogglingLock, setIsTogglingLock] = useState(false);
 
   const data = useProjectData(id);
   const { project, costings, vos, orders, orphanVendorInvoices, clientInvoices, profiles, loading } = data;
 
-  // Track project view for personalised sorting
   useEffect(() => {
     if (!id || !user?.id) return;
     supabase.rpc('upsert_project_view', { p_user_id: user.id, p_project_id: id }).then(() => {});
@@ -69,6 +69,21 @@ export default function ProjectDetail() {
 
   function voTotalCost(vo: VariationOrder): number {
     return COSTING_CATEGORY_KEYS.reduce((s, k) => s + ((vo[k as keyof VariationOrder] as number) ?? 0), 0);
+  }
+
+  async function toggleFinancialLock() {
+    if (!project) return;
+    setIsTogglingLock(true);
+    const newStatus = !project.is_financials_locked;
+    const { error } = await supabase
+      .from('projects')
+      .update({ is_financials_locked: newStatus })
+      .eq('id', project.id);
+
+    if (!error) {
+      await data.reload();
+    }
+    setIsTogglingLock(false);
   }
 
   const ctxValue: ProjectDetailContextValue = {
@@ -118,6 +133,28 @@ export default function ProjectDetail() {
             <div className="flex items-center gap-3 mb-1">
               <h1 className="text-xl font-bold text-[#0f1923]">{project.name}</h1>
               <Badge label={PROJECT_STATUS_LABELS[project.status]} variant={statusVariant(project.status)} />
+
+              {isCEO && (
+                <button
+                  onClick={toggleFinancialLock}
+                  disabled={isTogglingLock}
+                  className={`ml-2 flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors border ${
+                    project.is_financials_locked
+                      ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                      : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                  } disabled:opacity-50`}
+                  title={project.is_financials_locked ? 'Unlock Financials' : 'Lock Financials'}
+                >
+                  {isTogglingLock ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : project.is_financials_locked ? (
+                    <Lock size={12} />
+                  ) : (
+                    <Unlock size={12} />
+                  )}
+                  {project.is_financials_locked ? 'Financials Locked' : 'Financials Unlocked'}
+                </button>
+              )}
             </div>
             <p className="text-sm text-gray-500">{(project.client as { name?: string } | undefined)?.name ?? '—'}</p>
           </div>
