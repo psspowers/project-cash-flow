@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, CalendarClock, Pencil, Check, XCircle } from 'lucide-react';
+import { X, CalendarClock, Pencil, Check, XCircle, Download } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
@@ -17,7 +17,7 @@ interface RawMilestone {
     pss_po_no: string | null;
     description: string | null;
     supplier_name_raw: string | null;
-    project: { id: string; name: string } | null;
+    project: { id: string; name: string; is_financials_locked?: boolean } | null;
   } | null;
 }
 
@@ -36,6 +36,7 @@ interface UninvoicedDrillRow {
   milestoneNo: number;
   amountDue: number;
   milestoneId: string;
+  isLocked: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,7 @@ function DrillDownUninvoicedModal({ rows, cellLabel, onClose, onRefresh }: { row
                             <XCircle size={14} />
                           </button>
                         </div>
-                      ) : (
+                      ) : r.isLocked ? null : (
                         <button onClick={() => startEdit(i)} className="p-1 rounded text-gray-300 hover:text-[#378ADD] hover:bg-blue-50 transition-colors">
                           <Pencil size={13} />
                         </button>
@@ -208,7 +209,7 @@ export default function MonthlyAnalysisUninvoiced() {
           id, purchase_order_id, milestone_number, amount_due, planned_payment_date,
           purchase_order:purchase_orders (
             pss_po_no, description, supplier_name_raw,
-            project:projects ( id, name )
+            project:projects ( id, name, is_financials_locked )
           )
         `)
         .order('planned_payment_date', { ascending: true, nullsFirst: false }),
@@ -313,6 +314,7 @@ export default function MonthlyAnalysisUninvoiced() {
       milestoneNo: m.milestone_number,
       amountDue: Number(m.amount_due),
       milestoneId: m.id,
+      isLocked: m.purchase_order!.project!.is_financials_locked ?? false,
     });
   }
 
@@ -326,6 +328,25 @@ export default function MonthlyAnalysisUninvoiced() {
     return projectNames.reduce((s, p) => s + cellSum(p, mk), 0);
   }
   const grandTotal = monthKeys.reduce((s, mk) => s + monthTotal(mk), 0);
+
+  function exportToCSV() {
+    const headers = ['Project', 'Pymt Month', 'PO Number', 'Supplier', 'Description', 'MS Number', 'Not Yet Invoiced Amount'];
+    const rows = validRows.map(m => [
+      m.purchase_order?.project?.name || '',
+      m.planned_payment_date ? toMonthLabel(toMonthKey(m.planned_payment_date)) : '',
+      m.purchase_order?.pss_po_no || '',
+      m.purchase_order?.supplier_name_raw || '',
+      (m.purchase_order?.description || '').replace(/,/g, ' '),
+      m.milestone_number,
+      Number(m.amount_due),
+    ].join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Yet_To_Invoice_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  }
 
   function openDrill(project: string | null, mk: string | null) {
     let rows: UninvoicedDrillRow[] = [];
@@ -355,6 +376,9 @@ export default function MonthlyAnalysisUninvoiced() {
           <div className="flex items-center gap-2">
             <CalendarClock size={15} className="text-amber-500" />
             <h2 className="text-[13px] font-semibold text-gray-800">Monthly Analysis — Yet to Invoice</h2>
+            <button onClick={exportToCSV} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors ml-4">
+              <Download size={13} /> Export CSV
+            </button>
           </div>
           <p className="text-[11px] text-gray-400">Click any value to drill down</p>
         </div>

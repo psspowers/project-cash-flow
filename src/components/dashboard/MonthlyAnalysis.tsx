@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, BarChart2 } from 'lucide-react';
+import { X, BarChart2, Download } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
@@ -239,6 +239,25 @@ export default function MonthlyAnalysis() {
   }
   const grandTotal = monthKeys.reduce((s, mk) => s + monthTotal(mk), 0);
 
+  function exportToCSV() {
+    const headers = ['Project', 'Pymt Month', 'PO Number', 'Supplier', 'Description', 'Invoice Number', 'Paid Amount'];
+    const rows = validMatches.map(({ invoice, plannedPaymentDate }) => [
+      invoice.purchase_order?.project?.name || '',
+      plannedPaymentDate ? toMonthLabel(toMonthKey(plannedPaymentDate)) : '',
+      invoice.purchase_order?.pss_po_no || '',
+      invoice.purchase_order?.supplier_name_raw || '',
+      (invoice.purchase_order?.description || '').replace(/,/g, ' '),
+      invoice.vendor_invoice_no || '',
+      Number(invoice.invoice_amount_incl_vat || 0),
+    ].join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Invoices_Paid_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  }
+
   function openDrill(project: string | null, mk: string | null) {
     let rows: DrillRow[] = [];
     let label = '';
@@ -267,6 +286,9 @@ export default function MonthlyAnalysis() {
           <div className="flex items-center gap-2">
             <BarChart2 size={15} className="text-gray-400" />
             <h2 className="text-[13px] font-semibold text-gray-800">Monthly Analysis — Invoices Paid</h2>
+            <button onClick={exportToCSV} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors ml-4">
+              <Download size={13} /> Export CSV
+            </button>
           </div>
           <p className="text-[11px] text-gray-400">Click any value to drill down</p>
         </div>

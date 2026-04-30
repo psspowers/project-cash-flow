@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { X, AlertCircle, Pencil, Check, XCircle } from 'lucide-react';
+import { X, AlertCircle, Pencil, Check, XCircle, Download } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
@@ -18,7 +18,7 @@ interface RawInvoice {
     pss_po_no: string | null;
     description: string | null;
     supplier_name_raw: string | null;
-    project: { id: string; name: string } | null;
+    project: { id: string; name: string; is_financials_locked?: boolean } | null;
     milestones: {
       id: string;
       amount_due: number;
@@ -39,6 +39,7 @@ interface BalanceDrillRow {
   balance: number;
   invoiceId: string;
   milestoneId: string | null;
+  isLocked: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,20 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose, onRefresh }: { rows: 
     }
 
     await Promise.all(updates);
+
+    if (!isNaN(newAmount) && newAmount !== r.invoiceAmount) {
+      const { data: invData } = await supabase.from('vendor_invoices').select('po_id').eq('id', r.invoiceId).single();
+      if (invData?.po_id) {
+        const { data: allInvs } = await supabase.from('vendor_invoices').select('invoice_amount_incl_vat').eq('po_id', invData.po_id);
+        const sum = (allInvs || []).reduce((acc, curr) => acc + Number(curr.invoice_amount_incl_vat || 0), 0);
+        const { data: poData } = await supabase.from('purchase_orders').select('po_amount_incl_vat').eq('id', invData.po_id).single();
+        if (poData) {
+          const newRemaining = Math.max(0, Number(poData.po_amount_incl_vat) - sum);
+          await supabase.from('purchase_orders').update({ pending_remaining_amount: newRemaining }).eq('id', invData.po_id);
+        }
+      }
+    }
+
     setSaving(false);
 
     setLocalRows(prev => prev.map((row, i) => {
@@ -178,7 +193,7 @@ function DrillDownBalanceModal({ rows, cellLabel, onClose, onRefresh }: { rows: 
                             <XCircle size={14} />
                           </button>
                         </div>
-                      ) : (
+                      ) : r.isLocked ? null : (
                         <button onClick={() => startEdit(i)} className="p-1 rounded text-gray-300 hover:text-[#378ADD] hover:bg-blue-50 transition-colors">
                           <Pencil size={13} />
                         </button>
@@ -221,7 +236,7 @@ export default function MonthlyAnalysisBalance() {
         id, po_id, invoice_date, invoice_amount_incl_vat, received_amount, vendor_invoice_no,
         purchase_order:purchase_orders (
           pss_po_no, description, supplier_name_raw,
-          project:projects ( id, name ),
+          project:projects ( id, name, is_financials_locked ),
           milestones:po_milestones ( id, amount_due, planned_payment_date )
         )
       `)
@@ -335,6 +350,7 @@ export default function MonthlyAnalysisBalance() {
       balance: invoiceAmount - receivedAmount,
       invoiceId: invoice.id,
       milestoneId: matchedMilestoneId,
+      isLocked: invoice.purchase_order!.project!.is_financials_locked ?? false,
     });
   }
 
@@ -348,6 +364,29 @@ export default function MonthlyAnalysisBalance() {
     return projectNames.reduce((s, p) => s + cellSum(p, mk), 0);
   }
   const grandTotal = monthKeys.reduce((s, mk) => s + monthTotal(mk), 0);
+
+  function exportToCSV() {
+    const headers = ['Project', 'Pymt Month', 'PO Number', 'Supplier', 'Description', 'Invoice No', 'Invoice Amount', 'Received', 'Balance'];
+    const rows = validMatches.map(({ invoice, plannedPaymentDate }) => {
+      const amt = Number(invoice.invoice_amount_incl_vat || 0);
+      const rec = Number(invoice.received_amount || 0);
+      return [
+        invoice.purchase_order?.project?.name || '',
+        plannedPaymentDate ? toMonthLabel(toMonthKey(plannedPaymentDate)) : '',
+        invoice.purchase_order?.pss_po_no || '',
+        invoice.purchase_order?.supplier_name_raw || '',
+        (invoice.purchase_order?.description || '').replace(/,/g, ' '),
+        invoice.vendor_invoice_no || '',
+        amt, rec, amt - rec,
+      ].join(',');
+    });
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Invoice_Balance_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  }
 
   function openDrill(project: string | null, mk: string | null) {
     let rows: BalanceDrillRow[] = [];
@@ -377,6 +416,9 @@ export default function MonthlyAnalysisBalance() {
           <div className="flex items-center gap-2">
             <AlertCircle size={15} className="text-[#E24B4A]" />
             <h2 className="text-[13px] font-semibold text-gray-800">Monthly Analysis — Invoice Balance</h2>
+            <button onClick={exportToCSV} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors ml-4">
+              <Download size={13} /> Export CSV
+            </button>
           </div>
           <p className="text-[11px] text-gray-400">Click any value to drill down</p>
         </div>
