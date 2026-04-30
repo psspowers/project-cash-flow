@@ -629,13 +629,13 @@ export default function CashFlowPlanner() {
 
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  // 15th of prior month — same anchor used in all pivot tables
-  const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 15);
-  const prevMonthKey = format(prevMonthDate, 'yyyy-MM');
+  // 15th of the CURRENT month — overdue items sweep here so they appear immediately payable
+  const sweepBucketDate = new Date(today.getFullYear(), today.getMonth(), 15);
+  const sweepBucketKey = format(sweepBucketDate, 'yyyy-MM');
 
   function rollForward(dateStr: string | null): string {
     const d = dateStr ? new Date(dateStr) : today;
-    const effective = d < currentMonthStart ? prevMonthDate : d;
+    const effective = d < currentMonthStart ? sweepBucketDate : d;
     return format(effective, 'yyyy-MM');
   }
 
@@ -748,8 +748,8 @@ export default function CashFlowPlanner() {
     const keys = mode === 'historical'
       ? sortedKeys.filter(k => hasHistorical(k))
       : mode === 'forecast'
-      ? [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
-      : [...new Set([prevMonthKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
+      ? [...new Set([sweepBucketKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
+      : [...new Set([sweepBucketKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
     // Forecast seeds from historical net; combined naturally accumulates from first historical month
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
@@ -1172,7 +1172,7 @@ export default function CashFlowPlanner() {
             </span>
             {chartMode !== 'historical' && (
               <span className="ml-auto text-[11px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full">
-                Overdue items swept into {format(prevMonthDate, 'MMM-yy')}
+                Overdue items swept into {format(sweepBucketDate, 'MMM-yy')}
               </span>
             )}
           </div>
@@ -1257,8 +1257,8 @@ export default function CashFlowPlanner() {
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(2)}M (total settled receipts minus paid invoices). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
-              : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded). Cumulative Net runs continuously across both periods.'}
+              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(2)}M. Overdue items swept into ${format(sweepBucketDate, 'MMM-yy')} (current month). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
+              : `Past months show actual settled cash. ${format(sweepBucketDate, 'MMM-yy')} onwards shows forecast — overdue items appear immediately in the current month.`}
           </p>
         </div>
       </div>

@@ -269,15 +269,15 @@ export default function MonthlyAnalysisUninvoiced() {
   );
 
   // Roll-forward: any date strictly before the current month is swept into
-  // the previous month's bucket as an overdue backlog.
+  // the current month's bucket so overdue items show as immediately due.
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const previousMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 15);
+  const sweepBucketDate = new Date(today.getFullYear(), today.getMonth(), 15);
 
   function rollForwardKey(dateStr: string | null): string {
     const fallback = dateStr ?? today.toISOString().slice(0, 10);
     const d = new Date(fallback);
-    const effective = d < currentMonthStart ? previousMonthDate : d;
+    const effective = d < currentMonthStart ? sweepBucketDate : d;
     return toMonthKey(effective.toISOString().slice(0, 10));
   }
 
