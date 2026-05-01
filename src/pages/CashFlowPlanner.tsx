@@ -138,6 +138,7 @@ interface ChartBar {
   outflowBalance: number;
   outflowUninvoiced: number;
   cumNet: number;
+  openingBal?: number; // only present on the synthetic Opening column in forecast mode
 }
 
 type ChartMode = 'historical' | 'forecast' | 'combined';
@@ -784,7 +785,8 @@ export default function CashFlowPlanner() {
 
     // Forecast seeds from historical net; combined naturally accumulates from first historical month
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
-    return keys.map(key => {
+
+    const bars: ChartBar[] = keys.map(key => {
       let cashIn = 0;
       let outflowBalance = 0;
       let outflowUninvoiced = 0;
@@ -822,6 +824,21 @@ export default function CashFlowPlanner() {
         cumNet: +cumNet.toFixed(2),
       };
     });
+
+    // Prepend a synthetic Opening column in forecast mode to visually anchor the starting balance
+    if (mode === 'forecast' && historicalOpeningBalance !== 0) {
+      bars.unshift({
+        month: 'Opening',
+        key: '__opening__',
+        cashIn: 0,
+        outflowBalance: 0,
+        outflowUninvoiced: 0,
+        cumNet: +historicalOpeningBalance.toFixed(2),
+        openingBal: +Math.abs(historicalOpeningBalance).toFixed(2),
+      });
+    }
+
+    return bars;
   }
 
   const chartData = buildChartData(chartMode);
@@ -1238,6 +1255,7 @@ export default function CashFlowPlanner() {
                     name === 'cashIn' ? 'Cash In'
                     : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
                     : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
+                    : name === 'openingBal' ? 'Opening Balance'
                     : 'Cumulative Net',
                   ]) as RechartsTooltipFormatter}
                   contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
@@ -1248,6 +1266,7 @@ export default function CashFlowPlanner() {
                     value === 'cashIn' ? 'Cash In'
                     : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
                     : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
+                    : value === 'openingBal' ? 'Opening Balance'
                     : 'Cumulative Net'
                   }
                   iconType="square"
@@ -1264,6 +1283,9 @@ export default function CashFlowPlanner() {
                   />
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
+                {chartMode === 'forecast' && (
+                  <Bar yAxisId="bars" dataKey="openingBal" fill="#EF9F27" radius={[3, 3, 0, 0]} opacity={0.9} name="openingBal" />
+                )}
                 <Bar yAxisId="bars" dataKey="cashIn" fill="#1D9E75" radius={[3, 3, 0, 0]} opacity={0.9} name="cashIn" />
                 <Bar yAxisId="bars" dataKey="outflowBalance" stackId="outflow" fill="#C0392B" radius={[0, 0, 0, 0]} opacity={0.95} name="outflowBalance" />
                 <Bar yAxisId="bars" dataKey="outflowUninvoiced" stackId="outflow" fill="#E24B4A" radius={[3, 3, 0, 0]} opacity={0.5} name="outflowUninvoiced" />
