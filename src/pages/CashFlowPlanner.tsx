@@ -573,7 +573,7 @@ export default function CashFlowPlanner() {
       // Cash In: client invoice receipts (historical inflow & deduction source)
       supabase
         .from('client_invoices')
-        .select('client_milestone_id, received_amount, receipt_date, invoice_date')
+        .select('client_milestone_id, received_amount, receipt_date')
         .gt('received_amount', 0),
     ]);
 
@@ -622,11 +622,11 @@ export default function CashFlowPlanner() {
     const rawClientMs = (clientMsRes.data ?? []);
     const rawClientReceipts = (clientReceiptsRes.data ?? []);
 
-    // 1. Plot Historical Receipts (using receipt_date falling back to invoice_date)
+    // 1. Plot Historical Receipts — strict: only rows with a confirmed receipt_date
     setClientReceipts(
       rawClientReceipts.map((r: any) => ({
         received_amount: r.received_amount,
-        receipt_date: r.receipt_date || r.invoice_date,
+        receipt_date: r.receipt_date ?? null,
       }))
     );
 
