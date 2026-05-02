@@ -519,9 +519,9 @@ export default function CashFlowPlanner() {
         .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(*)')
         .in('status', ['released', 'approved_evp']),
       supabase
-        .from('client_invoices')
-        .select('received_amount')
-        .gt('received_amount', 0),
+        .from('client_invoice_payments')
+        .select('amount')
+        .gt('amount', 0),
       supabase
         .from('payment_vouchers')
         .select('net_paid')
@@ -532,7 +532,7 @@ export default function CashFlowPlanner() {
     setMilestones((milestonesRes.data ?? []) as ClientMilestoneRow[]);
     setInvoices(invoicesRes.data ?? []);
     setTotalReceipts(
-      (receiptsRes.data ?? []).reduce((s: number, r: { received_amount: number }) => s + (r.received_amount ?? 0), 0)
+      (receiptsRes.data ?? []).reduce((s: number, r: { amount: number }) => s + (r.amount ?? 0), 0)
     );
     setTotalVouchersPaid(
       (vouchersRes.data ?? []).reduce((s: number, v: { net_paid: number }) => s + (v.net_paid ?? 0), 0)
@@ -573,9 +573,9 @@ export default function CashFlowPlanner() {
         .select('id, payment_plan_amount, planned_receive_date'),
       // Cash In: client invoice receipts (historical inflow & deduction source)
       supabase
-        .from('client_invoices')
-        .select('client_milestone_id, received_amount, receipt_date')
-        .gt('received_amount', 0),
+        .from('client_invoice_payments')
+        .select('client_invoice:client_invoices(client_milestone_id), amount, payment_date')
+        .gt('amount', 0),
     ]);
 
     // Normalize paid invoices
@@ -623,20 +623,21 @@ export default function CashFlowPlanner() {
     const rawClientMs = (clientMsRes.data ?? []);
     const rawClientReceipts = (clientReceiptsRes.data ?? []);
 
-    // 1. Plot Historical Receipts — strict: only rows with a confirmed receipt_date
+    // 1. Plot Historical Receipts — strict: only rows with a confirmed payment_date
     setClientReceipts(
       rawClientReceipts.map((r: any) => ({
-        received_amount: r.received_amount,
-        receipt_date: r.receipt_date ?? null,
+        received_amount: r.amount,
+        receipt_date: r.payment_date ?? null,
       }))
     );
 
     // 2. Map total received cash by Milestone ID
     const receivedByMilestone = new Map<string, number>();
     for (const r of rawClientReceipts) {
-      if (r.client_milestone_id) {
-        const current = receivedByMilestone.get(r.client_milestone_id) || 0;
-        receivedByMilestone.set(r.client_milestone_id, current + Number(r.received_amount));
+      const milestoneId = r.client_invoice?.client_milestone_id;
+      if (milestoneId) {
+        const current = receivedByMilestone.get(milestoneId) || 0;
+        receivedByMilestone.set(milestoneId, current + Number(r.amount));
       }
     }
 
