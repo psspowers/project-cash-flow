@@ -9,13 +9,12 @@ import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './Analys
 
 interface RawReceipt {
   id: string;
-  project_id: string | null;
   invoice_no: string | null;
   receipt_no: string | null;
   invoice_amount: number;
   received_amount: number;
   receipt_date: string | null;
-  project: { id: string; name: string } | null;
+  project: { name: string } | null;
 }
 
 interface CashInDrillRow {
@@ -104,13 +103,34 @@ export default function MonthlyAnalysisCashIn() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
-      .from('client_invoices')
-      .select('id, project_id, invoice_no, receipt_no, invoice_amount, received_amount, receipt_date, project:projects(id, name)')
-      .gt('received_amount', 0)
-      .not('receipt_date', 'is', null)
-      .order('receipt_date', { ascending: true });
+      .from('client_invoice_payments')
+      .select(`
+        id,
+        payment_date,
+        amount,
+        reference,
+        client_invoice:client_invoices (
+          invoice_no,
+          invoice_amount,
+          project:projects ( name )
+        )
+      `)
+      .gt('amount', 0)
+      .not('payment_date', 'is', null)
+      .order('payment_date', { ascending: true });
 
-    if (!error && data) setReceipts(data as unknown as RawReceipt[]);
+    if (!error && data) {
+      const formattedReceipts: RawReceipt[] = (data as any[]).map(row => ({
+        id: row.id,
+        receipt_date: row.payment_date,
+        received_amount: Number(row.amount || 0),
+        receipt_no: row.reference,
+        invoice_no: row.client_invoice?.invoice_no ?? null,
+        invoice_amount: Number(row.client_invoice?.invoice_amount || 0),
+        project: row.client_invoice?.project ?? null,
+      }));
+      setReceipts(formattedReceipts);
+    }
     setLoading(false);
   }, []);
 
