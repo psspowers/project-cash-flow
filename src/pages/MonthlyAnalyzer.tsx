@@ -1,15 +1,16 @@
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle2, Clock, CalendarClock } from 'lucide-react';
+import { CheckCircle2, Clock, CalendarClock, TrendingUp } from 'lucide-react';
 import MonthlyAnalysis from '../components/dashboard/MonthlyAnalysis';
 import MonthlyAnalysisBalance from '../components/dashboard/MonthlyAnalysisBalance';
 import MonthlyAnalysisUninvoiced from '../components/dashboard/MonthlyAnalysisUninvoiced';
+import MonthlyAnalysisCashIn from '../components/dashboard/MonthlyAnalysisCashIn';
 
 // ---------------------------------------------------------------------------
 // Tab definitions
 // ---------------------------------------------------------------------------
 
-type TabId = 'paid' | 'balance' | 'uninvoiced';
+type TabId = 'paid' | 'balance' | 'uninvoiced' | 'cashin';
 
 interface Tab {
   id: TabId;
@@ -48,6 +49,15 @@ const TABS: Tab[] = [
     accentColor: 'text-amber-600',
     accentBg: 'bg-amber-50',
     accentBorder: 'border-amber-500',
+  },
+  {
+    id: 'cashin',
+    label: 'Cash In',
+    sublabel: 'Confirmed client receipts',
+    icon: <TrendingUp size={15} />,
+    accentColor: 'text-[#1D9E75]',
+    accentBg: 'bg-[#1D9E75]/10',
+    accentBorder: 'border-[#1D9E75]',
   },
 ];
 
@@ -135,6 +145,10 @@ export default function MonthlyAnalyzer() {
 
       <div className={activeTab === 'uninvoiced' ? 'block' : 'hidden'}>
         <MonthlyAnalysisUninvoiced />
+      </div>
+
+      <div className={activeTab === 'cashin' ? 'block' : 'hidden'}>
+        <MonthlyAnalysisCashIn />
       </div>
 
     </div>
