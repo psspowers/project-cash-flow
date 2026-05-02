@@ -173,6 +173,11 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
                   label="Yet to Invoice"
                   icon={<CalendarClock size={14} />}
                 />
+                <TabNavItem
+                  tab="cashin"
+                  label="Cash In"
+                  icon={<TrendingUp size={14} />}
+                />
               </div>
             )}
 
