@@ -1,5 +1,5 @@
 # PSS Power Solutions — Chief Architect Handover Document
-**Date:** 2026-04-24 | **Session:** Full-day audit and fix session
+**Date:** 2026-04-24 (original) | **Updated:** 2026-05-03 | **Session:** Approvals audit + PO data integrity findings
 
 ---
 
@@ -83,8 +83,9 @@ Total received per milestone = `SUM(client_invoices.received_amount)` across all
 **purchase_orders.cost_category:**
 `01_civil | 02_pv_modules | 03_mounting | 04_inverters_electrical | 05_hv_switchgear | 06_cabling | 07_installation | 08_engineering | 09_logistics | 10_testing_warranty`
 
-**purchase_orders.status:** `draft | partially_paid | fully_paid`
+**purchase_orders.status:** `draft | pending_approval | approved | partially_paid | fully_paid`
 (NOTE: `cancelled` is NOT a valid status — use draft for cancelled POs)
+(NOTE: `pending_approval` = submitted by Cost Controller, awaiting CM/EVP/CEO sign-off. `approved` = signed off, not yet invoiced.)
 
 **client_invoices.status:** `pending | partially_received | received`
 
@@ -127,6 +128,48 @@ All confirmed with clean builds and database verification.
 
 ---
 
+## SESSION UPDATE — 2026-05-03 (Approvals Audit)
+
+### Findings from today
+
+**Finding 1 — Approvals page empty queue (CM) is NOT a code bug**
+The Approvals page (`src/pages/Approvals.tsx`) filters pending POs using `status = 'pending_approval'`.
+The live database has zero POs with that status — total count = 0 across all projects.
+The CM queue shows nothing because no PO has ever been submitted through the approval workflow.
+This is a data integrity problem from the import, not a code defect.
+
+**Finding 2 — purchase_orders.status enum was wrong in this document**
+The enum listed here was `draft | partially_paid | fully_paid`.
+The full correct enum is `draft | pending_approval | approved | partially_paid | fully_paid`.
+The Approvals page code confirms this — it explicitly queries for `pending_approval` status.
+Document corrected above.
+
+**Finding 3 — PO approval routing is by amount threshold, not EVP-only**
+The `auth-and-roles.md` permission matrix showed PO approval as an EVP-only action.
+The actual code routes by value:
+- CM: POs < ฿1,000,000
+- EVP: ฿1,000,000 – ฿4,999,999
+- CEO: ≥ ฿5,000,000
+- Cost Controller: monitoring only ("With Others" tab)
+Both `auth-and-roles.md` and `PSS_Master_Architect_Brief_FIXED.md` have been corrected.
+
+**Finding 4 — Walailak POs: 3 data fields wrong on all 19 records**
+| Field | Wrong value | Correct value |
+|---|---|---|
+| `status` | `draft` | `approved` |
+| `po_amount_excl_vat` | ฿0 | `po_amount_incl_vat / 1.07` |
+| `vat_7pct` | ฿0 | `po_amount_incl_vat - po_amount_excl_vat` |
+
+Impact of wrong status:
+- Orders tab shows ฿0 committed costs
+- Variance tab shows no committed spend against budget
+- CM Approvals queue empty (no pending_approval rows)
+- Dashboard forecast excludes all Walailak PO milestones
+
+Remediation SQL is in the Data section above.
+
+---
+
 ## DATABASE FIXES — APPLIED THIS SESSION
 
 | # | Fix | SQL Run |
@@ -150,15 +193,44 @@ All confirmed with clean builds and database verification.
 
 | Priority | File | Issue | What to do |
 |---|---|---|---|
-| P1 | None urgent | All critical code fixes applied | — |
+| P1 | `Approvals.tsx` | Approvals page shows empty queue for CM even when real POs exist | Root cause is data: all imported POs have `status='draft'` not `pending_approval`. See Data section below. No code change needed — the filter logic is correct. |
 
-### Data still needed
+### Data still needed / Data fixes pending
 
 | Priority | Item | Detail |
 |---|---|---|
+| P1 | **Walailak POs — 3-field data correction** | All 19 Walailak POs were data-migrated with wrong values: `status='draft'` (should be `approved`), `po_amount_excl_vat=0` (amounts only in `po_amount_incl_vat`), `submitted_at=null`. Fix: UPDATE status to `approved`, back-calculate `po_amount_excl_vat = po_amount_incl_vat / 1.07` and `vat_7pct = po_amount_incl_vat - po_amount_excl_vat`, stamp `approved_at`. No workflow submission needed — PSS PO numbers confirm real-world approval. |
 | P1 | `client_invoices.invoice_date` | 228 of 268 invoices still have NULL invoice_date. Need VAT filing data from accounts. Do NOT approximate as receipt_date minus 60 days — Thai PP.30 cross-matching risk. |
 | P2 | `po_milestones.planned_payment_date` | Most are NULL. Needed for CashflowTab cash-out forecast and Dashboard forecast chart. Enter via Reschedule button per project or import from Projects_Income_Expense PO sheet. |
 | P3 | Budgets for KKU, RCP, LPF2 | No EVP-approved budget costing. VarianceTab shows no baseline. Finance team to enter. |
+
+#### Walailak PO data correction — verified SQL
+
+```sql
+-- Step 1: Correct status and approval stamp for all 19 Walailak POs
+UPDATE purchase_orders
+SET
+  status = 'approved',
+  approved_at = now()
+WHERE project_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  AND status = 'draft'
+  AND pss_po_no IS NOT NULL;
+
+-- Step 2: Back-calculate excl-VAT and VAT amounts from the incl-VAT figure
+UPDATE purchase_orders
+SET
+  po_amount_excl_vat = ROUND(po_amount_incl_vat / 1.07, 2),
+  vat_7pct = ROUND(po_amount_incl_vat - (po_amount_incl_vat / 1.07), 2)
+WHERE project_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  AND po_amount_excl_vat = 0
+  AND po_amount_incl_vat > 0;
+
+-- Verify: should return 19 rows with correct amounts
+SELECT pss_po_no, po_amount_excl_vat, vat_7pct, po_amount_incl_vat, status
+FROM purchase_orders
+WHERE project_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+ORDER BY pss_po_no;
+```
 
 ### Architectural decisions open
 

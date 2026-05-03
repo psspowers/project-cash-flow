@@ -120,9 +120,16 @@ src/
 ### Critical schema facts
 
 **`purchase_orders` approval:**
-- No `evp_approved` status field
+- Full status enum: `draft | pending_approval | approved | partially_paid | fully_paid`
+  (NOTE: `cancelled` is NOT valid — keep cancelled POs as `draft`)
 - Approval tracked via `approved_by` (UUID, null = not approved) and `approved_at`
-- Status values in production: `fully_paid` (213), `partially_paid` (26), `draft` (24)
+- Status values in production: `fully_paid` (213), `partially_paid` (26), `draft` (24+)
+- **Approval is routed by VALUE THRESHOLD** — not EVP-only (corrected 2026-05-03):
+  - CM approves: POs < ฿1,000,000
+  - EVP approves: ฿1,000,000 – ฿4,999,999
+  - CEO approves: ≥ ฿5,000,000
+  - Cost Controller: "With Others" tab only (monitoring, no approval action)
+- Logic in: `src/pages/Approvals.tsx` → `filterPendingPOs()` function
 
 **`po_milestones` has NO `project_id`:**
 - Links to project via `purchase_order_id` → `purchase_orders.project_id`
@@ -419,7 +426,21 @@ Rejection at any stage returns to the relevant `_draft` stage with a comment rec
 
 ## 14. Where to Resume Next Session
 
-**Immediate next task:** Complete the PO approval split on the Forecast chart in `Dashboard.tsx`.
+*Last updated: 2026-05-03*
+
+**Immediate next task (P1 data fix — do this before any code work):**
+
+Fix the 19 Walailak POs that have wrong `status`, `po_amount_excl_vat`, and `vat_7pct`.
+These are blocking:
+- CM Approvals queue (nothing appears because status is `draft` not `pending_approval`)
+- Orders tab committed costs showing ฿0
+- Variance tab showing no committed spend
+- Forecast chart missing all Walailak outflow
+
+Run the two SQL statements documented in `PSS_ARCHITECT_HANDOVER.md` → "Walailak PO data correction" section.
+No code change is needed — the Approvals page logic is correct. This is purely a DB fix.
+
+**Code task after the data fix:** Complete the PO approval split on the Forecast chart in `Dashboard.tsx`.
 
 The data layer is correct (query fetches `approved_by`, normalization sets `is_approved`). The only remaining step is updating the chart JSX in the Forecast mode block to replace the single `outflow` Bar with two stacked Bars:
 
@@ -434,12 +455,14 @@ The data layer is correct (query fetches `approved_by`, normalization sets `is_a
 
 And update the tooltip formatter and Legend formatter to use the new field names.
 
-**After that, the priority list is:**
-1. Error boundaries
-2. WHT/VAT config table
-3. `cash_receipts` audit
-4. CEO approval threshold validation with product owner
-5. Loan Ledger completion
+**Full priority list:**
+1. **[DB fix]** Walailak PO data correction (3 fields, 19 rows) — see HANDOVER.md
+2. **[Code]** Forecast chart PO approval split (Dashboard.tsx — stacked bars)
+3. Error boundaries on all project detail tabs
+4. WHT/VAT config table (replace hardcoded 3%/7%)
+5. `cash_receipts` audit — confirm no remaining reads from retired table
+6. Loan Ledger completion (`/loans` route is broken)
+7. CEO approval threshold — validate business rule with product owner
 
 ---
 

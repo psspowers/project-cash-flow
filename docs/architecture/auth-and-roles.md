@@ -36,12 +36,19 @@ Six roles exist in the system. The `role` column on `user_profiles` controls wha
 
 ### Purchase orders
 
-| Action | cost_controller | evp | accounts_supervisor |
-|---|---|---|---|
-| Create draft PO | Yes | | |
-| Submit for approval | Yes | | |
-| Approve / reject PO | | Yes | |
-| View all POs | Yes | Yes | Yes |
+Approval is routed by **PO value threshold** (verified 2026-05-03 from `src/pages/Approvals.tsx`):
+
+| Action | cost_controller | construction_manager | evp | ceo |
+|---|---|---|---|---|
+| Create draft PO | Yes | | | |
+| Submit for approval | Yes | | | |
+| Approve / reject PO < ฿1M | | Yes | | |
+| Approve / reject PO ฿1M – ฿5M | | | Yes | |
+| Approve / reject PO ≥ ฿5M | | | | Yes |
+| Monitor all pending (read-only) | Yes | | | |
+| View all POs | Yes | Yes | Yes | Yes |
+
+Constants in code: `PO_THRESHOLD_CM = 1_000_000` and `PO_THRESHOLD_EVP = 5_000_000`
 
 ### Vendor invoices and progress reports
 
