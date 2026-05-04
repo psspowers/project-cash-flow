@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle, XCircle, Clock, Plus, X, FileText, DollarSign, ArrowRightLeft, ShoppingCart, Receipt } from 'lucide-react';
-import { approveInvoiceCM, approveInvoiceCEO, approveInvoiceEVP, rejectInvoiceCM } from '../services/workflow';
+import { approveInvoiceCM, approveInvoiceCEO, approveInvoiceEVP, rejectInvoiceCM, rejectInvoice } from '../services/workflow';
+import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import { useForm } from 'react-hook-form';
 import { supabase } from '../lib/supabase';
 import {
@@ -105,6 +106,7 @@ export default function Approvals() {
   const [invoiceRejectModal, setInvoiceRejectModal] = useState<VendorInvoice | null>(null);
   const [invoiceRejectComment, setInvoiceRejectComment] = useState('');
   const [invoiceAction, setInvoiceAction] = useState(false);
+  const [invoiceDetailModal, setInvoiceDetailModal] = useState<VendorInvoice | null>(null);
 
   const { register, handleSubmit, watch, reset } = useForm<ProgressReportForm>();
   const pctValue = watch('percentage_complete', 0);
@@ -529,11 +531,22 @@ export default function Approvals() {
     const po = invoiceRejectModal.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
     const projectName = po?.project?.name ?? '';
     const invoiceNo = invoiceRejectModal.vendor_invoice_no ?? invoiceRejectModal.id.slice(0, 8);
-    const result = await rejectInvoiceCM(invoiceRejectModal.id, user.id, invoiceRejectComment.trim(), projectName, invoiceNo, invoiceRejectModal.project_id);
+    const result = await rejectInvoice(invoiceRejectModal.id, user.id, invoiceRejectComment.trim(), projectName, invoiceNo, invoiceRejectModal.project_id);
     if (result.error) alert('Failed to reject invoice: ' + result.error);
     setInvoiceRejectModal(null);
     setInvoiceRejectComment('');
     setInvoiceAction(false);
+    loadData();
+  }
+
+  async function handleRejectInvoiceFromModal(inv: VendorInvoice, comment: string) {
+    if (!user) return;
+    const po = inv.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const projectName = po?.project?.name ?? '';
+    const invoiceNo = inv.vendor_invoice_no ?? inv.id.slice(0, 8);
+    const result = await rejectInvoice(inv.id, user.id, comment, projectName, invoiceNo, inv.project_id);
+    if (result.error) alert('Failed to reject invoice: ' + result.error);
+    setInvoiceDetailModal(null);
     loadData();
   }
 
@@ -1120,10 +1133,20 @@ export default function Approvals() {
                     <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
                       {po?.pss_po_no && (
-                        <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{po.pss_po_no}</span>
+                        <button
+                          onClick={() => setInvoiceDetailModal(invoice)}
+                          className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200 hover:text-gray-700 transition-colors"
+                        >
+                          {po.pss_po_no}
+                        </button>
                       )}
                     </div>
-                    <p className="text-sm font-semibold text-gray-800">{projectName}</p>
+                    <button
+                      onClick={() => setInvoiceDetailModal(invoice)}
+                      className="text-sm font-semibold text-gray-800 hover:text-[#1D9E75] transition-colors text-left"
+                    >
+                      {projectName}
+                    </button>
                     <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {po?.description ?? '—'}</p>
                     {invoice.vendor_invoice_no && (
                       <p className="text-xs text-gray-400 mt-0.5">Invoice No: <span className="font-medium text-gray-600">{invoice.vendor_invoice_no}</span></p>
@@ -1150,38 +1173,40 @@ export default function Approvals() {
                   </div>
                 </div>
 
-                {tab === 'pending' && (canApprove || canReject) && (
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
-                    {canReject && (
-                      <button
-                        onClick={() => { setInvoiceRejectModal(invoice); setInvoiceRejectComment(''); }}
-                        className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
-                      >
-                        <XCircle size={13} /> Reject
-                      </button>
-                    )}
-                    {canApprove && (
-                      <button
-                        onClick={() => handleApproveInvoice(invoice)}
-                        disabled={invoiceAction}
-                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors disabled:opacity-60"
-                      >
-                        <CheckCircle size={13} />
-                        {invoiceAction ? 'Processing...' : role === 'construction_manager' ? 'Approve — Send to EVP' : role === 'evp' && invoice.invoice_amount_incl_vat >= 3000000 ? 'Approve — Escalate to CEO' : 'Approve — Release for Payment'}
-                      </button>
-                    )}
-                  </div>
-                )}
+                <div className="mt-4 pt-3 border-t border-gray-100 flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setInvoiceDetailModal(invoice)}
+                    className="flex items-center gap-1.5 border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    <FileText size={12} /> View Details
+                  </button>
 
-                {tab === 'with_others' && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <p className="text-xs text-gray-500">
+                  {tab === 'pending' && canReject && (
+                    <button
+                      onClick={() => { setInvoiceRejectModal(invoice); setInvoiceRejectComment(''); }}
+                      className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
+                    >
+                      <XCircle size={13} /> Reject
+                    </button>
+                  )}
+                  {tab === 'pending' && canApprove && (
+                    <button
+                      onClick={() => handleApproveInvoice(invoice)}
+                      disabled={invoiceAction}
+                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors disabled:opacity-60"
+                    >
+                      <CheckCircle size={13} />
+                      {invoiceAction ? 'Processing...' : role === 'construction_manager' ? 'Approve — Send to EVP' : role === 'evp' && invoice.invoice_amount_incl_vat >= 3000000 ? 'Approve — Escalate to CEO' : 'Approve — Release for Payment'}
+                    </button>
+                  )}
+                  {tab === 'with_others' && (
+                    <p className="text-xs text-gray-500 ml-1">
                       {invoice.status === 'received' && 'Awaiting Construction Manager review'}
                       {invoice.status === 'approved_cm' && 'CM approved — awaiting EVP sign-off'}
                       {invoice.status === 'approved_evp' && 'EVP approved — awaiting CEO final approval'}
                     </p>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             );
           })}
@@ -1606,6 +1631,20 @@ export default function Approvals() {
             </div>
           </div>
         </div>
+      )}
+
+      {invoiceDetailModal && (
+        <InvoiceDetailModal
+          invoice={invoiceDetailModal}
+          role={role ?? ''}
+          approving={invoiceAction}
+          onApprove={() => {
+            handleApproveInvoice(invoiceDetailModal);
+            setInvoiceDetailModal(null);
+          }}
+          onReject={(comment) => handleRejectInvoiceFromModal(invoiceDetailModal, comment)}
+          onClose={() => setInvoiceDetailModal(null)}
+        />
       )}
 
       {showForm && (

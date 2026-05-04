@@ -5,7 +5,8 @@ import { PaymentVoucher, ProjectCashTransfer, Project, VendorInvoice, fmtTHB, Us
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
-import { approveInvoiceCEO } from '../services/workflow';
+import { approveInvoiceCEO, rejectInvoice } from '../services/workflow';
+import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 
 export default function CEOAlerts() {
   const { user } = useAuth();
@@ -15,6 +16,8 @@ export default function CEOAlerts() {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [invoiceDetailModal, setInvoiceDetailModal] = useState<VendorInvoice | null>(null);
+  const [invoiceApproving, setInvoiceApproving] = useState(false);
   const [transferModal, setTransferModal] = useState<ProjectCashTransfer | null>(null);
   const [transferModalMode, setTransferModalMode] = useState<'approve' | 'reject'>('approve');
   const [transferNotes, setTransferNotes] = useState('');
@@ -53,6 +56,7 @@ export default function CEOAlerts() {
   async function handleApproveInvoice(invoice: VendorInvoice) {
     if (!user || approvingId) return;
     setApprovingId(invoice.id);
+    setInvoiceApproving(true);
     const po = (invoice as any).purchase_order;
     const projectName = po?.project?.name ?? 'Unknown Project';
     const invoiceNo = invoice.vendor_invoice_no ?? invoice.id;
@@ -65,7 +69,20 @@ export default function CEOAlerts() {
       invoice.project_id,
     );
     setApprovingId(null);
+    setInvoiceApproving(false);
     if (error) { alert(error); return; }
+    setInvoiceDetailModal(null);
+    await loadData();
+  }
+
+  async function handleRejectInvoiceFromModal(invoice: VendorInvoice, comment: string) {
+    if (!user) return;
+    const po = (invoice as any).purchase_order;
+    const projectName = po?.project?.name ?? 'Unknown Project';
+    const invoiceNo = invoice.vendor_invoice_no ?? invoice.id;
+    const { error } = await rejectInvoice(invoice.id, user.id, comment, projectName, invoiceNo, invoice.project_id);
+    if (error) { alert(error); return; }
+    setInvoiceDetailModal(null);
     await loadData();
   }
 
@@ -252,9 +269,23 @@ export default function CEOAlerts() {
                   return (
                     <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                       <td className="px-4 py-3 text-sm text-gray-800">{vendorName}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{projectName}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">
+                        <button
+                          onClick={() => setInvoiceDetailModal(inv)}
+                          className="hover:text-[#1D9E75] transition-colors text-left"
+                        >
+                          {projectName}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 text-xs font-mono text-gray-700">{inv.vendor_invoice_no || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{poNo}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">
+                        <button
+                          onClick={() => setInvoiceDetailModal(inv)}
+                          className="hover:text-[#1D9E75] transition-colors font-mono"
+                        >
+                          {poNo}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(inv.invoice_amount_incl_vat)}</span>
                       </td>
@@ -263,12 +294,11 @@ export default function CEOAlerts() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <button
-                          onClick={() => handleApproveInvoice(inv)}
-                          disabled={approvingId === inv.id}
-                          className="flex items-center gap-1.5 bg-[#0f1923] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#1a2b3c] disabled:opacity-60 transition-colors"
+                          onClick={() => setInvoiceDetailModal(inv)}
+                          className="flex items-center gap-1.5 bg-[#0f1923] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#1a2b3c] transition-colors"
                         >
                           <CheckCircle size={12} />
-                          {approvingId === inv.id ? 'Approving…' : 'Approve'}
+                          View &amp; Approve
                         </button>
                       </td>
                     </tr>
@@ -415,6 +445,17 @@ export default function CEOAlerts() {
             </div>
           </div>
         </div>
+      )}
+
+      {invoiceDetailModal && (
+        <InvoiceDetailModal
+          invoice={invoiceDetailModal}
+          role="ceo"
+          approving={invoiceApproving}
+          onApprove={() => handleApproveInvoice(invoiceDetailModal)}
+          onReject={(comment) => handleRejectInvoiceFromModal(invoiceDetailModal, comment)}
+          onClose={() => setInvoiceDetailModal(null)}
+        />
       )}
     </div>
   );

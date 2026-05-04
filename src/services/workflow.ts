@@ -258,3 +258,39 @@ export async function approveInvoiceCEO(
 
   return { error: null };
 }
+
+export async function rejectInvoice(
+  invoiceId: string,
+  userId: string,
+  comment: string,
+  projectName: string,
+  invoiceNo: string,
+  projectId: string,
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('vendor_invoices')
+    .update({ status: 'rejected', rejected_by: userId, rejection_comment: comment })
+    .eq('id', invoiceId);
+
+  if (error) return { error: error.message };
+
+  const [cc, cm, evp] = await Promise.all([
+    getProfileByRole('cost_controller'),
+    getProfileByRole('construction_manager'),
+    getProfileByRole('evp'),
+  ]);
+
+  const notifyTargets = [cc, cm, evp].filter(Boolean) as { id: string }[];
+  await Promise.all(notifyTargets.map(p =>
+    notify(
+      p.id,
+      `Supplier invoice rejected — ${projectName}`,
+      `Invoice ${invoiceNo} has been rejected: "${comment}". Cost Controller must resolve and resubmit.`,
+      'warning',
+      'project',
+      projectId,
+    )
+  ));
+
+  return { error: null };
+}
