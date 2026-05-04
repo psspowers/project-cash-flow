@@ -1,6 +1,6 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, FolderOpen, PlusCircle, X } from 'lucide-react';
+import { Search, FolderOpen, PlusCircle, X, MoreVertical, Trash2, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -117,7 +117,9 @@ function ProgressBar({ pct }: { pct: number }) {
 
 export default function Projects() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+
+  const canDelete = profile?.role === 'ceo' || profile?.role === 'evp';
 
   const [tab, setTab] = useState<TabKey>('active');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -129,6 +131,12 @@ export default function Projects() {
   const [error, setError] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [clients, setClients] = useState<Entity[]>([]);
+
+  // Delete state
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -190,6 +198,20 @@ export default function Projects() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const { error: rpcError } = await supabase.rpc('delete_project_cascade', { p_id: deleteTarget.id });
+    setDeleting(false);
+    if (rpcError) {
+      setDeleteError(rpcError.message);
+      return;
+    }
+    setProjects((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+    setDeleteTarget(null);
   }
 
   // ---------------------------------------------------------------------------
@@ -358,14 +380,17 @@ export default function Projects() {
               <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
                 Status
               </th>
+              {canDelete && (
+                <th className="px-4 py-3 w-10" />
+              )}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <TableBodySkeleton rows={6} cols={8} />
+              <TableBodySkeleton rows={6} cols={canDelete ? 9 : 8} />
             ) : filteredProjects.length === 0 ? (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={canDelete ? 9 : 8}>
                   <EmptyState
                     tab={tab}
                     hasSearch={search.length > 0}
@@ -385,7 +410,7 @@ export default function Projects() {
                 return (
                   <tr
                     key={project.id}
-                    className="border-b border-gray-50 last:border-0 hover:bg-[#F8F8F7] cursor-pointer transition-colors"
+                    className="group border-b border-gray-50 last:border-0 hover:bg-[#F8F8F7] cursor-pointer transition-colors"
                     onClick={() => navigate(`/projects/${project.id}`)}
                   >
                     {/* Project name + mini progress bar */}
@@ -448,6 +473,26 @@ export default function Projects() {
                         variant={projectBadgeVariant(project.status)}
                       />
                     </td>
+
+                    {/* Actions kebab — CEO/EVP only */}
+                    {canDelete && (
+                      <td
+                        className="px-2 py-3.5 text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ProjectRowMenu
+                          project={project}
+                          isOpen={openMenuId === project.id}
+                          onOpen={() => setOpenMenuId(project.id)}
+                          onClose={() => setOpenMenuId(null)}
+                          onDeleteClick={() => {
+                            setOpenMenuId(null);
+                            setDeleteError(null);
+                            setDeleteTarget(project);
+                          }}
+                        />
+                      </td>
+                    )}
                   </tr>
                 );
               })
@@ -474,6 +519,184 @@ export default function Projects() {
           onSaved={(id) => { setShowNewProject(false); navigate(`/projects/${id}`); }}
         />
       )}
+
+      {deleteTarget && (
+        <DeleteConfirmModal
+          project={deleteTarget}
+          deleting={deleting}
+          error={deleteError}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Project row kebab menu
+// ---------------------------------------------------------------------------
+
+const DELETABLE_STATUSES: ProjectStatus[] = ['estimation_draft', 'budget_draft'];
+
+interface ProjectRowMenuProps {
+  project: Project;
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onDeleteClick: () => void;
+}
+
+function ProjectRowMenu({ project, isOpen, onOpen, onClose, onDeleteClick }: ProjectRowMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isDeletable = DELETABLE_STATUSES.includes(project.status);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [isOpen, onClose]);
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        onClick={isOpen ? onClose : onOpen}
+        className={`p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors group-hover:opacity-100 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
+        title="Project actions"
+      >
+        <MoreVertical size={15} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-black/[0.08] rounded-lg shadow-lg z-30 overflow-hidden">
+          {isDeletable ? (
+            <button
+              onClick={onDeleteClick}
+              className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-[#E24B4A] hover:bg-[#E24B4A]/5 transition-colors"
+            >
+              <Trash2 size={14} />
+              Delete Project
+            </button>
+          ) : (
+            <div className="px-3.5 py-2.5">
+              <div className="flex items-center gap-2.5 text-sm text-gray-400 cursor-not-allowed">
+                <Trash2 size={14} />
+                Delete Project
+              </div>
+              <p className="text-xs text-gray-400 mt-1 leading-snug">
+                Cannot delete an Active or Completed project.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Delete confirmation modal
+// ---------------------------------------------------------------------------
+
+interface DeleteConfirmModalProps {
+  project: Project;
+  deleting: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function DeleteConfirmModal({ project, deleting, error, onConfirm, onCancel }: DeleteConfirmModalProps) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl">
+        {/* Header */}
+        <div className="px-6 pt-6 pb-4 flex items-start gap-4">
+          <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#E24B4A]/10 flex items-center justify-center">
+            <AlertTriangle size={18} className="text-[#E24B4A]" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Delete Project</h2>
+            <p className="text-[13px] text-gray-500 mt-0.5">
+              This action cannot be undone.
+            </p>
+          </div>
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="ml-auto text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 pb-5 space-y-3">
+          <p className="text-[13px] text-gray-700">
+            You are about to permanently delete{' '}
+            <span className="font-semibold text-gray-900">{project.name}</span>.
+          </p>
+          <div className="bg-gray-50 border border-gray-100 rounded-lg px-4 py-3 text-xs text-gray-500 leading-relaxed space-y-1">
+            <p className="font-medium text-gray-700 mb-1.5">All related data will be removed:</p>
+            <ul className="space-y-0.5 list-disc list-inside">
+              <li>Purchase orders &amp; PO milestones</li>
+              <li>Vendor invoices &amp; payments</li>
+              <li>Payment vouchers &amp; checks</li>
+              <li>Client milestones &amp; invoices</li>
+              <li>Cash receipts</li>
+              <li>Project costings &amp; variation orders</li>
+              <li>Cash transfers involving this project</li>
+              <li>Progress reports</li>
+            </ul>
+          </div>
+
+          {error && (
+            <p className="text-xs text-[#E24B4A] bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">
+              {error}
+            </p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="px-4 py-2 text-sm bg-[#E24B4A] text-white rounded-lg hover:bg-[#c73c3c] transition-colors disabled:opacity-60 flex items-center gap-2 min-w-[120px] justify-center"
+          >
+            {deleting ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                Deleting...
+              </>
+            ) : (
+              <>
+                <Trash2 size={13} />
+                Delete Project
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
