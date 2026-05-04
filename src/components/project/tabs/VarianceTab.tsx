@@ -63,11 +63,16 @@ export default function VarianceTab() {
             const { approved, draft } = committedByCategory(k);
             const variance = bud - approved;
             const variancePct = bud > 0 ? (variance / bud) * 100 : 0;
-            const cellCls = approved > bud
-              ? 'bg-[#E24B4A]/10 text-[#E24B4A]'
+            const rowBg = approved > bud
+              ? 'bg-[#E24B4A]/8'
               : approved > est
-              ? 'bg-[#EF9F27]/10 text-[#EF9F27]'
-              : 'bg-[#1D9E75]/10 text-[#1D9E75]';
+              ? 'bg-[#EF9F27]/8'
+              : 'bg-[#1D9E75]/8';
+            const committedTextCls = approved > bud
+              ? 'text-[#E24B4A]'
+              : approved > est
+              ? 'text-[#EF9F27]'
+              : 'text-[#1D9E75]';
             const isExpanded = expandedCats.has(k);
             const catPOs = orders.filter(o => o.cost_category === CATEGORY_MAP[k]);
 
@@ -77,7 +82,7 @@ export default function VarianceTab() {
                   <table className="w-full">
                     <tbody>
                       <tr
-                        className="hover:bg-[#F8F8F7] cursor-pointer"
+                        className={`cursor-pointer hover:brightness-95 transition-all ${rowBg}`}
                         onClick={() => toggleCat(k)}
                       >
                         <td className="px-4 py-2.5 text-gray-700 w-[200px]">
@@ -90,7 +95,7 @@ export default function VarianceTab() {
                         </td>
                         <td className="px-4 py-2.5 text-gray-600 w-[160px]">{fmtTHB(est)}</td>
                         <td className="px-4 py-2.5 text-gray-600 w-[160px]">{fmtTHB(bud)}</td>
-                        <td className={`px-4 py-2.5 font-medium w-[180px] ${cellCls}`}>
+                        <td className={`px-4 py-2.5 font-medium w-[180px] ${committedTextCls}`}>
                           {fmtTHB(approved)}
                           {draft > 0 && (
                             <span className="text-[10px] text-amber-600 block mt-0.5">+ {fmtTHB(draft)} pending</span>
