@@ -410,7 +410,7 @@ export default function Projects() {
                 return (
                   <tr
                     key={project.id}
-                    className="group border-b border-gray-50 last:border-0 hover:bg-[#F8F8F7] cursor-pointer transition-colors"
+                    className="border-b border-gray-50 last:border-0 hover:bg-[#F8F8F7] cursor-pointer transition-colors"
                     onClick={() => navigate(`/projects/${project.id}`)}
                   >
                     {/* Project name + mini progress bar */}
@@ -573,7 +573,7 @@ function ProjectRowMenu({ project, isOpen, onOpen, onClose, onDeleteClick }: Pro
     <div className="relative" ref={menuRef}>
       <button
         onClick={isOpen ? onClose : onOpen}
-        className={`p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors group-hover:opacity-100 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
+        className="p-1.5 rounded-md text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-colors"
         title="Project actions"
       >
         <MoreVertical size={15} />
