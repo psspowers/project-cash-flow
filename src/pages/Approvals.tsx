@@ -96,6 +96,7 @@ export default function Approvals() {
   const [transferApprovalError, setTransferApprovalError] = useState<string | null>(null);
 
   const [pendingPOs, setPendingPOs] = useState<PurchaseOrder[]>([]);
+  const [completedPOs, setCompletedPOs] = useState<PurchaseOrder[]>([]);
   const [poReviewModal, setPoReviewModal] = useState<PurchaseOrder | null>(null);
   const [poRejectReason, setPoRejectReason] = useState('');
   const [poAction, setPoAction] = useState(false);
@@ -107,7 +108,7 @@ export default function Approvals() {
 
   async function loadData() {
     setLoading(true);
-    const [{ data: reps }, { data: purchaseOrders }, { data: invs }, { data: proj }, { data: costingData }, { data: profileData }, { data: pendingPOData }] = await Promise.all([
+    const [{ data: reps }, { data: purchaseOrders }, { data: invs }, { data: proj }, { data: costingData }, { data: profileData }, { data: pendingPOData }, { data: completedPOData }] = await Promise.all([
       supabase.from('progress_reports').select('*, project:projects(*), purchase_order:purchase_orders(*, vendor:entities!vendor_id(*))').order('created_at', { ascending: false }),
       supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').in('status', ['approved', 'partially_paid']),
       supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*)').in('status', ['received', 'approved_cm', 'approved_evp']),
@@ -115,10 +116,12 @@ export default function Approvals() {
       supabase.from('project_costings').select('*').in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
       supabase.from('user_profiles').select('*'),
       supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').eq('status', 'pending_approval').order('created_at', { ascending: false }),
+      supabase.from('purchase_orders').select('*, project:projects(name), vendor:entities!vendor_id(name)').in('status', ['approved', 'partially_paid', 'fully_paid']).order('approved_at', { ascending: false }).limit(100),
     ]);
     setReports(reps || []);
     setPos(purchaseOrders || []);
     setPendingPOs((pendingPOData as PurchaseOrder[]) || []);
+    setCompletedPOs((completedPOData as PurchaseOrder[]) || []);
     setInvoices(invs || []);
     setProjects(proj || []);
     setProfiles(profileData || []);
@@ -582,6 +585,16 @@ export default function Approvals() {
     return [];
   }
 
+  function filterCompletedPOs(): PurchaseOrder[] {
+    if (!profile || tab !== 'completed') return [];
+    const r = profile.role;
+    if (r === 'construction_manager') return completedPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
+    if (r === 'evp') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
+    if (r === 'ceo') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_EVP);
+    if (r === 'cost_controller') return completedPOs;
+    return [];
+  }
+
   function canApprovePO(po: PurchaseOrder): boolean {
     const r = profile?.role ?? '';
     if (r === 'construction_manager') return po.po_amount_incl_vat < PO_THRESHOLD_CM;
@@ -671,6 +684,10 @@ export default function Approvals() {
   const showPOSection = filteredPOs.length > 0 &&
     (role === 'construction_manager' || role === 'evp' || role === 'ceo' ||
      (role === 'cost_controller' && tab === 'with_others'));
+
+  const filteredCompletedPOs = filterCompletedPOs();
+  const showCompletedPOSection = tab === 'completed' && filteredCompletedPOs.length > 0 &&
+    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'cost_controller');
 
   return (
     <div className="space-y-5">
@@ -844,6 +861,64 @@ export default function Approvals() {
                     <p className="text-xs text-gray-500">Awaiting {approver} approval</p>
                   </div>
                 )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showCompletedPOSection && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <ShoppingCart size={16} className="text-[#1D9E75]" />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Approved Purchase Orders</h2>
+            <span className="bg-[#1D9E75]/10 text-[#1D9E75] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredCompletedPOs.length}</span>
+          </div>
+          {filteredCompletedPOs.map(po => {
+            const vendor = po.vendor as { name: string } | undefined;
+            const project = po.project as { name: string } | undefined;
+            const statusColors: Record<string, string> = {
+              approved: 'bg-[#1D9E75]/10 text-[#1D9E75]',
+              partially_paid: 'bg-[#EF9F27]/10 text-[#EF9F27]',
+              fully_paid: 'bg-[#378ADD]/10 text-[#378ADD]',
+            };
+            const statusColor = statusColors[po.status] ?? 'bg-gray-100 text-gray-600';
+            return (
+              <div key={po.id} className="bg-white rounded-lg border-l-4 border-l-[#1D9E75] border border-gray-200 p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor}`}>
+                        {po.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                      </span>
+                      {po.pss_po_no && (
+                        <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{po.pss_po_no}</span>
+                      )}
+                      {po.has_supplier_milestones && (
+                        <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">Milestone PO</span>
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-gray-800">{project?.name ?? '—'}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? 'No supplier assigned'} · {po.description ?? '—'}</p>
+                    <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
+                      {po.approved_at && (
+                        <span className="flex items-center gap-1">
+                          <CheckCircle size={10} className="text-[#1D9E75]" />
+                          Approved {formatDate(po.approved_at)}
+                        </span>
+                      )}
+                      {po.approved_by && (
+                        <span>by {profileName(po.approved_by)}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right space-y-0.5">
+                    <p className="text-xs text-gray-400">Contract excl VAT</p>
+                    <p className="text-sm font-semibold text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</p>
+                    <p className="text-xs text-gray-400">Total incl VAT</p>
+                    <p className="text-base font-bold text-[#0f1923]">{fmtTHB(po.po_amount_incl_vat)}</p>
+                  </div>
+                </div>
               </div>
             );
           })}
