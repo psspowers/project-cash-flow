@@ -45,28 +45,44 @@ export interface InvoiceSubmitParams {
   poNumber: string | null;
   vendorName: string;
   milestoneNumber: number;
+  existingInvoiceId?: string | null;
 }
 
 export async function submitInvoice(params: InvoiceSubmitParams): Promise<{ error: string | null }> {
   const {
     poId, milestoneId, amount, invoiceNo, projectId, vendorId,
     costControllerId, projectName, poNumber, vendorName, milestoneNumber,
+    existingInvoiceId,
   } = params;
 
-  const { error: insertError } = await supabase.from('vendor_invoices').insert({
-    po_id: poId,
-    project_id: projectId,
-    vendor_id: vendorId,
-    po_milestone_id: milestoneId,
-    vendor_invoice_no: invoiceNo,
-    invoice_amount_incl_vat: amount,
-    received_amount: 0,
-    wht_3pct: 0,
-    net_payable: amount,
-    status: 'received',
-  });
+  if (existingInvoiceId) {
+    const { error: updateError } = await supabase
+      .from('vendor_invoices')
+      .update({
+        vendor_invoice_no: invoiceNo,
+        invoice_amount_incl_vat: amount,
+        net_payable: amount,
+        po_milestone_id: milestoneId,
+      })
+      .eq('id', existingInvoiceId);
 
-  if (insertError) return { error: insertError.message };
+    if (updateError) return { error: updateError.message };
+  } else {
+    const { error: insertError } = await supabase.from('vendor_invoices').insert({
+      po_id: poId,
+      project_id: projectId,
+      vendor_id: vendorId,
+      po_milestone_id: milestoneId,
+      vendor_invoice_no: invoiceNo,
+      invoice_amount_incl_vat: amount,
+      received_amount: 0,
+      wht_3pct: 0,
+      net_payable: amount,
+      status: 'received',
+    });
+
+    if (insertError) return { error: insertError.message };
+  }
 
   await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestoneId);
 

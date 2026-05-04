@@ -46,6 +46,7 @@ export default function OrdersTab() {
   const [logInvoiceNo, setLogInvoiceNo] = useState('');
   const [logInvoiceAmount, setLogInvoiceAmount] = useState('');
   const [logInvoicePreFilled, setLogInvoicePreFilled] = useState(false);
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [isLoggingInvoice, setIsLoggingInvoice] = useState(false);
 
   const poCatTotal = (cat: CostCategory) =>
@@ -157,12 +158,14 @@ export default function OrdersTab() {
         poNumber: po.pss_po_no,
         vendorName: vendor?.name ?? 'Supplier',
         milestoneNumber: milestone.milestone_number,
+        existingInvoiceId,
       });
       if (error) { alert('Failed to log invoice: ' + error); return; }
       setLogInvoiceTarget(null);
       setLogInvoiceNo('');
       setLogInvoiceAmount('');
       setLogInvoicePreFilled(false);
+      setEditingInvoiceId(null);
       await reload();
     } finally {
       setIsLoggingInvoice(false);
@@ -311,7 +314,7 @@ export default function OrdersTab() {
                                   // Look for an existing unlinked received invoice for this PO
                                   const { data: existing } = await supabase
                                     .from('vendor_invoices')
-                                    .select('vendor_invoice_no, invoice_amount_incl_vat')
+                                    .select('id, vendor_invoice_no, invoice_amount_incl_vat')
                                     .eq('po_id', o.id)
                                     .is('po_milestone_id', null)
                                     .eq('status', 'received')
@@ -322,9 +325,11 @@ export default function OrdersTab() {
                                     setLogInvoiceNo(existing.vendor_invoice_no);
                                     setLogInvoiceAmount(String(existing.invoice_amount_incl_vat ?? pm.amount_due));
                                     setLogInvoicePreFilled(true);
+                                    setEditingInvoiceId((existing as { id: string }).id);
                                   } else {
                                     setLogInvoiceNo('');
                                     setLogInvoicePreFilled(false);
+                                    setEditingInvoiceId(null);
                                   }
                                 }}
                                 className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap shrink-0"
@@ -383,7 +388,7 @@ export default function OrdersTab() {
               <h3 className="font-semibold text-[#0f1923] text-sm">
                 Log Supplier Invoice — MS{logInvoiceTarget.milestone.milestone_number}
               </h3>
-              <button onClick={() => setLogInvoiceTarget(null)}><X size={16} className="text-gray-400" /></button>
+              <button onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}><X size={16} className="text-gray-400" /></button>
             </div>
             <div className="p-5 space-y-3">
               <div className="text-xs text-gray-500 bg-[#F8F8F7] rounded-lg px-3 py-2 space-y-0.5">
@@ -422,7 +427,7 @@ export default function OrdersTab() {
             </div>
             <div className="px-5 py-4 border-t border-[rgba(0,0,0,0.08)] flex justify-end gap-2">
               <button
-                onClick={() => setLogInvoiceTarget(null)}
+                onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}
                 className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700"
               >Cancel</button>
               <button
