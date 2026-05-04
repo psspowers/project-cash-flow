@@ -80,7 +80,7 @@ export default function PaymentQueue() {
 
     if (netPaid >= 1000000) {
       const { data: managerProfile } = await supabase
-        .from('profiles')
+        .from('user_profiles')
         .select('id')
         .eq('role', 'accounts_manager')
         .maybeSingle();
@@ -100,7 +100,7 @@ export default function PaymentQueue() {
 
     if (netPaid >= 3000000) {
       const { data: ceoProfile } = await supabase
-        .from('profiles')
+        .from('user_profiles')
         .select('id')
         .eq('role', 'ceo')
         .maybeSingle();

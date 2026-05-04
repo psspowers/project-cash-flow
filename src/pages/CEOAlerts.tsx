@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Bell, AlertTriangle, ArrowRightLeft, CheckCircle, XCircle, X } from 'lucide-react';
+import { Bell, AlertTriangle, ArrowRightLeft, CheckCircle, XCircle, X, FileCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { PaymentVoucher, ProjectCashTransfer, Project, fmtTHB, UserProfile } from '../types';
+import { PaymentVoucher, ProjectCashTransfer, Project, VendorInvoice, fmtTHB, UserProfile } from '../types';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
+import { approveInvoiceCEO } from '../services/workflow';
 
 export default function CEOAlerts() {
   const { user } = useAuth();
   const [vouchers, setVouchers] = useState<PaymentVoucher[]>([]);
+  const [pendingInvoices, setPendingInvoices] = useState<VendorInvoice[]>([]);
   const [pendingTransfers, setPendingTransfers] = useState<ProjectCashTransfer[]>([]);
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
   const [transferModal, setTransferModal] = useState<ProjectCashTransfer | null>(null);
   const [transferModalMode, setTransferModalMode] = useState<'approve' | 'reject'>('approve');
   const [transferNotes, setTransferNotes] = useState('');
@@ -22,11 +25,16 @@ export default function CEOAlerts() {
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
-    const [{ data: vouData }, { data: txData }, { data: profData }] = await Promise.all([
+    const [{ data: vouData }, { data: invData }, { data: txData }, { data: profData }] = await Promise.all([
       supabase
         .from('payment_vouchers')
         .select('*, project:projects(*), vendor_invoice:vendor_invoices(*, vendor:entities!vendor_id(*))')
         .eq('ceo_notified', true)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('vendor_invoices')
+        .select('*, purchase_order:purchase_orders(pss_po_no, project:projects(name), vendor:entities(name))')
+        .eq('status', 'approved_evp')
         .order('created_at', { ascending: false }),
       supabase
         .from('project_cash_transfers')
@@ -36,9 +44,29 @@ export default function CEOAlerts() {
       supabase.from('user_profiles').select('*'),
     ]);
     setVouchers(vouData || []);
+    setPendingInvoices((invData ?? []) as VendorInvoice[]);
     setPendingTransfers((txData ?? []) as ProjectCashTransfer[]);
     setProfiles((profData ?? []) as UserProfile[]);
     setLoading(false);
+  }
+
+  async function handleApproveInvoice(invoice: VendorInvoice) {
+    if (!user || approvingId) return;
+    setApprovingId(invoice.id);
+    const po = (invoice as any).purchase_order;
+    const projectName = po?.project?.name ?? 'Unknown Project';
+    const invoiceNo = invoice.vendor_invoice_no ?? invoice.id;
+    const { error } = await approveInvoiceCEO(
+      invoice.id,
+      user.id,
+      projectName,
+      invoiceNo,
+      invoice.invoice_amount_incl_vat,
+      invoice.project_id,
+    );
+    setApprovingId(null);
+    if (error) { alert(error); return; }
+    await loadData();
   }
 
   function profileName(uid?: string | null): string {
@@ -127,9 +155,9 @@ export default function CEOAlerts() {
           <h1 className="text-xl font-bold text-gray-900">CEO Alerts</h1>
           <p className="text-sm text-gray-500 mt-0.5">Payments ≥ ฿3,000,000 and margin transfers pending your approval</p>
         </div>
-        {(vouchers.length + pendingTransfers.length) > 0 && (
+        {(vouchers.length + pendingInvoices.length + pendingTransfers.length) > 0 && (
           <span className="bg-[#E24B4A] text-white text-xs rounded-full px-2.5 py-1 font-medium">
-            {vouchers.length + pendingTransfers.length} alerts
+            {vouchers.length + pendingInvoices.length + pendingTransfers.length} alerts
           </span>
         )}
       </div>
@@ -184,6 +212,75 @@ export default function CEOAlerts() {
         </div>
       )}
 
+      {/* High-Value Supplier Invoices — Operational Approval */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <FileCheck size={16} className="text-[#E24B4A]" />
+          <h2 className="text-sm font-semibold text-[#0f1923]">High-Value Supplier Invoices — Pending Your Approval</h2>
+          {pendingInvoices.length > 0 && (
+            <span className="bg-[#E24B4A]/10 text-[#E24B4A] text-xs font-semibold px-2 py-0.5 rounded-full">
+              {pendingInvoices.length}
+            </span>
+          )}
+        </div>
+
+        {pendingInvoices.length === 0 ? (
+          <div className="bg-white rounded-lg border border-gray-200 py-10 flex flex-col items-center gap-2">
+            <Bell size={28} className="text-gray-200" />
+            <p className="text-sm text-gray-400">No invoices awaiting your approval</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gray-50/50 border-b border-gray-100">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Project</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoice No.</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">PO No.</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingInvoices.map(inv => {
+                  const po = (inv as any).purchase_order;
+                  const vendorName = po?.vendor?.name ?? '—';
+                  const projectName = po?.project?.name?.split('–')[0]?.trim() ?? '—';
+                  const poNo = po?.pss_po_no ?? '—';
+                  return (
+                    <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      <td className="px-4 py-3 text-sm text-gray-800">{vendorName}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{projectName}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-700">{inv.vendor_invoice_no || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{poNo}</td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(inv.invoice_amount_incl_vat)}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge label="EVP Approved" variant="success" />
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => handleApproveInvoice(inv)}
+                          disabled={approvingId === inv.id}
+                          className="flex items-center gap-1.5 bg-[#0f1923] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#1a2b3c] disabled:opacity-60 transition-colors"
+                        >
+                          <CheckCircle size={12} />
+                          {approvingId === inv.id ? 'Approving…' : 'Approve'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* High-Value Payment Vouchers — Finance Disbursement Alerts */}
       <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg p-4 flex items-start gap-3">
         <AlertTriangle size={16} className="text-[#E24B4A] shrink-0 mt-0.5" />
         <p className="text-sm text-[#E24B4A]">
