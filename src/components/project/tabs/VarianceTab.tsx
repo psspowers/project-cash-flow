@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import { fmtTHB, COSTING_CATEGORY_KEYS } from '../../../types';
 import { CATEGORY_KEY_LABELS, CATEGORY_MAP } from '../projectDetailConstants';
@@ -7,6 +9,14 @@ const DRAFT_STATUSES = new Set(['draft', 'pending_approval']);
 
 export default function VarianceTab() {
   const { estimation, budget, orders, poMilestones, vos, totalReceived, totalPaid, voTotalCost } = useProjectDetail();
+
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  const toggleCat = (cat: string) => {
+    const next = new Set(expandedCats);
+    if (next.has(cat)) next.delete(cat);
+    else next.add(cat);
+    setExpandedCats(next);
+  };
 
   // Build a lookup: po id -> { cost_category, status }
   const poMeta = new Map(orders.map(o => [o.id, { category: o.cost_category, status: o.status }]));
@@ -58,22 +68,84 @@ export default function VarianceTab() {
               : approved > est
               ? 'bg-[#EF9F27]/10 text-[#EF9F27]'
               : 'bg-[#1D9E75]/10 text-[#1D9E75]';
+            const isExpanded = expandedCats.has(k);
+            const catPOs = orders.filter(o => o.cost_category === CATEGORY_MAP[k]);
+
             return (
-              <tr key={k} className="border-b border-[rgba(0,0,0,0.04)] hover:bg-[#F8F8F7]">
-                <td className="px-4 py-2.5 text-gray-700">{CATEGORY_KEY_LABELS[k]}</td>
-                <td className="px-4 py-2.5 text-gray-600">{fmtTHB(est)}</td>
-                <td className="px-4 py-2.5 text-gray-600">{fmtTHB(bud)}</td>
-                <td className={`px-4 py-2.5 font-medium ${cellCls}`}>
-                  {fmtTHB(approved)}
-                  {draft > 0 && (
-                    <span className="text-[10px] text-amber-600 block mt-0.5">+ {fmtTHB(draft)} pending</span>
-                  )}
-                </td>
-                <td className={`px-4 py-2.5 font-medium ${variance < 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
-                  {fmtTHB(variance)}
-                </td>
-                <td className={`px-4 py-2.5 font-medium ${variancePct < 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
-                  {variancePct.toFixed(1)}%
+              <tr key={k} className="border-b border-[rgba(0,0,0,0.04)]">
+                <td colSpan={6} className="p-0">
+                  <table className="w-full">
+                    <tbody>
+                      <tr
+                        className="hover:bg-[#F8F8F7] cursor-pointer"
+                        onClick={() => toggleCat(k)}
+                      >
+                        <td className="px-4 py-2.5 text-gray-700 w-[200px]">
+                          <div className="flex items-center gap-1.5">
+                            {isExpanded
+                              ? <ChevronDown size={14} className="text-gray-400 shrink-0" />
+                              : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
+                            {CATEGORY_KEY_LABELS[k]}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-gray-600 w-[160px]">{fmtTHB(est)}</td>
+                        <td className="px-4 py-2.5 text-gray-600 w-[160px]">{fmtTHB(bud)}</td>
+                        <td className={`px-4 py-2.5 font-medium w-[180px] ${cellCls}`}>
+                          {fmtTHB(approved)}
+                          {draft > 0 && (
+                            <span className="text-[10px] text-amber-600 block mt-0.5">+ {fmtTHB(draft)} pending</span>
+                          )}
+                        </td>
+                        <td className={`px-4 py-2.5 font-medium w-[140px] ${variance < 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                          {fmtTHB(variance)}
+                        </td>
+                        <td className={`px-4 py-2.5 font-medium ${variancePct < 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                          {variancePct.toFixed(1)}%
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className="bg-[#F8F8F7]">
+                          <td colSpan={6} className="px-8 py-3">
+                            <div className="bg-white border border-gray-200 rounded-md overflow-hidden shadow-sm">
+                              {catPOs.length === 0 ? (
+                                <p className="p-3 text-xs text-gray-400 text-center">No Purchase Orders for this category.</p>
+                              ) : (
+                                <table className="w-full text-xs">
+                                  <thead className="bg-gray-50 border-b border-gray-100 text-gray-500">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-medium">PO No.</th>
+                                      <th className="px-3 py-2 text-left font-medium">Vendor</th>
+                                      <th className="px-3 py-2 text-left font-medium">Status</th>
+                                      <th className="px-3 py-2 text-right font-medium">Amount (excl VAT)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-50">
+                                    {catPOs.map(po => (
+                                      <tr key={po.id} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 font-medium text-gray-700">{po.pss_po_no || 'Draft PO'}</td>
+                                        <td className="px-3 py-2 text-gray-600">{(po as any).vendor?.name ?? po.supplier_name_raw ?? '—'}</td>
+                                        <td className="px-3 py-2">
+                                          <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                            ['approved', 'partially_paid', 'fully_paid'].includes(po.status)
+                                              ? 'bg-[#1D9E75]/10 text-[#1D9E75]'
+                                              : 'bg-amber-100 text-amber-700'
+                                          }`}>
+                                            {po.status.replace(/_/g, ' ')}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 text-right text-gray-700">{fmtTHB(po.po_amount_excl_vat)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </td>
               </tr>
             );
