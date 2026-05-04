@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PurchaseOrder, Project, Entity, COST_CATEGORY_LABELS } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -8,7 +8,7 @@ import { formatTHBCompact, formatDate } from '../utils/formatters';
 import POCreationWizard from '../components/pos/POCreationWizard';
 
 export default function PurchaseOrders() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [vendors, setVendors] = useState<Entity[]>([]);
@@ -16,8 +16,31 @@ export default function PurchaseOrders() {
   const [projectFilter, setProjectFilter] = useState('');
   const [showWizard, setShowWizard] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => { loadData(); }, []);
+
+  async function handleSubmitDraft(poId: string) {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({
+          status: 'pending_approval',
+          submitted_at: new Date().toISOString(),
+          submitted_by: user?.id ?? null,
+        })
+        .eq('id', poId);
+      if (error) {
+        alert('Failed to submit PO for approval. Please try again.');
+        return;
+      }
+      await loadData();
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   async function loadData() {
     const [{ data: purchaseOrders }, { data: proj }, { data: vend }] = await Promise.all([
@@ -114,11 +137,12 @@ export default function PurchaseOrders() {
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Total incl. VAT</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-4 py-3" />
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No purchase orders found</td></tr>
+              <tr><td colSpan={10} className="text-center py-12 text-gray-400 text-sm">No purchase orders found</td></tr>
             ) : filtered.map(po => (
               <tr key={po.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                 <td className="px-4 py-3 text-sm font-medium text-gray-800">
@@ -136,6 +160,18 @@ export default function PurchaseOrders() {
                   <Badge label={po.status.replace(/_/g, ' ')} variant={statusVariant(po.status)} />
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-500">{formatDate(po.po_date)}</td>
+                <td className="px-4 py-3">
+                  {po.status === 'draft' && !po.pss_po_no && profile?.role === 'cost_controller' && (
+                    <button
+                      onClick={() => handleSubmitDraft(po.id)}
+                      disabled={isSubmitting}
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-[#EF9F27] text-[#EF9F27] text-xs font-medium rounded-lg hover:bg-[#EF9F27]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                    >
+                      <Send size={11} />
+                      Submit
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

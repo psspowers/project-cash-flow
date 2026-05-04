@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import {
@@ -39,6 +39,7 @@ export default function OrdersTab() {
   });
   const [formError, setFormError] = useState('');
   const [overrunAcknowledged, setOverrunAcknowledged] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const poCatTotal = (cat: CostCategory) =>
     orders.filter(o => o.cost_category === cat).reduce((s, o) => s + o.po_amount_excl_vat, 0);
@@ -87,6 +88,28 @@ export default function OrdersTab() {
     if (remaining < 0) return null;
     return { remaining, label: CATEGORY_KEY_LABELS[catKey] };
   };
+
+  async function handleSubmitDraft(poId: string) {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({
+          status: 'pending_approval',
+          submitted_at: new Date().toISOString(),
+          submitted_by: user?.id ?? null,
+        })
+        .eq('id', poId);
+      if (error) {
+        alert('Failed to submit PO for approval. Please try again.');
+        return;
+      }
+      await reload();
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   async function markMilestoneComplete(milestoneId: string, poNo: string | null, vendorName: string, milestoneNum: number, amountDue: number) {
     if (!project) return;
@@ -165,8 +188,8 @@ export default function OrdersTab() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-              {['', 'PO No.', 'Vendor', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status'].map(h => (
-                <th key={h} className={`px-4 py-2.5 text-left font-medium text-gray-500 ${h === 'Balance Due' ? 'text-[#E24B4A]' : ''}`}>{h}</th>
+              {['', 'PO No.', 'Vendor', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status', ''].map((h, i) => (
+                <th key={i} className={`px-4 py-2.5 text-left font-medium text-gray-500 ${h === 'Balance Due' ? 'text-[#E24B4A]' : ''}`}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -197,6 +220,18 @@ export default function OrdersTab() {
                   <td className="px-4 py-2.5">
                     <Badge label={o.status.replace(/_/g, ' ')} variant={statusVariant(o.status)} />
                   </td>
+                  <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
+                    {o.status === 'draft' && !o.pss_po_no && isCostController && (
+                      <button
+                        onClick={() => handleSubmitDraft(o.id)}
+                        disabled={isSubmitting}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#EF9F27] text-[#EF9F27] text-xs font-medium rounded-lg hover:bg-[#EF9F27]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                      >
+                        <Send size={11} />
+                        Submit
+                      </button>
+                    )}
+                  </td>
                 </tr>
                 {expandedPO === o.id && (() => {
                   const vendorName = (o.vendor as Entity | undefined)?.name ?? '—';
@@ -207,7 +242,7 @@ export default function OrdersTab() {
                     return oMilestones.length > 0 ? oMilestones.map(pm => (
                       <tr key={pm.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
                         <td className="px-3 py-2" />
-                        <td colSpan={8} className="px-4 py-2">
+                        <td colSpan={9} className="px-4 py-2">
                           <div className="flex items-center justify-between gap-4">
                             <div className="flex items-center gap-4 text-xs text-gray-600 flex-1 flex-wrap">
                               <span className="font-semibold text-[#0f1923]">MS{pm.milestone_number}</span>
@@ -234,14 +269,14 @@ export default function OrdersTab() {
                     )) : (
                       <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
                         <td className="px-3 py-2" />
-                        <td colSpan={8} className="px-4 py-2 text-xs text-gray-400 italic">No milestones configured for this PO</td>
+                        <td colSpan={9} className="px-4 py-2 text-xs text-gray-400 italic">No milestones configured for this PO</td>
                       </tr>
                     );
                   }
                   return o.invoices.length > 0 ? o.invoices.map(inv => (
                     <tr key={inv.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
                       <td className="px-3 py-2" />
-                      <td colSpan={8} className="px-4 py-2">
+                      <td colSpan={9} className="px-4 py-2">
                         <div className="grid grid-cols-6 gap-4 text-xs text-gray-600">
                           <span><span className="text-gray-400">Invoice: </span>{inv.vendor_invoice_no ?? '—'}</span>
                           <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
@@ -258,14 +293,14 @@ export default function OrdersTab() {
                   )) : (
                     <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
                       <td className="px-3 py-2" />
-                      <td colSpan={8} className="px-4 py-2 text-xs text-gray-400 italic">No invoices for this PO</td>
+                      <td colSpan={9} className="px-4 py-2 text-xs text-gray-400 italic">No invoices for this PO</td>
                     </tr>
                   );
                 })()}
               </>
             ))}
             {orders.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">No purchase orders</td></tr>
+              <tr><td colSpan={10} className="px-4 py-6 text-center text-gray-400">No purchase orders</td></tr>
             )}
           </tbody>
         </table>
