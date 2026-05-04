@@ -30,6 +30,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .select('*')
       .eq('id', userId)
       .maybeSingle();
+    if (data) {
+      const overrideRole = sessionStorage.getItem('dev_role_override');
+      if (overrideRole) data.role = overrideRole as UserProfile['role'];
+    }
     setProfile(data);
   }
 

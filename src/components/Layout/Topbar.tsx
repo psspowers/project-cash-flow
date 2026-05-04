@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, LogOut, ChevronDown, X, CheckCheck } from 'lucide-react';
+import { Bell, LogOut, X, CheckCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Notification, ROLE_LABELS } from '../../types';
@@ -20,6 +20,18 @@ const typeIcon: Record<string, string> = {
   alert: '🔔',
 };
 
+const TEST_ROLES = [
+  { value: 'reset', label: 'Reset to Actual Role' },
+  { value: 'ceo', label: 'CEO' },
+  { value: 'evp', label: 'EVP' },
+  { value: 'construction_manager', label: 'Construction Manager' },
+  { value: 'cost_controller', label: 'Cost Controller' },
+  { value: 'procurement_executive', label: 'Procurement Executive' },
+  { value: 'accounts_supervisor', label: 'Accounts Supervisor' },
+  { value: 'accounts_manager', label: 'Accounts Manager' },
+  { value: 'banking_finance_officer', label: 'Banking/Finance Exec' },
+];
+
 function notifHref(entityType: string | null | undefined, entityId: string | null | undefined): string | null {
   if (!entityType) return null;
   if (entityType === 'project' && entityId) return `/projects/${entityId}?tab=costing`;
@@ -33,7 +45,6 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
   const { profile, signOut } = useAuth();
   const navigate = useNavigate();
   const [showNotifs, setShowNotifs] = useState(false);
-  const [showUser, setShowUser] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const unread = notifications.filter(n => !n.is_read).length;
 
@@ -47,6 +58,15 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
+  const handleRoleSwitch = (newRole: string) => {
+    if (newRole === 'reset') {
+      sessionStorage.removeItem('dev_role_override');
+    } else {
+      sessionStorage.setItem('dev_role_override', newRole);
+    }
+    window.location.reload();
+  };
+
   const initials = profile?.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
 
   return (
@@ -56,6 +76,20 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Dev/Test Role Switcher */}
+        <div className="flex items-center gap-2 bg-amber-50 px-3 py-1.5 rounded-md border border-amber-200">
+          <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Test Mode</span>
+          <select
+            value={sessionStorage.getItem('dev_role_override') || 'reset'}
+            onChange={e => handleRoleSwitch(e.target.value)}
+            className="text-xs bg-transparent border-none text-amber-900 font-medium focus:ring-0 cursor-pointer outline-none"
+          >
+            {TEST_ROLES.map(r => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Notification Bell */}
         <div className="relative" ref={notifRef}>
           <button
