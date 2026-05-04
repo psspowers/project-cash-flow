@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import {
   Plus, Search, Pencil, X, Check, Building2, ShieldAlert,
   Globe, Phone, Mail, User, CreditCard, FileText, ChevronDown,
+  ShoppingCart, Receipt, TrendingUp,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { hasRole, PROCUREMENT_WRITE_ROLES } from '../config/roles';
+import { formatTHB, formatTHBCompact, formatDate } from '../utils/formatters';
 import type { SupplierType } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,37 @@ const MODAL_TABS: { id: ModalTab; label: string; icon: React.ReactNode }[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// History types
+// ---------------------------------------------------------------------------
+
+interface SupplierPO {
+  id: string;
+  pss_po_no: string | null;
+  supplier_name_raw: string;
+  description: string | null;
+  cost_category: string;
+  po_amount_excl_vat: number;
+  po_amount_incl_vat: number;
+  status: string;
+  created_at: string;
+  project_name: string | null;
+}
+
+interface SupplierInvoice {
+  id: string;
+  vendor_invoice_no: string | null;
+  invoice_date: string | null;
+  invoice_amount_incl_vat: number;
+  net_payable: number;
+  received_amount: number;
+  status: string;
+  planned_payment_date: string | null;
+  supplier_name_raw: string;
+}
+
+type DetailTab = 'info' | 'orders' | 'payments';
+
+// ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
@@ -166,8 +199,12 @@ export default function Suppliers() {
   // Inline deactivate confirm
   const [confirmToggleId, setConfirmToggleId] = useState<string | null>(null);
 
-  // Expanded row for quick detail view
+  // Expanded row with sub-tabs
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>('info');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPOs, setHistoryPOs] = useState<SupplierPO[]>([]);
+  const [historyInvoices, setHistoryInvoices] = useState<SupplierInvoice[]>([]);
 
   useEffect(() => { loadSuppliers(); }, []);
 
@@ -179,6 +216,96 @@ export default function Suppliers() {
       .order('name');
     setSuppliers((data as Supplier[]) || []);
     setLoading(false);
+  }
+
+  async function toggleExpand(s: Supplier) {
+    if (expandedId === s.id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(s.id);
+    setDetailTab('info');
+    setHistoryPOs([]);
+    setHistoryInvoices([]);
+    setHistoryLoading(true);
+
+    // Derive search tokens from supplier name — use the whole name for ILIKE
+    const nameToken = s.name.replace(/Co\.,?\s*Ltd\.?/gi, '').replace(/\s+/g, ' ').trim();
+
+    const [{ data: pos }, { data: invoices }] = await Promise.all([
+      supabase
+        .from('purchase_orders')
+        .select('id, pss_po_no, supplier_name_raw, description, cost_category, po_amount_excl_vat, po_amount_incl_vat, status, created_at, projects(name)')
+        .or(`vendor_id.eq.${s.id},supplier_name_raw.ilike.%${nameToken}%`)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase
+        .from('vendor_invoices')
+        .select('id, vendor_invoice_no, invoice_date, invoice_amount_incl_vat, net_payable, received_amount, status, planned_payment_date, purchase_orders(supplier_name_raw)')
+        .or(`vendor_id.eq.${s.id}`)
+        .order('invoice_date', { ascending: false })
+        .limit(50),
+    ]);
+
+    // Shape PO results
+    const shapedPOs: SupplierPO[] = ((pos as any[]) || []).map(p => ({
+      id: p.id,
+      pss_po_no: p.pss_po_no,
+      supplier_name_raw: p.supplier_name_raw,
+      description: p.description,
+      cost_category: p.cost_category,
+      po_amount_excl_vat: Number(p.po_amount_excl_vat),
+      po_amount_incl_vat: Number(p.po_amount_incl_vat),
+      status: p.status,
+      created_at: p.created_at,
+      project_name: p.projects?.name ?? null,
+    }));
+
+    // For invoices, also fetch via po_id chain if vendor_id is null
+    const poIds = shapedPOs.map(p => p.id);
+    let allInvoices: SupplierInvoice[] = [];
+
+    if (poIds.length > 0) {
+      const { data: chainedInvoices } = await supabase
+        .from('vendor_invoices')
+        .select('id, vendor_invoice_no, invoice_date, invoice_amount_incl_vat, net_payable, received_amount, status, planned_payment_date, purchase_orders(supplier_name_raw)')
+        .in('po_id', poIds)
+        .order('invoice_date', { ascending: false })
+        .limit(100);
+
+      allInvoices = ((chainedInvoices as any[]) || []).map(i => ({
+        id: i.id,
+        vendor_invoice_no: i.vendor_invoice_no,
+        invoice_date: i.invoice_date,
+        invoice_amount_incl_vat: Number(i.invoice_amount_incl_vat),
+        net_payable: Number(i.net_payable),
+        received_amount: Number(i.received_amount),
+        status: i.status,
+        planned_payment_date: i.planned_payment_date,
+        supplier_name_raw: i.purchase_orders?.supplier_name_raw ?? '',
+      }));
+    }
+
+    // Merge direct vendor_id invoices
+    const directInvoices: SupplierInvoice[] = ((invoices as any[]) || []).map(i => ({
+      id: i.id,
+      vendor_invoice_no: i.vendor_invoice_no,
+      invoice_date: i.invoice_date,
+      invoice_amount_incl_vat: Number(i.invoice_amount_incl_vat),
+      net_payable: Number(i.net_payable),
+      received_amount: Number(i.received_amount),
+      status: i.status,
+      planned_payment_date: i.planned_payment_date,
+      supplier_name_raw: i.purchase_orders?.supplier_name_raw ?? '',
+    }));
+
+    // Deduplicate by id
+    const invoiceMap = new Map<string, SupplierInvoice>();
+    [...allInvoices, ...directInvoices].forEach(i => invoiceMap.set(i.id, i));
+
+    setHistoryPOs(shapedPOs);
+    setHistoryInvoices([...invoiceMap.values()]);
+    setHistoryLoading(false);
   }
 
   function set(key: keyof FormData, value: string | boolean) {
@@ -396,7 +523,7 @@ export default function Suppliers() {
                   className={`border-b border-gray-50 transition-colors cursor-pointer ${
                     s.is_active ? 'hover:bg-gray-50/50' : 'opacity-50 bg-gray-50/30'
                   } ${expandedId === s.id ? 'bg-gray-50/70' : ''}`}
-                  onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}
+                  onClick={() => toggleExpand(s)}
                 >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2.5">
@@ -514,52 +641,209 @@ export default function Suppliers() {
 
                 {/* Expanded detail row */}
                 {expandedId === s.id && (
-                  <tr key={`${s.id}-detail`} className="bg-gray-50/60 border-b border-gray-100">
-                    <td colSpan={canWrite ? 7 : 6} className="px-6 py-4">
-                      <div className="grid grid-cols-4 gap-6 text-xs">
-                        <div>
-                          <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Address</p>
-                          <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{s.address || '—'}</p>
-                          {s.website && (
-                            <div className="flex items-center gap-1 mt-2 text-sky-600">
-                              <Globe size={10} />
-                              <span>{s.website}</span>
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Contact Person</p>
-                          <p className="text-gray-700">{s.contact_person_name || '—'}</p>
-                          {s.contact_person_title && <p className="text-gray-400 mt-0.5">{s.contact_person_title}</p>}
-                          {s.contact_person_phone && (
-                            <div className="flex items-center gap-1 mt-1.5 text-gray-500">
-                              <Phone size={10} />{s.contact_person_phone}
-                            </div>
-                          )}
-                          {s.contact_person_email && (
-                            <div className="flex items-center gap-1 mt-0.5 text-gray-500">
-                              <Mail size={10} />{s.contact_person_email}
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Payment Details</p>
-                          {s.bank_name ? (
-                            <div className="space-y-0.5 text-gray-700">
-                              <p className="font-medium">{s.bank_name}{s.bank_branch ? ` · ${s.bank_branch}` : ''}</p>
-                              <p className="font-mono">{s.bank_account_no || '—'}</p>
-                              <p className="text-gray-500">{s.bank_account_name || ''}</p>
-                            </div>
-                          ) : <p className="text-gray-400">—</p>}
-                          {s.default_wht_rate != null && (
-                            <p className="mt-2 text-gray-500">Default WHT: <span className="font-medium text-gray-700">{s.default_wht_rate}%</span></p>
-                          )}
-                        </div>
-                        <div>
-                          <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Notes</p>
-                          <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{s.notes || '—'}</p>
-                        </div>
+                  <tr key={`${s.id}-detail`} className="border-b border-gray-100">
+                    <td colSpan={canWrite ? 7 : 6} className="bg-slate-50/80 px-0 py-0">
+                      {/* Sub-tabs */}
+                      <div className="flex items-center gap-0 border-b border-gray-200 px-6 bg-white/60">
+                        {([
+                          { id: 'info' as DetailTab, label: 'Profile', icon: <Building2 size={11} /> },
+                          { id: 'orders' as DetailTab, label: `Orders${historyPOs.length > 0 ? ` (${historyPOs.length})` : ''}`, icon: <ShoppingCart size={11} /> },
+                          { id: 'payments' as DetailTab, label: `Payments${historyInvoices.length > 0 ? ` (${historyInvoices.length})` : ''}`, icon: <Receipt size={11} /> },
+                        ]).map(t => (
+                          <button
+                            key={t.id}
+                            onClick={e => { e.stopPropagation(); setDetailTab(t.id); }}
+                            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-colors -mb-px ${
+                              detailTab === t.id
+                                ? 'border-[#1D9E75] text-[#1D9E75]'
+                                : 'border-transparent text-gray-400 hover:text-gray-700'
+                            }`}
+                          >
+                            {t.icon}{t.label}
+                          </button>
+                        ))}
+                        {historyLoading && (
+                          <div className="ml-auto mr-4">
+                            <div className="w-3.5 h-3.5 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+                          </div>
+                        )}
                       </div>
+
+                      {/* Info tab */}
+                      {detailTab === 'info' && (
+                        <div className="grid grid-cols-4 gap-6 text-xs px-6 py-4">
+                          <div>
+                            <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Address</p>
+                            <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{s.address || '—'}</p>
+                            {s.website && (
+                              <div className="flex items-center gap-1 mt-2 text-sky-600">
+                                <Globe size={10} /><span>{s.website}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Contact Person</p>
+                            <p className="text-gray-700">{s.contact_person_name || '—'}</p>
+                            {s.contact_person_title && <p className="text-gray-400 mt-0.5">{s.contact_person_title}</p>}
+                            {s.contact_person_phone && (
+                              <div className="flex items-center gap-1 mt-1.5 text-gray-500">
+                                <Phone size={10} />{s.contact_person_phone}
+                              </div>
+                            )}
+                            {s.contact_person_email && (
+                              <div className="flex items-center gap-1 mt-0.5 text-gray-500">
+                                <Mail size={10} />{s.contact_person_email}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Payment Details</p>
+                            {s.bank_name ? (
+                              <div className="space-y-0.5 text-gray-700">
+                                <p className="font-medium">{s.bank_name}{s.bank_branch ? ` · ${s.bank_branch}` : ''}</p>
+                                <p className="font-mono">{s.bank_account_no || '—'}</p>
+                                <p className="text-gray-500">{s.bank_account_name || ''}</p>
+                              </div>
+                            ) : <p className="text-gray-400">—</p>}
+                            {s.default_wht_rate != null && (
+                              <p className="mt-2 text-gray-500">Default WHT: <span className="font-medium text-gray-700">{s.default_wht_rate}%</span></p>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-gray-400 font-medium uppercase tracking-wide mb-2">Notes</p>
+                            <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{s.notes || '—'}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Orders tab */}
+                      {detailTab === 'orders' && (
+                        <div className="px-6 py-4">
+                          {historyLoading ? (
+                            <p className="text-xs text-gray-400 py-6 text-center">Loading orders...</p>
+                          ) : historyPOs.length === 0 ? (
+                            <p className="text-xs text-gray-400 py-6 text-center">No purchase orders found for this supplier.</p>
+                          ) : (
+                            <>
+                              {/* Summary stats */}
+                              <div className="grid grid-cols-4 gap-3 mb-4">
+                                <StatBox
+                                  label="Total POs"
+                                  value={String(historyPOs.length)}
+                                  icon={<ShoppingCart size={13} />}
+                                />
+                                <StatBox
+                                  label="Total Contracted (excl. VAT)"
+                                  value={formatTHBCompact(historyPOs.reduce((s, p) => s + p.po_amount_excl_vat, 0))}
+                                  icon={<TrendingUp size={13} />}
+                                />
+                                <StatBox
+                                  label="Active POs"
+                                  value={String(historyPOs.filter(p => ['approved', 'partially_paid'].includes(p.status)).length)}
+                                  icon={<ShoppingCart size={13} />}
+                                  highlight
+                                />
+                                <StatBox
+                                  label="Completed POs"
+                                  value={String(historyPOs.filter(p => p.status === 'fully_paid').length)}
+                                  icon={<Check size={13} />}
+                                />
+                              </div>
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b border-gray-200">
+                                    <th className="text-left pb-2 text-gray-400 font-medium">PO No.</th>
+                                    <th className="text-left pb-2 text-gray-400 font-medium">Project</th>
+                                    <th className="text-left pb-2 text-gray-400 font-medium">Description</th>
+                                    <th className="text-left pb-2 text-gray-400 font-medium">Category</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Amount (excl. VAT)</th>
+                                    <th className="text-center pb-2 text-gray-400 font-medium">Status</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Date</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {historyPOs.map(po => (
+                                    <tr key={po.id} className="border-b border-gray-100 hover:bg-white/70 transition-colors">
+                                      <td className="py-2 font-mono text-gray-600">{po.pss_po_no ?? <span className="text-gray-300">—</span>}</td>
+                                      <td className="py-2 text-gray-600">{po.project_name ?? <span className="text-gray-300">—</span>}</td>
+                                      <td className="py-2 text-gray-500 max-w-[200px] truncate">{po.description ?? '—'}</td>
+                                      <td className="py-2 text-gray-500">{po.cost_category}</td>
+                                      <td className="py-2 text-right font-medium text-gray-700">{formatTHB(po.po_amount_excl_vat)}</td>
+                                      <td className="py-2 text-center"><POStatusBadge status={po.status} /></td>
+                                      <td className="py-2 text-right text-gray-400">{formatDate(po.created_at)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Payments tab */}
+                      {detailTab === 'payments' && (
+                        <div className="px-6 py-4">
+                          {historyLoading ? (
+                            <p className="text-xs text-gray-400 py-6 text-center">Loading payment history...</p>
+                          ) : historyInvoices.length === 0 ? (
+                            <p className="text-xs text-gray-400 py-6 text-center">No invoices found for this supplier.</p>
+                          ) : (
+                            <>
+                              {/* Payment summary */}
+                              {(() => {
+                                const totalInvoiced = historyInvoices.reduce((s, i) => s + i.invoice_amount_incl_vat, 0);
+                                const totalPaid = historyInvoices.reduce((s, i) => s + i.received_amount, 0);
+                                const outstanding = historyInvoices
+                                  .filter(i => i.status !== 'paid' && i.status !== 'rejected')
+                                  .reduce((s, i) => s + (i.net_payable || i.invoice_amount_incl_vat) - i.received_amount, 0);
+                                return (
+                                  <div className="grid grid-cols-4 gap-3 mb-4">
+                                    <StatBox label="Total Invoiced" value={formatTHBCompact(totalInvoiced)} icon={<Receipt size={13} />} />
+                                    <StatBox label="Total Paid" value={formatTHBCompact(totalPaid)} icon={<Check size={13} />} highlight />
+                                    <StatBox label="Outstanding" value={formatTHBCompact(Math.max(0, outstanding))} icon={<TrendingUp size={13} />} warn={outstanding > 0} />
+                                    <StatBox label="Invoices" value={String(historyInvoices.length)} icon={<FileText size={13} />} />
+                                  </div>
+                                );
+                              })()}
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b border-gray-200">
+                                    <th className="text-left pb-2 text-gray-400 font-medium">Invoice No.</th>
+                                    <th className="text-left pb-2 text-gray-400 font-medium">PO Ref</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Invoice Amount</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Paid</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Outstanding</th>
+                                    <th className="text-center pb-2 text-gray-400 font-medium">Status</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Invoice Date</th>
+                                    <th className="text-right pb-2 text-gray-400 font-medium">Planned Payment</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {historyInvoices.map(inv => {
+                                    const outstanding = Math.max(0, (inv.net_payable || inv.invoice_amount_incl_vat) - inv.received_amount);
+                                    return (
+                                      <tr key={inv.id} className="border-b border-gray-100 hover:bg-white/70 transition-colors">
+                                        <td className="py-2 font-mono text-gray-600">{inv.vendor_invoice_no ?? <span className="text-gray-300">—</span>}</td>
+                                        <td className="py-2 text-gray-500">{inv.supplier_name_raw || '—'}</td>
+                                        <td className="py-2 text-right font-medium text-gray-700">{formatTHB(inv.invoice_amount_incl_vat)}</td>
+                                        <td className="py-2 text-right text-emerald-600 font-medium">{inv.received_amount > 0 ? formatTHB(inv.received_amount) : <span className="text-gray-300">—</span>}</td>
+                                        <td className="py-2 text-right">
+                                          {outstanding > 0
+                                            ? <span className="text-amber-600 font-medium">{formatTHB(outstanding)}</span>
+                                            : <span className="text-gray-300">—</span>}
+                                        </td>
+                                        <td className="py-2 text-center"><InvoiceStatusBadge status={inv.status} /></td>
+                                        <td className="py-2 text-right text-gray-400">{formatDate(inv.invoice_date)}</td>
+                                        <td className="py-2 text-right text-gray-400">{formatDate(inv.planned_payment_date)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}
@@ -800,5 +1084,72 @@ function ProfileDots({ score }: { score: number }) {
         />
       ))}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stat box
+// ---------------------------------------------------------------------------
+
+function StatBox({
+  label, value, icon, highlight, warn,
+}: {
+  label: string; value: string; icon: React.ReactNode; highlight?: boolean; warn?: boolean;
+}) {
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 ${
+      highlight ? 'bg-emerald-50 border-emerald-200' :
+      warn ? 'bg-amber-50 border-amber-200' :
+      'bg-white border-gray-200'
+    }`}>
+      <div className={`flex items-center gap-1 mb-1 ${
+        highlight ? 'text-emerald-600' : warn ? 'text-amber-600' : 'text-gray-400'
+      }`}>
+        {icon}
+        <span className="text-[10px] uppercase tracking-wide font-medium">{label}</span>
+      </div>
+      <p className={`text-base font-bold ${
+        highlight ? 'text-emerald-700' : warn ? 'text-amber-700' : 'text-gray-800'
+      }`}>{value}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Status badges
+// ---------------------------------------------------------------------------
+
+const PO_STATUS_STYLES: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-500',
+  pending_approval: 'bg-amber-50 text-amber-700',
+  approved: 'bg-sky-50 text-sky-700',
+  partially_paid: 'bg-blue-50 text-blue-700',
+  fully_paid: 'bg-emerald-50 text-emerald-700',
+};
+
+function POStatusBadge({ status }: { status: string }) {
+  const label = status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return (
+    <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${PO_STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-500'}`}>
+      {label}
+    </span>
+  );
+}
+
+const INV_STATUS_STYLES: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-500',
+  released: 'bg-amber-50 text-amber-700',
+  pending_approval: 'bg-amber-50 text-amber-700',
+  approved: 'bg-sky-50 text-sky-700',
+  paid: 'bg-emerald-50 text-emerald-700',
+  rejected: 'bg-red-50 text-red-600',
+};
+
+function InvoiceStatusBadge({ status }: { status: string }) {
+  const label = status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return (
+    <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${INV_STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-500'}`}>
+      {label}
+    </span>
   );
 }
