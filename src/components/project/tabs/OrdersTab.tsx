@@ -151,7 +151,7 @@ export default function OrdersTab() {
         amount,
         invoiceNo: logInvoiceNo.trim(),
         projectId: po.project_id,
-        vendorId: po.vendor_id ?? '',
+        vendorId: po.vendor_id ?? null,
         costControllerId: user.id,
         projectName: project.name,
         poNumber: po.pss_po_no,

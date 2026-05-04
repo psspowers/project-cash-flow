@@ -39,7 +39,7 @@ export interface InvoiceSubmitParams {
   amount: number;
   invoiceNo: string;
   projectId: string;
-  vendorId: string;
+  vendorId: string | null;
   costControllerId: string;
   projectName: string;
   poNumber: string | null;
