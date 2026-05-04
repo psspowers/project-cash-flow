@@ -177,6 +177,7 @@ export interface PurchaseOrder {
   has_supplier_milestones: boolean;
   pending_invoice_amount: number;
   pending_remaining_amount: number;
+  supplier_name_raw?: string | null;
   notes?: string;
   submitted_by?: string;
   submitted_at?: string;

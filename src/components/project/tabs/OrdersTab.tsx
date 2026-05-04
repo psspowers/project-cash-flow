@@ -231,7 +231,7 @@ export default function OrdersTab() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-              {['', 'PO No.', 'Vendor', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status', ''].map((h, i) => (
+              {['', 'PO No.', 'Supplier', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status', ''].map((h, i) => (
                 <th key={i} className={`px-4 py-2.5 text-left font-medium text-gray-500 ${h === 'Balance Due' ? 'text-[#E24B4A]' : ''}`}>{h}</th>
               ))}
             </tr>
@@ -250,7 +250,7 @@ export default function OrdersTab() {
                   <td className="px-4 py-2.5 font-medium text-[#0f1923]">
                     {o.pss_po_no ?? <span className="text-gray-400 italic text-xs">Pending approval</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-gray-600">{(o.vendor as Entity | undefined)?.name ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-gray-600">{(o.vendor as Entity | undefined)?.name ?? o.supplier_name_raw ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500">{o.cost_category.replace(/_/g, ' ')}</td>
                   <td className="px-4 py-2.5">{fmtTHB(o.po_amount_excl_vat)}</td>
                   <td className="px-4 py-2.5 text-gray-500">{fmtTHB(o.vat_7pct)}</td>
