@@ -488,7 +488,7 @@ interface NewProjectModalProps {
   onSaved: (projectId: string) => void;
 }
 
-function NewProjectModal({ clients, onClose, onSaved }: NewProjectModalProps) {
+function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProjectModalProps) {
   const [name, setName] = useState('');
   const [clientId, setClientId] = useState('');
   const [contractExcl, setContractExcl] = useState('');
@@ -496,6 +496,19 @@ function NewProjectModal({ clients, onClose, onSaved }: NewProjectModalProps) {
   const [description, setDescription] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  const [clients, setClients] = useState<Entity[]>(initialClients);
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
+  const [creatingClient, setCreatingClient] = useState(false);
+  const [newClientName, setNewClientName] = useState('');
+  const [savingClient, setSavingClient] = useState(false);
+
+  const selectedClient = clients.find(c => c.id === clientId);
+
+  const filteredClients = clientSearch.trim()
+    ? clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+    : clients;
 
   const contractIncl = (parseFloat(contractExcl) || 0) * 1.07;
 
@@ -505,6 +518,27 @@ function NewProjectModal({ clients, onClose, onSaved }: NewProjectModalProps) {
     if (!contractExcl || parseFloat(contractExcl) <= 0) errs.contractExcl = 'Contract value must be greater than 0';
     setErrors(errs);
     return Object.keys(errs).length === 0;
+  }
+
+  async function handleCreateClient() {
+    if (!newClientName.trim() || savingClient) return;
+    setSavingClient(true);
+    const { data, error } = await supabase
+      .from('entities')
+      .insert({ name: newClientName.trim(), type: 'client' })
+      .select('id, name, type')
+      .maybeSingle();
+    setSavingClient(false);
+    if (error) { alert('Failed to create client: ' + error.message); return; }
+    if (data) {
+      const newClient = data as Entity;
+      setClients(prev => [...prev, newClient].sort((a, b) => a.name.localeCompare(b.name)));
+      setClientId(newClient.id);
+      setClientSearch(newClient.name);
+    }
+    setCreatingClient(false);
+    setNewClientName('');
+    setClientDropdownOpen(false);
   }
 
   async function handleSave() {
@@ -553,18 +587,103 @@ function NewProjectModal({ clients, onClose, onSaved }: NewProjectModalProps) {
             {errors.name && <p className="text-xs text-[#E24B4A] mt-1">{errors.name}</p>}
           </div>
 
-          <div>
+          <div className="relative">
             <label className="text-xs font-medium text-gray-600 mb-1 block">Client</label>
-            <select
-              value={clientId}
-              onChange={e => setClientId(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] bg-white"
-            >
-              <option value="">— No client selected —</option>
-              {clients.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            <div className="relative">
+              <input
+                type="text"
+                value={clientSearch || (selectedClient ? selectedClient.name : '')}
+                onChange={e => {
+                  setClientSearch(e.target.value);
+                  setClientId('');
+                  setClientDropdownOpen(true);
+                  setCreatingClient(false);
+                }}
+                onFocus={() => setClientDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setClientDropdownOpen(false), 150)}
+                placeholder="Search or select client..."
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] pr-8"
+              />
+              {clientId && (
+                <button
+                  type="button"
+                  onMouseDown={e => { e.preventDefault(); setClientId(''); setClientSearch(''); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            {clientDropdownOpen && !creatingClient && (
+              <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                <div className="max-h-48 overflow-y-auto">
+                  {filteredClients.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-400 italic">No clients match "{clientSearch}"</p>
+                  )}
+                  {filteredClients.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onMouseDown={() => {
+                        setClientId(c.id);
+                        setClientSearch('');
+                        setClientDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${clientId === c.id ? 'bg-[#1D9E75]/5 text-[#1D9E75] font-medium' : 'text-gray-700'}`}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-gray-100">
+                  <button
+                    type="button"
+                    onMouseDown={() => {
+                      setCreatingClient(true);
+                      setNewClientName(clientSearch);
+                      setClientDropdownOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-[#1D9E75] font-medium hover:bg-[#1D9E75]/5 flex items-center gap-1.5 transition-colors"
+                  >
+                    <PlusCircle size={13} />
+                    Create new client{clientSearch ? ` "${clientSearch}"` : ''}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {creatingClient && (
+              <div className="mt-2 border border-[#1D9E75]/30 rounded-lg p-3 bg-[#1D9E75]/5 space-y-2">
+                <p className="text-xs font-medium text-[#1D9E75]">New Client</p>
+                <input
+                  type="text"
+                  value={newClientName}
+                  onChange={e => setNewClientName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateClient(); } if (e.key === 'Escape') { setCreatingClient(false); setNewClientName(''); } }}
+                  autoFocus
+                  placeholder="Client / company name"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] bg-white"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setCreatingClient(false); setNewClientName(''); }}
+                    className="flex-1 border border-gray-200 text-gray-600 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateClient}
+                    disabled={!newClientName.trim() || savingClient}
+                    className="flex-1 bg-[#1D9E75] text-white py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] disabled:opacity-60 flex items-center justify-center gap-1"
+                  >
+                    {savingClient ? 'Saving...' : 'Save Client'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
