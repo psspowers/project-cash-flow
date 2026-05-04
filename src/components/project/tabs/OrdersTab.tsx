@@ -158,7 +158,7 @@ export default function OrdersTab() {
         poNumber: po.pss_po_no,
         vendorName: vendor?.name ?? 'Supplier',
         milestoneNumber: milestone.milestone_number,
-        existingInvoiceId,
+        existingInvoiceId: editingInvoiceId,
       });
       if (error) { alert('Failed to log invoice: ' + error); return; }
       setLogInvoiceTarget(null);
