@@ -12,6 +12,7 @@ import VendorCombobox from '../../ui/VendorCombobox';
 import { CATEGORY_MAP, CATEGORY_KEY_LABELS } from '../projectDetailConstants';
 import { useAuth } from '../../../context/AuthContext';
 import { submitInvoice } from '../../../services/workflow';
+import PODetailModal from '../../pos/PODetailModal';
 
 interface OverrunInfo {
   budgetAmt: number;
@@ -30,6 +31,7 @@ export default function OrdersTab() {
   const { user } = useAuth();
 
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
+  const [detailPO, setDetailPO] = useState<PurchaseOrder | null>(null);
   const [showNewPO, setShowNewPO] = useState(false);
   const [poForm, setPoForm] = useState({
     pss_po_no: '',
@@ -247,8 +249,13 @@ export default function OrdersTab() {
                   <td className="px-3 py-2.5 text-gray-400 w-8">
                     {expandedPO === o.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   </td>
-                  <td className="px-4 py-2.5 font-medium text-[#0f1923]">
-                    {o.pss_po_no ?? <span className="text-gray-400 italic text-xs">Pending approval</span>}
+                  <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => setDetailPO(o)}
+                      className="font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline transition-colors text-left text-xs"
+                    >
+                      {o.pss_po_no ?? <span className="text-gray-400 italic font-normal">Pending approval</span>}
+                    </button>
                   </td>
                   <td className="px-4 py-2.5 text-gray-600">{(o.vendor as Entity | undefined)?.name ?? o.supplier_name_raw ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500">{o.cost_category.replace(/_/g, ' ')}</td>
@@ -440,6 +447,16 @@ export default function OrdersTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {detailPO && project && (
+        <PODetailModal
+          po={detailPO}
+          projects={[project]}
+          vendors={vendors}
+          onClose={() => setDetailPO(null)}
+          onSuccess={() => { setDetailPO(null); reload(); }}
+        />
       )}
 
       {showNewPO && (

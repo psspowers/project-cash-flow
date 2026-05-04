@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHBCompact, formatDate } from '../utils/formatters';
 import POCreationWizard from '../components/pos/POCreationWizard';
+import PODetailModal from '../components/pos/PODetailModal';
 import { hasRole, PROCUREMENT_WRITE_ROLES } from '../config/roles';
 
 export default function PurchaseOrders() {
@@ -16,6 +17,7 @@ export default function PurchaseOrders() {
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
   const [showWizard, setShowWizard] = useState(false);
+  const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -152,8 +154,13 @@ export default function PurchaseOrders() {
               <tr><td colSpan={10} className="text-center py-12 text-gray-400 text-sm">No purchase orders found</td></tr>
             ) : filtered.map(po => (
               <tr key={po.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                <td className="px-4 py-3 text-sm font-medium text-gray-800">
-                  {po.pss_po_no ?? <span className="text-gray-400 italic text-xs">Pending approval</span>}
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => setSelectedPO(po)}
+                    className="text-sm font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline transition-colors text-left"
+                  >
+                    {po.pss_po_no ?? <span className="text-gray-400 italic text-xs not-italic font-normal">Pending approval</span>}
+                  </button>
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-600">
                   {(po.vendor as Entity | undefined)?.name ?? po.supplier_name_raw ?? '—'}
@@ -193,6 +200,16 @@ export default function PurchaseOrders() {
           vendors={vendors}
           onClose={() => setShowWizard(false)}
           onSuccess={() => { setShowWizard(false); loadData(); }}
+        />
+      )}
+
+      {selectedPO && (
+        <PODetailModal
+          po={selectedPO}
+          projects={projects}
+          vendors={vendors}
+          onClose={() => setSelectedPO(null)}
+          onSuccess={() => { setSelectedPO(null); loadData(); }}
         />
       )}
     </div>

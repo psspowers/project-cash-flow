@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, ChevronRight, ChevronLeft, Plus, Trash2, AlertTriangle, CheckCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { Project, Entity, CostCategory, COST_CATEGORY_LABELS, fmtTHB } from '../../types';
+import { Project, Entity, CostCategory, COST_CATEGORY_LABELS, fmtTHB, PurchaseOrder } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import VendorCombobox from '../ui/VendorCombobox';
 
@@ -10,6 +10,7 @@ interface Props {
   vendors: Entity[];
   onClose: () => void;
   onSuccess: () => void;
+  editPo?: PurchaseOrder;
 }
 
 interface MilestoneRow {
@@ -29,23 +30,61 @@ type SubmitMode = 'draft' | 'submit';
 const PO_THRESHOLD_CM = 1_000_000;
 const PO_THRESHOLD_EVP = 5_000_000;
 
-export default function POCreationWizard({ projects, vendors, onClose, onSuccess }: Props) {
+export default function POCreationWizard({ projects, vendors, onClose, onSuccess, editPo }: Props) {
   const { user } = useAuth();
+  const isEdit = !!editPo;
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [loadingEdit, setLoadingEdit] = useState(isEdit);
 
-  const [projectId, setProjectId] = useState('');
-  const [poType, setPoType] = useState<POType>('simple');
-  const [description, setDescription] = useState('');
-  const [vendorId, setVendorId] = useState('');
-  const [costCategory, setCostCategory] = useState<CostCategory | ''>('');
-  const [whtApplies, setWhtApplies] = useState(false);
+  const [projectId, setProjectId] = useState(editPo?.project_id ?? '');
+  const [poType, setPoType] = useState<POType>(editPo?.has_supplier_milestones ? 'milestone' : 'simple');
+  const [description, setDescription] = useState(editPo?.description ?? '');
+  const [vendorId, setVendorId] = useState(editPo?.vendor_id ?? '');
+  const [costCategory, setCostCategory] = useState<CostCategory | ''>(editPo?.cost_category ?? '');
+  const [whtApplies, setWhtApplies] = useState(editPo?.wht_applies ?? false);
 
-  const [exclVat, setExclVat] = useState('');
+  const [exclVat, setExclVat] = useState(editPo ? String(editPo.po_amount_excl_vat) : '');
 
   const [simplePayments, setSimplePayments] = useState<SimplePaymentRow[]>([{ payment_month: '', amount: '' }]);
   const [milestones, setMilestones] = useState<MilestoneRow[]>([{ description: '', pct: '', planned_payment_date: '' }]);
+
+  // Load child records when editing
+  useEffect(() => {
+    if (!editPo) return;
+    async function loadChildren() {
+      setLoadingEdit(true);
+      if (editPo!.has_supplier_milestones) {
+        const { data } = await supabase
+          .from('po_milestones')
+          .select('*')
+          .eq('purchase_order_id', editPo!.id)
+          .order('milestone_number');
+        if (data && data.length > 0) {
+          setMilestones(data.map((m: { description?: string; milestone_pct: number; planned_payment_date?: string }) => ({
+            description: m.description ?? '',
+            pct: String(+(m.milestone_pct * 100).toFixed(2)),
+            planned_payment_date: m.planned_payment_date ? m.planned_payment_date.substring(0, 7) : '',
+          })));
+        }
+      } else {
+        const { data } = await supabase
+          .from('po_simple_payments')
+          .select('*')
+          .eq('purchase_order_id', editPo!.id)
+          .order('payment_month');
+        if (data && data.length > 0) {
+          setSimplePayments(data.map((p: { payment_month: string; amount: number }) => ({
+            payment_month: p.payment_month.substring(0, 7),
+            amount: String(p.amount),
+          })));
+        }
+      }
+      setLoadingEdit(false);
+    }
+    loadChildren();
+  }, [editPo]);
 
   const exclVatNum = Number(exclVat) || 0;
   const vatNum = +(exclVatNum * 0.07).toFixed(2);
@@ -109,9 +148,89 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     setSaving(true);
     setError('');
 
-    const status = mode === 'draft' ? 'draft' : 'pending_approval';
+    // When editing a pending_approval PO, any save reverts it to draft for re-submission
+    const wasInApproval = isEdit && editPo?.status === 'pending_approval';
+    const status = wasInApproval ? 'draft' : (mode === 'draft' ? 'draft' : 'pending_approval');
     const now = new Date().toISOString();
 
+    if (isEdit && editPo) {
+      const { error: updateError } = await supabase
+        .from('purchase_orders')
+        .update({
+          vendor_id: vendorId || null,
+          description: description.trim(),
+          cost_category: costCategory,
+          po_amount_excl_vat: exclVatNum,
+          vat_7pct: vatNum,
+          po_amount_incl_vat: inclVatNum,
+          wht_applies: whtApplies,
+          wht_3pct: whtApplies ? whtNum : 0,
+          status,
+          has_supplier_milestones: poType === 'milestone',
+          submitted_by: status === 'pending_approval' ? user.id : editPo.submitted_by ?? null,
+          submitted_at: status === 'pending_approval' ? now : editPo.submitted_at ?? null,
+        })
+        .eq('id', editPo.id);
+
+      if (updateError) {
+        setError(updateError.message);
+        setSaving(false);
+        return;
+      }
+
+      // Delete old child records, then re-insert
+      await Promise.all([
+        supabase.from('po_milestones').delete().eq('purchase_order_id', editPo.id),
+        supabase.from('po_simple_payments').delete().eq('purchase_order_id', editPo.id),
+      ]);
+
+      if (poType === 'milestone') {
+        await supabase.from('po_milestones').insert(
+          milestones.map((m, i) => ({
+            purchase_order_id: editPo.id,
+            milestone_number: i + 1,
+            milestone_pct: Number(m.pct) / 100,
+            amount_due: +(exclVatNum * (Number(m.pct) / 100)).toFixed(2),
+            planned_payment_date: m.planned_payment_date ? m.planned_payment_date + '-01' : null,
+            status: 'pending',
+          }))
+        );
+      } else {
+        const paymentRows = simplePayments
+          .filter(p => p.payment_month && Number(p.amount) > 0)
+          .map(p => ({
+            purchase_order_id: editPo.id,
+            payment_month: p.payment_month + '-01',
+            amount: Number(p.amount),
+          }));
+        if (paymentRows.length > 0) await supabase.from('po_simple_payments').insert(paymentRows);
+      }
+
+      if (status === 'pending_approval') {
+        const requiredRole = inclVatNum < PO_THRESHOLD_CM ? 'construction_manager'
+          : inclVatNum < PO_THRESHOLD_EVP ? 'evp' : 'ceo';
+        const { data: approverProfile } = await supabase
+          .from('user_profiles').select('id').eq('role', requiredRole).maybeSingle();
+        if (approverProfile) {
+          const projectName = projects.find(p => p.id === projectId)?.name ?? '';
+          await supabase.from('notifications').insert({
+            user_id: (approverProfile as { id: string }).id,
+            title: `PO approval required — ${projectName}`,
+            message: `A purchase order for ${vendors.find(v => v.id === vendorId)?.name ?? 'supplier'} (${fmtTHB(inclVatNum)}) has been re-submitted for your approval.`,
+            type: 'info',
+            is_read: false,
+            related_entity_type: 'project',
+            related_entity_id: projectId,
+          });
+        }
+      }
+
+      setSaving(false);
+      onSuccess();
+      return;
+    }
+
+    // --- Create new PO ---
     const { data: poData, error: poError } = await supabase
       .from('purchase_orders')
       .insert({
@@ -186,15 +305,28 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     onSuccess();
   }
 
-  const selectedProject = activeProjects.find(p => p.id === projectId);
+  const selectedProject = [...activeProjects, ...projects].find(p => p.id === projectId);
   const stepLabels = ['Basic Details', 'Amount', poType === 'simple' ? 'Payment Plan' : 'Milestones', 'Review'];
+  const wasInApproval = isEdit && editPo?.status === 'pending_approval';
+
+  if (loadingEdit) {
+    return (
+      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-xl border border-gray-200 p-12 flex items-center justify-center">
+          <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-xl w-full max-w-xl border border-gray-200 my-4">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-base font-semibold text-gray-800">New Purchase Order</h2>
+            <h2 className="text-base font-semibold text-gray-800">
+              {isEdit ? `Edit PO${editPo?.pss_po_no ? ` — ${editPo.pss_po_no}` : ''}` : 'New Purchase Order'}
+            </h2>
             <p className="text-xs text-gray-400 mt-0.5">Step {step} of 4</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors"><X size={16} /></button>
@@ -232,12 +364,18 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
             <div className="space-y-4">
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Project *</label>
-                <select value={projectId} onChange={e => setProjectId(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white">
-                  <option value="">Select project...</option>
-                  {activeProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                {projects.length !== activeProjects.length && (
+                {isEdit ? (
+                  <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500">
+                    {selectedProject?.name ?? projectId}
+                  </div>
+                ) : (
+                  <select value={projectId} onChange={e => setProjectId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white">
+                    <option value="">Select project...</option>
+                    {activeProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                {!isEdit && projects.length !== activeProjects.length && (
                   <p className="text-xs text-gray-400 mt-1">{projects.length - activeProjects.length} project(s) not yet active are hidden.</p>
                 )}
               </div>
@@ -415,6 +553,14 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
 
           {step === 4 && (
             <div className="space-y-4">
+              {wasInApproval && (
+                <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
+                  <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
+                  <p className="text-xs text-[#92650a]">
+                    This PO was pending approval. Saving will return it to <strong>Draft</strong> status and it must be re-submitted for approval.
+                  </p>
+                </div>
+              )}
               <div className="bg-gray-50 rounded-lg p-4 space-y-2 border border-gray-100 text-sm">
                 {[
                   ['Project', selectedProject?.name ?? '—'],
@@ -460,21 +606,23 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                 </div>
               )}
 
-              <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-600">
-                PSS PO number will be assigned automatically when approved by {
-                  inclVatNum < PO_THRESHOLD_CM ? 'the Construction Manager' :
-                  inclVatNum < PO_THRESHOLD_EVP ? 'the EVP' : 'the CEO'
-                }.
-              </div>
+              {!wasInApproval && (
+                <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-600">
+                  PSS PO number will be assigned automatically when approved by {
+                    inclVatNum < PO_THRESHOLD_CM ? 'the Construction Manager' :
+                    inclVatNum < PO_THRESHOLD_EVP ? 'the EVP' : 'the CEO'
+                  }.
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <button onClick={() => save('draft')} disabled={saving}
                   className="flex items-center justify-center gap-2 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60 transition-colors">
-                  {saving ? 'Saving...' : 'Save as Draft'}
+                  {saving ? 'Saving...' : wasInApproval ? 'Save as Draft' : 'Save as Draft'}
                 </button>
                 <button onClick={() => save('submit')} disabled={saving}
                   className="flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60 transition-colors">
-                  {saving ? 'Submitting...' : 'Submit for Approval'}
+                  {saving ? 'Submitting...' : wasInApproval ? 'Save & Re-submit' : 'Submit for Approval'}
                 </button>
               </div>
             </div>
