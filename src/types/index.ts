@@ -4,7 +4,9 @@ export type UserRole =
   | 'evp'
   | 'accounts_supervisor'
   | 'accounts_manager'
-  | 'ceo';
+  | 'ceo'
+  | 'procurement_executive'
+  | 'banking_finance_officer';
 
 export interface UserProfile {
   id: string;
@@ -425,6 +427,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   accounts_supervisor: 'Accounts Supervisor',
   accounts_manager: 'Accounts Manager',
   ceo: 'CEO',
+  procurement_executive: 'Procurement Executive',
+  banking_finance_officer: 'Banking & Finance Officer',
 };
 
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {

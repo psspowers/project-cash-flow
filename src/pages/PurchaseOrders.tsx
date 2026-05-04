@@ -79,7 +79,7 @@ export default function PurchaseOrders() {
             {filtered.length !== pos.length ? `${filtered.length} of ${pos.length} POs` : `${pos.length} total POs`}
           </p>
         </div>
-        {profile?.role === 'cost_controller' && (
+        {(profile?.role === 'cost_controller' || profile?.role === 'procurement_executive') && (
           <button
             onClick={() => setShowWizard(true)}
             className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
@@ -161,7 +161,7 @@ export default function PurchaseOrders() {
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-500">{formatDate(po.po_date)}</td>
                 <td className="px-4 py-3">
-                  {po.status === 'draft' && !po.pss_po_no && profile?.role === 'cost_controller' && (
+                  {po.status === 'draft' && !po.pss_po_no && (profile?.role === 'cost_controller' || profile?.role === 'procurement_executive') && (
                     <button
                       onClick={() => handleSubmitDraft(po.id)}
                       disabled={isSubmitting}
