@@ -350,7 +350,7 @@ export default function Projects() {
                 Cost Paid ฿
               </th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Margin ฿
+                Cash Balance ฿
               </th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
                 Completion %
@@ -425,7 +425,7 @@ export default function Projects() {
                       {fmtTHBCompact(paid)}
                     </td>
 
-                    {/* Margin */}
+                    {/* Cash Balance */}
                     <td className="px-4 py-3.5 text-right tabular-nums">
                       <span
                         className={`text-[13px] font-semibold ${
