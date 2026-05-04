@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Search, FolderOpen, PlusCircle, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { executeBudgetPatch } from '../utils/budgetPatch';
 import {
   Project,
   ProjectStatus,
@@ -276,12 +275,6 @@ export default function Projects() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={executeBudgetPatch}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-red-700 mr-4"
-          >
-            ⚠️ EXECUTE BUDGET PATCH
-          </button>
           <button
             onClick={() => setShowNewProject(true)}
             className="flex items-center gap-1.5 px-4 py-2 bg-[#0f1923] text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
