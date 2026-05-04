@@ -17,14 +17,30 @@ export interface UserProfile {
   created_at: string;
 }
 
+export type SupplierType = 'company' | 'individual' | 'petty_cash';
+
 export interface Entity {
   id: string;
   name: string;
   type: 'client' | 'vendor' | 'subsidiary' | 'lender' | 'internal';
-  tax_id?: string;
+  supplier_type?: SupplierType;
+  tax_id?: string | null;
+  address?: string | null;
+  website?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  contact_person_name?: string | null;
+  contact_person_title?: string | null;
+  contact_person_phone?: string | null;
+  contact_person_email?: string | null;
+  bank_name?: string | null;
+  bank_branch?: string | null;
+  bank_account_no?: string | null;
+  bank_account_name?: string | null;
+  default_wht_rate?: number | null;
   is_related_party: boolean;
-  email?: string;
-  phone?: string;
+  is_active?: boolean;
+  notes?: string | null;
   created_at: string;
 }
 
