@@ -44,6 +44,7 @@ export default function OrdersTab() {
   const [logInvoiceTarget, setLogInvoiceTarget] = useState<{ milestone: POMilestone; po: PurchaseOrder } | null>(null);
   const [logInvoiceNo, setLogInvoiceNo] = useState('');
   const [logInvoiceAmount, setLogInvoiceAmount] = useState('');
+  const [logInvoicePreFilled, setLogInvoicePreFilled] = useState(false);
   const [isLoggingInvoice, setIsLoggingInvoice] = useState(false);
 
   const poCatTotal = (cat: CostCategory) =>
@@ -159,6 +160,7 @@ export default function OrdersTab() {
       setLogInvoiceTarget(null);
       setLogInvoiceNo('');
       setLogInvoiceAmount('');
+      setLogInvoicePreFilled(false);
       await reload();
     } finally {
       setIsLoggingInvoice(false);
@@ -301,10 +303,27 @@ export default function OrdersTab() {
                             )}
                             {isCostController && (pm.status === 'pending' || pm.status === 'invoiced') && (
                               <button
-                                onClick={() => {
+                                onClick={async () => {
                                   setLogInvoiceTarget({ milestone: pm, po: o });
-                                  setLogInvoiceNo('');
                                   setLogInvoiceAmount(String(pm.amount_due));
+                                  // Look for an existing unlinked received invoice for this PO
+                                  const { data: existing } = await supabase
+                                    .from('vendor_invoices')
+                                    .select('vendor_invoice_no, invoice_amount_incl_vat')
+                                    .eq('po_id', o.id)
+                                    .is('po_milestone_id', null)
+                                    .eq('status', 'received')
+                                    .order('created_at', { ascending: false })
+                                    .limit(1)
+                                    .maybeSingle();
+                                  if (existing?.vendor_invoice_no) {
+                                    setLogInvoiceNo(existing.vendor_invoice_no);
+                                    setLogInvoiceAmount(String(existing.invoice_amount_incl_vat ?? pm.amount_due));
+                                    setLogInvoicePreFilled(true);
+                                  } else {
+                                    setLogInvoiceNo('');
+                                    setLogInvoicePreFilled(false);
+                                  }
                                 }}
                                 className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap shrink-0"
                               >
@@ -370,11 +389,16 @@ export default function OrdersTab() {
                 <div><span className="text-gray-400">Milestone amount due: </span><span className="font-medium text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span></div>
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">Supplier Invoice No. <span className="text-[#E24B4A]">*</span></label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs text-gray-500">Supplier Invoice No. <span className="text-[#E24B4A]">*</span></label>
+                  {logInvoicePreFilled && (
+                    <span className="text-xs text-[#1D9E75] font-medium">Pre-filled from existing record</span>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={logInvoiceNo}
-                  onChange={e => setLogInvoiceNo(e.target.value)}
+                  onChange={e => { setLogInvoiceNo(e.target.value); setLogInvoicePreFilled(false); }}
                   placeholder="e.g. INV-2026-001"
                   className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
                 />
