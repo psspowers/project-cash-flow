@@ -160,7 +160,7 @@ export default function OrdersTab() {
         milestoneNumber: milestone.milestone_number,
         existingInvoiceId: editingInvoiceId,
       });
-      if (error) { alert('Failed to log invoice: ' + error); return; }
+      if (error) { alert(error); return; }
       setLogInvoiceTarget(null);
       setLogInvoiceNo('');
       setLogInvoiceAmount('');

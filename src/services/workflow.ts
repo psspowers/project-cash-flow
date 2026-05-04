@@ -66,7 +66,10 @@ export async function submitInvoice(params: InvoiceSubmitParams): Promise<{ erro
       })
       .eq('id', existingInvoiceId);
 
-    if (updateError) return { error: updateError.message };
+    if (updateError) {
+      if (updateError.code === '23505') return { error: 'An invoice with this number already exists on this Purchase Order. Duplicate invoices are not allowed.' };
+      return { error: updateError.message };
+    }
   } else {
     const { error: insertError } = await supabase.from('vendor_invoices').insert({
       po_id: poId,
@@ -81,7 +84,10 @@ export async function submitInvoice(params: InvoiceSubmitParams): Promise<{ erro
       status: 'received',
     });
 
-    if (insertError) return { error: insertError.message };
+    if (insertError) {
+      if (insertError.code === '23505') return { error: 'An invoice with this number already exists on this Purchase Order. Duplicate invoices are not allowed.' };
+      return { error: insertError.message };
+    }
   }
 
   await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestoneId);
