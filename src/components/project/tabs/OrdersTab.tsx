@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send, FileText } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import {
   fmtTHB, COSTING_CATEGORY_KEYS, PROJECT_STATUS_LABELS, CostCategory,
 } from '../../../types';
-import type { ProjectCosting, VariationOrder, Entity } from '../../../types';
+import type { ProjectCosting, VariationOrder, Entity, POMilestone, PurchaseOrder } from '../../../types';
 import Badge, { statusVariant } from '../../ui/Badge';
 import { formatDate } from '../../../utils/formatters';
 import VendorCombobox from '../../ui/VendorCombobox';
@@ -40,6 +40,11 @@ export default function OrdersTab() {
   const [formError, setFormError] = useState('');
   const [overrunAcknowledged, setOverrunAcknowledged] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [logInvoiceTarget, setLogInvoiceTarget] = useState<{ milestone: POMilestone; po: PurchaseOrder } | null>(null);
+  const [logInvoiceNo, setLogInvoiceNo] = useState('');
+  const [logInvoiceAmount, setLogInvoiceAmount] = useState('');
+  const [isLoggingInvoice, setIsLoggingInvoice] = useState(false);
 
   const poCatTotal = (cat: CostCategory) =>
     orders.filter(o => o.cost_category === cat).reduce((s, o) => s + o.po_amount_excl_vat, 0);
@@ -127,6 +132,37 @@ export default function OrdersTab() {
       });
     }
     await reload();
+  }
+
+  async function handleLogInvoice() {
+    if (!logInvoiceTarget || isLoggingInvoice) return;
+    const { milestone, po } = logInvoiceTarget;
+    const amount = parseFloat(logInvoiceAmount) || 0;
+    if (amount <= 0) { alert('Please enter a valid invoice amount.'); return; }
+    if (!logInvoiceNo.trim()) { alert('Please enter an invoice number.'); return; }
+    setIsLoggingInvoice(true);
+    try {
+      const { error: insertError } = await supabase.from('vendor_invoices').insert({
+        po_id: po.id,
+        project_id: po.project_id,
+        vendor_id: po.vendor_id,
+        po_milestone_id: milestone.id,
+        vendor_invoice_no: logInvoiceNo.trim(),
+        invoice_amount_incl_vat: amount,
+        received_amount: 0,
+        wht_3pct: 0,
+        net_payable: amount,
+        status: 'received',
+      });
+      if (insertError) { alert('Failed to log invoice: ' + insertError.message); return; }
+      await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestone.id);
+      setLogInvoiceTarget(null);
+      setLogInvoiceNo('');
+      setLogInvoiceAmount('');
+      await reload();
+    } finally {
+      setIsLoggingInvoice(false);
+    }
   }
 
   async function submitPO() {
@@ -263,6 +299,19 @@ export default function OrdersTab() {
                                 Mark Complete
                               </button>
                             )}
+                            {isCostController && (pm.status === 'pending' || pm.status === 'invoiced') && (
+                              <button
+                                onClick={() => {
+                                  setLogInvoiceTarget({ milestone: pm, po: o });
+                                  setLogInvoiceNo('');
+                                  setLogInvoiceAmount(String(pm.amount_due));
+                                }}
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap shrink-0"
+                              >
+                                <FileText size={11} />
+                                Log Supplier Invoice
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -305,6 +354,58 @@ export default function OrdersTab() {
           </tbody>
         </table>
       </div>
+
+      {logInvoiceTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-sm">
+            <div className="px-5 py-4 border-b border-[rgba(0,0,0,0.08)] flex justify-between items-center">
+              <h3 className="font-semibold text-[#0f1923] text-sm">
+                Log Supplier Invoice — MS{logInvoiceTarget.milestone.milestone_number}
+              </h3>
+              <button onClick={() => setLogInvoiceTarget(null)}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="text-xs text-gray-500 bg-[#F8F8F7] rounded-lg px-3 py-2 space-y-0.5">
+                <div><span className="text-gray-400">PO: </span>{logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}</div>
+                <div><span className="text-gray-400">Milestone amount due: </span><span className="font-medium text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span></div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Supplier Invoice No. <span className="text-[#E24B4A]">*</span></label>
+                <input
+                  type="text"
+                  value={logInvoiceNo}
+                  onChange={e => setLogInvoiceNo(e.target.value)}
+                  placeholder="e.g. INV-2026-001"
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Invoice Amount (incl VAT) <span className="text-[#E24B4A]">*</span></label>
+                <input
+                  type="number"
+                  value={logInvoiceAmount}
+                  onChange={e => setLogInvoiceAmount(e.target.value)}
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-[rgba(0,0,0,0.08)] flex justify-end gap-2">
+              <button
+                onClick={() => setLogInvoiceTarget(null)}
+                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700"
+              >Cancel</button>
+              <button
+                onClick={handleLogInvoice}
+                disabled={isLoggingInvoice}
+                className="px-4 py-2 bg-[#378ADD] text-white text-sm rounded hover:bg-[#2e6db5] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoggingInvoice ? 'Saving...' : 'Log Invoice'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showNewPO && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">

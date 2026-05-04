@@ -218,6 +218,7 @@ export interface POSimplePayment {
 export interface VendorInvoice {
   id: string;
   po_id: string;
+  po_milestone_id?: string;
   project_id: string;
   vendor_id: string;
   vendor_invoice_no?: string;
