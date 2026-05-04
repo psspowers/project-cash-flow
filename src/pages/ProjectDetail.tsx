@@ -15,6 +15,7 @@ import VarianceTab from '../components/project/tabs/VarianceTab';
 import OrdersTab from '../components/project/tabs/OrdersTab';
 import CashflowTab from '../components/project/tabs/CashflowTab';
 import TimelineTab from '../components/project/tabs/TimelineTab';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
 
 type Tab = 'overview' | 'costing' | 'variance' | 'orders' | 'cashflow' | 'timeline';
 
@@ -175,12 +176,14 @@ export default function ProjectDetail() {
             ))}
           </div>
 
-          {tab === 'overview' && <OverviewTab />}
-          {tab === 'costing' && <CostingTab />}
-          {tab === 'variance' && <VarianceTab />}
-          {tab === 'orders' && <OrdersTab />}
-          {tab === 'cashflow' && <CashflowTab />}
-          {tab === 'timeline' && <TimelineTab />}
+          <ErrorBoundary label={`Tab failed to render — click another tab to continue`}>
+            {tab === 'overview' && <OverviewTab />}
+            {tab === 'costing' && <CostingTab />}
+            {tab === 'variance' && <VarianceTab />}
+            {tab === 'orders' && <OrdersTab />}
+            {tab === 'cashflow' && <CashflowTab />}
+            {tab === 'timeline' && <TimelineTab />}
+          </ErrorBoundary>
         </div>
       </div>
     </ProjectDetailContext.Provider>

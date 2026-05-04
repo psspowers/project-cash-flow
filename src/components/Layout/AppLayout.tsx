@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import ErrorBoundary from '../ui/ErrorBoundary';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { Notification } from '../../types';
@@ -89,7 +90,9 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
           title={title}
         />
         <main className="flex-1 p-6 overflow-auto">
-          {children}
+          <ErrorBoundary label="Page failed to render">
+            {children}
+          </ErrorBoundary>
         </main>
       </div>
     </div>
