@@ -392,7 +392,7 @@ export default function CostVariance() {
               Cost Variance Report
             </h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              Estimation vs Budget vs Actual across all projects
+              Estimation vs Budget vs Committed across all projects
             </p>
           </div>
           <div className="relative">
@@ -439,7 +439,7 @@ export default function CostVariance() {
             variant="default"
           />
           <SummaryCard
-            label="Total Actual Cost (POs)"
+            label="Total Committed Cost (POs)"
             value={fmtTHBCompact(totalActualCost)}
             sub={
               totalVariance !== null
@@ -460,7 +460,7 @@ export default function CostVariance() {
             variant={budgetMarginPct >= 10 ? 'green' : 'amber'}
           />
           <SummaryCard
-            label="Actual Margin Today"
+            label="Committed Margin Today"
             value={`${fmtTHBCompact(actualMargin)} (${actualMarginPct.toFixed(1)}%)`}
             variant={actualMarginPct >= 10 ? 'green' : actualMarginPct >= 0 ? 'amber' : 'red'}
           />
@@ -502,7 +502,7 @@ export default function CostVariance() {
                     Budget
                   </th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">
-                    Actual (POs)
+                    Committed (POs)
                   </th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">
                     Variance
