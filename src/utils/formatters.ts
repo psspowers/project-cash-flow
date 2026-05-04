@@ -2,17 +2,17 @@ import { format, parseISO } from 'date-fns';
 
 export function formatTHB(amount: number | null | undefined): string {
   if (amount === null || amount === undefined) return '฿0';
-  return '฿' + amount.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const abs = Math.abs(amount);
+  const formatted = '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  return amount < 0 ? '-' + formatted : formatted;
 }
 
 export function formatTHBCompact(amount: number | null | undefined): string {
   if (amount === null || amount === undefined) return '฿0';
-  if (Math.abs(amount) >= 1_000_000) {
-    return '฿' + (amount / 1_000_000).toFixed(2) + 'M';
-  }
-  if (Math.abs(amount) >= 1_000) {
-    return '฿' + (amount / 1_000).toFixed(1) + 'K';
-  }
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+  if (abs >= 1_000_000) return sign + '฿' + (abs / 1_000_000).toFixed(1) + 'M';
+  if (abs >= 1_000) return sign + '฿' + (abs / 1_000).toFixed(0) + 'K';
   return formatTHB(amount);
 }
 

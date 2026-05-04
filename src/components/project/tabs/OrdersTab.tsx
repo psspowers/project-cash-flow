@@ -408,9 +408,13 @@ export default function OrdersTab() {
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">Invoice Amount (incl VAT) <span className="text-[#E24B4A]">*</span></label>
                 <input
-                  type="number"
-                  value={logInvoiceAmount}
-                  onChange={e => setLogInvoiceAmount(e.target.value)}
+                  type="text"
+                  inputMode="numeric"
+                  value={logInvoiceAmount ? Number(logInvoiceAmount).toLocaleString('en-US', { maximumFractionDigits: 0 }) : ''}
+                  onChange={e => {
+                    const raw = e.target.value.replace(/,/g, '');
+                    if (raw === '' || /^\d+$/.test(raw)) setLogInvoiceAmount(raw);
+                  }}
                   className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
                   placeholder="0"
                 />

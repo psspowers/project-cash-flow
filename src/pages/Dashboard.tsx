@@ -1317,7 +1317,7 @@ export default function Dashboard() {
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
                   <Tooltip
-                    formatter={((value: number, name: string): [string, string] => [`฿${value.toFixed(2)}M`, name === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)']) as RechartsTooltipFormatter}
+                    formatter={((value: number, name: string): [string, string] => [`฿${value.toFixed(1)}M`, name === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)']) as RechartsTooltipFormatter}
                     contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
                   />
                   <Legend formatter={(value: string) => value === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)'} iconType="square" wrapperStyle={{ fontSize: 12 }} />
@@ -1336,7 +1336,7 @@ export default function Dashboard() {
                   <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
                   <Tooltip
                     formatter={((value: number, name: string): [string, string] => [
-                      `฿${value.toFixed(2)}M`,
+                      `฿${value.toFixed(1)}M`,
                       name === 'inflow' ? 'Planned Cash In'
                       : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
                       : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
@@ -1373,7 +1373,7 @@ export default function Dashboard() {
                     <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
                     <Tooltip
                       formatter={((value: number, name: string): [string, string] => [
-                        `฿${value.toFixed(2)}M`,
+                        `฿${value.toFixed(1)}M`,
                         name === 'inflow' ? 'Cash In / Planned In'
                         : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
                         : 'Yet to Invoice (Col P)',

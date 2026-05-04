@@ -177,7 +177,7 @@ export async function approveInvoiceEVP(
       await notify(
         acct.id,
         `Invoice released for payment — ${projectName}`,
-        `Invoice ${invoiceNo} (฿${amount.toLocaleString()}) has been approved by EVP and is ready for payment processing.`,
+        `Invoice ${invoiceNo} (฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}) has been approved by EVP and is ready for payment processing.`,
         'success',
         'project',
         projectId,
@@ -196,7 +196,7 @@ export async function approveInvoiceEVP(
       await notify(
         ceo.id,
         `Large invoice requires CEO approval — ${projectName}`,
-        `EVP has approved invoice ${invoiceNo} (฿${amount.toLocaleString()}). Amount exceeds ฿3M — your final approval is required before payment.`,
+        `EVP has approved invoice ${invoiceNo} (฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}). Amount exceeds ฿3M — your final approval is required before payment.`,
         'alert',
         'project',
         projectId,
@@ -227,7 +227,7 @@ export async function approveInvoiceCEO(
     await notify(
       acct.id,
       `Invoice released for payment — ${projectName}`,
-      `Invoice ${invoiceNo} (฿${amount.toLocaleString()}) has been approved by CEO and is ready for payment processing.`,
+      `Invoice ${invoiceNo} (฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}) has been approved by CEO and is ready for payment processing.`,
       'success',
       'project',
       projectId,

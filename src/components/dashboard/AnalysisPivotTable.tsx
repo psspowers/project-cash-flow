@@ -45,7 +45,7 @@ export function toMonthLabel(monthKey: string): string {
 
 export function fmtTHB2dp(n: number): string {
   if (n === 0) return '—';
-  return '฿' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '฿' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 // Strips suffixes like "p Rooftop", "p Solar System", "MWp Rooftop" etc.

@@ -211,9 +211,9 @@ export default function OverviewTab() {
   const fmtCompact = (v: number) => {
     const abs = Math.abs(v);
     const sign = v < 0 ? '- ' : '';
-    if (abs >= 1_000_000) return `${sign}฿${(abs / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000_000) return `${sign}฿${(abs / 1_000_000).toFixed(1)}M`;
     if (abs >= 1_000) return `${sign}฿${Math.round(abs / 1_000)}K`;
-    return `${sign}฿${abs.toLocaleString()}`;
+    return `${sign}฿${abs.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
   };
   const receivedPct = contractValue > 0 ? Math.min((totalReceived / contractValue) * 100, 100) : 0;
   const costPct = contractValue > 0 ? Math.min((totalPaid / contractValue) * 100, 100) : 0;

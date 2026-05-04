@@ -1252,7 +1252,7 @@ export default function CashFlowPlanner() {
                 />
                 <Tooltip
                   formatter={((value: number, name: string): [string, string] => [
-                    `฿${value.toFixed(2)}M`,
+                    `฿${value.toFixed(1)}M`,
                     name === 'cashIn' ? 'Cash In'
                     : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
                     : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
@@ -1309,7 +1309,7 @@ export default function CashFlowPlanner() {
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(2)}M (total settled receipts minus paid invoices). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
+              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(1)}M (total settled receipts minus paid invoices). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
               : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded). Cumulative Net runs continuously across both periods.'}
           </p>
         </div>
