@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
 import PurchaseOrders from './pages/PurchaseOrders';
+import Suppliers from './pages/Suppliers';
 import Approvals from './pages/Approvals';
 import PaymentQueue from './pages/PaymentQueue';
 import CashReceipts from './pages/CashReceipts';
@@ -25,6 +26,7 @@ function AppRoutes() {
       <Route path="/projects" element={<AppLayout><Projects /></AppLayout>} />
       <Route path="/projects/:id" element={<AppLayout><ProjectDetail /></AppLayout>} />
       <Route path="/purchase-orders" element={<AppLayout><PurchaseOrders /></AppLayout>} />
+      <Route path="/suppliers" element={<AppLayout><Suppliers /></AppLayout>} />
       <Route path="/approvals" element={<AppLayout><Approvals /></AppLayout>} />
       <Route path="/payment-queue" element={<AppLayout><PaymentQueue /></AppLayout>} />
       <Route path="/cash-receipts" element={<AppLayout><CashReceipts /></AppLayout>} />

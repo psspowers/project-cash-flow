@@ -4,9 +4,10 @@ import {
   LayoutDashboard, FolderKanban, ShoppingCart, CheckCircle,
   CreditCard, Receipt, BookOpen, FileText, Bell, CalendarRange,
   BarChart3, Zap, ChevronDown, ChevronRight,
-  CheckCircle2, Clock, CalendarClock, TrendingUp,
+  CheckCircle2, Clock, CalendarClock, TrendingUp, Building2,
 } from 'lucide-react';
 import { UserRole } from '../../types';
+import { ANALYZER_ROLES, PROCUREMENT_READ_ROLES } from '../../config/roles';
 
 interface SidebarProps {
   role: UserRole;
@@ -98,8 +99,6 @@ function SectionLabel({ label }: { label: string }) {
   );
 }
 
-const ANALYZER_ROLES: UserRole[] = ['cost_controller', 'accounts_supervisor', 'accounts_manager', 'evp', 'ceo'];
-
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
@@ -111,6 +110,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
 
   // Keep group open while on the page even after mount
   const groupOpen = analyzerOpen || onAnalyzerPage;
+  const showProcurement = PROCUREMENT_READ_ROLES.includes(role);
 
   return (
     <aside className="fixed top-0 left-0 w-[220px] h-screen bg-[#0f1923] flex flex-col shrink-0 border-r border-white/5 z-40">
@@ -195,11 +195,14 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
           <NavItem to="/projects" label="All Projects" icon={<FolderKanban size={16} />} />
         )}
 
-        <Divider />
-
-        {/* Purchase Orders */}
-        {role === 'cost_controller' && (
-          <NavItem to="/purchase-orders" label="Purchase Orders" icon={<ShoppingCart size={16} />} />
+        {/* ── Procurement group ── */}
+        {showProcurement && (
+          <>
+            <Divider />
+            <SectionLabel label="Procurement" />
+            <NavItem to="/purchase-orders" label="Purchase Orders" icon={<ShoppingCart size={16} />} />
+            <NavItem to="/suppliers" label="Suppliers" icon={<Building2 size={16} />} />
+          </>
         )}
 
         <Divider />

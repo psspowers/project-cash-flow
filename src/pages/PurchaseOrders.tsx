@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHBCompact, formatDate } from '../utils/formatters';
 import POCreationWizard from '../components/pos/POCreationWizard';
+import { hasRole, PROCUREMENT_WRITE_ROLES } from '../config/roles';
 
 export default function PurchaseOrders() {
   const { profile, user } = useAuth();
@@ -17,6 +18,8 @@ export default function PurchaseOrders() {
   const [showWizard, setShowWizard] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const canWrite = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES);
 
   useEffect(() => { loadData(); }, []);
 
@@ -44,9 +47,12 @@ export default function PurchaseOrders() {
 
   async function loadData() {
     const [{ data: purchaseOrders }, { data: proj }, { data: vend }] = await Promise.all([
-      supabase.from('purchase_orders').select('*, vendor:entities!vendor_id(*), project:projects(*)').order('created_at', { ascending: false }),
+      supabase
+        .from('purchase_orders')
+        .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects(*)')
+        .order('created_at', { ascending: false }),
       supabase.from('projects').select('id, name, status').order('name'),
-      supabase.from('entities').select('id, name').eq('type', 'vendor').order('name'),
+      supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
     ]);
     setPos((purchaseOrders as PurchaseOrder[]) || []);
     setProjects(proj || []);
@@ -57,9 +63,10 @@ export default function PurchaseOrders() {
   const filtered = pos.filter(po => {
     if (projectFilter && (po.project as Project | undefined)?.id !== projectFilter) return false;
     if (!search) return true;
+    const vendorName = (po.vendor as Entity | undefined)?.name ?? po.supplier_name_raw ?? '';
     return (
       (po.pss_po_no ?? '').toLowerCase().includes(search.toLowerCase()) ||
-      (po.vendor as Entity | undefined)?.name?.toLowerCase().includes(search.toLowerCase()) ||
+      vendorName.toLowerCase().includes(search.toLowerCase()) ||
       (po.project as Project | undefined)?.name?.toLowerCase().includes(search.toLowerCase())
     );
   });
@@ -79,7 +86,7 @@ export default function PurchaseOrders() {
             {filtered.length !== pos.length ? `${filtered.length} of ${pos.length} POs` : `${pos.length} total POs`}
           </p>
         </div>
-        {(profile?.role === 'cost_controller' || profile?.role === 'procurement_executive') && (
+        {canWrite && (
           <button
             onClick={() => setShowWizard(true)}
             className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
@@ -148,7 +155,9 @@ export default function PurchaseOrders() {
                 <td className="px-4 py-3 text-sm font-medium text-gray-800">
                   {po.pss_po_no ?? <span className="text-gray-400 italic text-xs">Pending approval</span>}
                 </td>
-                <td className="px-4 py-3 text-sm text-gray-600">{(po.vendor as Entity | undefined)?.name ?? '—'}</td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {(po.vendor as Entity | undefined)?.name ?? po.supplier_name_raw ?? '—'}
+                </td>
                 <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">
                   {(po.project as Project | undefined)?.name?.split('–')[0]?.trim() ?? '—'}
                 </td>
@@ -161,7 +170,7 @@ export default function PurchaseOrders() {
                 </td>
                 <td className="px-4 py-3 text-xs text-gray-500">{formatDate(po.po_date)}</td>
                 <td className="px-4 py-3">
-                  {po.status === 'draft' && !po.pss_po_no && (profile?.role === 'cost_controller' || profile?.role === 'procurement_executive') && (
+                  {canWrite && po.status === 'draft' && !po.pss_po_no && (
                     <button
                       onClick={() => handleSubmitDraft(po.id)}
                       disabled={isSubmitting}

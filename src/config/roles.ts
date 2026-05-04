@@ -1,0 +1,26 @@
+import type { UserRole } from '../types';
+
+// Roles that can create POs, submit drafts, and write supplier data
+export const PROCUREMENT_WRITE_ROLES: UserRole[] = ['cost_controller', 'procurement_executive'];
+
+// Roles that can view Purchase Orders and Suppliers (finance team is read-only)
+export const PROCUREMENT_READ_ROLES: UserRole[] = [
+  'cost_controller',
+  'procurement_executive',
+  'banking_finance_officer',
+  'accounts_supervisor',
+  'accounts_manager',
+];
+
+// Roles that can access the analytics / monthly analyzer section
+export const ANALYZER_ROLES: UserRole[] = [
+  'cost_controller',
+  'accounts_supervisor',
+  'accounts_manager',
+  'evp',
+  'ceo',
+];
+
+export function hasRole(role: UserRole | undefined | null, allowed: UserRole[]): boolean {
+  return role != null && allowed.includes(role);
+}
