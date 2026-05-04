@@ -227,7 +227,9 @@ export interface VendorInvoice {
   received_amount: number;
   wht_3pct: number;
   net_payable: number;
-  status: 'received' | 'approved_cm' | 'approved_evp' | 'released' | 'paid';
+  status: 'received' | 'approved_cm' | 'approved_evp' | 'released' | 'paid' | 'rejected';
+  rejection_comment?: string;
+  rejected_by?: string;
   original_due_date?: string;
   planned_payment_date?: string;
   planning_notes?: string;

@@ -11,6 +11,7 @@ import { formatDate } from '../../../utils/formatters';
 import VendorCombobox from '../../ui/VendorCombobox';
 import { CATEGORY_MAP, CATEGORY_KEY_LABELS } from '../projectDetailConstants';
 import { useAuth } from '../../../context/AuthContext';
+import { submitInvoice } from '../../../services/workflow';
 
 interface OverrunInfo {
   budgetAmt: number;
@@ -136,27 +137,28 @@ export default function OrdersTab() {
   }
 
   async function handleLogInvoice() {
-    if (!logInvoiceTarget || isLoggingInvoice) return;
+    if (!logInvoiceTarget || isLoggingInvoice || !project || !user) return;
     const { milestone, po } = logInvoiceTarget;
     const amount = parseFloat(logInvoiceAmount) || 0;
     if (amount <= 0) { alert('Please enter a valid invoice amount.'); return; }
     if (!logInvoiceNo.trim()) { alert('Please enter an invoice number.'); return; }
     setIsLoggingInvoice(true);
     try {
-      const { error: insertError } = await supabase.from('vendor_invoices').insert({
-        po_id: po.id,
-        project_id: po.project_id,
-        vendor_id: po.vendor_id,
-        po_milestone_id: milestone.id,
-        vendor_invoice_no: logInvoiceNo.trim(),
-        invoice_amount_incl_vat: amount,
-        received_amount: 0,
-        wht_3pct: 0,
-        net_payable: amount,
-        status: 'received',
+      const vendor = vendors.find(v => v.id === po.vendor_id);
+      const { error } = await submitInvoice({
+        poId: po.id,
+        milestoneId: milestone.id,
+        amount,
+        invoiceNo: logInvoiceNo.trim(),
+        projectId: po.project_id,
+        vendorId: po.vendor_id ?? '',
+        costControllerId: user.id,
+        projectName: project.name,
+        poNumber: po.pss_po_no,
+        vendorName: vendor?.name ?? 'Supplier',
+        milestoneNumber: milestone.milestone_number,
       });
-      if (insertError) { alert('Failed to log invoice: ' + insertError.message); return; }
-      await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestone.id);
+      if (error) { alert('Failed to log invoice: ' + error); return; }
       setLogInvoiceTarget(null);
       setLogInvoiceNo('');
       setLogInvoiceAmount('');

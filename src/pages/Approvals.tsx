@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle, XCircle, Clock, Plus, X, FileText, DollarSign, ArrowRightLeft, ShoppingCart } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Plus, X, FileText, DollarSign, ArrowRightLeft, ShoppingCart, Receipt } from 'lucide-react';
+import { approveInvoiceCM, approveInvoiceCEO, approveInvoiceEVP, rejectInvoiceCM } from '../services/workflow';
 import { useForm } from 'react-hook-form';
 import { supabase } from '../lib/supabase';
 import {
@@ -101,6 +102,10 @@ export default function Approvals() {
   const [poRejectReason, setPoRejectReason] = useState('');
   const [poAction, setPoAction] = useState(false);
 
+  const [invoiceRejectModal, setInvoiceRejectModal] = useState<VendorInvoice | null>(null);
+  const [invoiceRejectComment, setInvoiceRejectComment] = useState('');
+  const [invoiceAction, setInvoiceAction] = useState(false);
+
   const { register, handleSubmit, watch, reset } = useForm<ProgressReportForm>();
   const pctValue = watch('percentage_complete', 0);
 
@@ -111,7 +116,7 @@ export default function Approvals() {
     const [{ data: reps }, { data: purchaseOrders }, { data: invs }, { data: proj }, { data: costingData }, { data: profileData }, { data: pendingPOData }, { data: completedPOData }] = await Promise.all([
       supabase.from('progress_reports').select('*, project:projects(*), purchase_order:purchase_orders(*, vendor:entities!vendor_id(*))').order('created_at', { ascending: false }),
       supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').in('status', ['approved', 'partially_paid']),
-      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*)').in('status', ['received', 'approved_cm', 'approved_evp']),
+      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, project:projects(name))').in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
       supabase.from('projects').select('id, name, status, last_rejected_stage').order('name'),
       supabase.from('project_costings').select('*').in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
       supabase.from('user_profiles').select('*'),
@@ -434,9 +439,10 @@ export default function Approvals() {
     loadData();
   }
 
+  const role = profile?.role ?? '';
   const filteredCostings = filterCostings();
   const filteredReports = filterReports();
-  const role = profile?.role ?? '';
+  const filteredInvoices = filterInvoices();
   const canCreate = role === 'cost_controller';
 
   function canReviewReport(report: ProgressReport): boolean {
@@ -472,6 +478,63 @@ export default function Approvals() {
       if (tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved');
     }
     return [];
+  }
+
+  function filterInvoices(): VendorInvoice[] {
+    if (tab === 'pending') {
+      if (role === 'construction_manager') return invoices.filter(i => i.status === 'received');
+      if (role === 'evp') return invoices.filter(i => i.status === 'approved_cm');
+      if (role === 'ceo') return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'cost_controller') return invoices.filter(i => i.status === 'rejected');
+    }
+    if (tab === 'with_others') {
+      if (role === 'cost_controller') return invoices.filter(i => i.status === 'received' || i.status === 'approved_cm');
+      if (role === 'construction_manager') return invoices.filter(i => i.status === 'approved_cm');
+      if (role === 'evp') return invoices.filter(i => i.status === 'approved_evp');
+    }
+    if (tab === 'completed') {
+      if (role === 'construction_manager') return invoices.filter(i => i.status === 'approved_cm' || i.status === 'rejected');
+      if (role === 'evp') return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'ceo') return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'cost_controller') return invoices.filter(i => i.status === 'approved_cm' || i.status === 'approved_evp');
+    }
+    return [];
+  }
+
+  async function handleApproveInvoice(invoice: VendorInvoice) {
+    if (!user || invoiceAction) return;
+    setInvoiceAction(true);
+    const po = invoice.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const projectName = po?.project?.name ?? '';
+    const invoiceNo = invoice.vendor_invoice_no ?? invoice.id.slice(0, 8);
+    let result: { error: string | null };
+    if (role === 'construction_manager') {
+      result = await approveInvoiceCM(invoice.id, user.id, projectName, invoiceNo, invoice.project_id);
+    } else if (role === 'evp') {
+      result = await approveInvoiceEVP(invoice.id, user.id, invoice.invoice_amount_incl_vat, projectName, invoiceNo, invoice.project_id);
+    } else if (role === 'ceo') {
+      result = await approveInvoiceCEO(invoice.id, user.id, projectName, invoiceNo, invoice.invoice_amount_incl_vat, invoice.project_id);
+    } else {
+      setInvoiceAction(false);
+      return;
+    }
+    if (result.error) alert('Failed to approve invoice: ' + result.error);
+    setInvoiceAction(false);
+    loadData();
+  }
+
+  async function handleRejectInvoice() {
+    if (!invoiceRejectModal || !user || !invoiceRejectComment.trim() || invoiceAction) return;
+    setInvoiceAction(true);
+    const po = invoiceRejectModal.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const projectName = po?.project?.name ?? '';
+    const invoiceNo = invoiceRejectModal.vendor_invoice_no ?? invoiceRejectModal.id.slice(0, 8);
+    const result = await rejectInvoiceCM(invoiceRejectModal.id, user.id, invoiceRejectComment.trim(), projectName, invoiceNo, invoiceRejectModal.project_id);
+    if (result.error) alert('Failed to reject invoice: ' + result.error);
+    setInvoiceRejectModal(null);
+    setInvoiceRejectComment('');
+    setInvoiceAction(false);
+    loadData();
   }
 
   async function handleTransferRecommend(t: ProjectCashTransfer) {
@@ -1025,6 +1088,106 @@ export default function Approvals() {
         </div>
       )}
 
+      {filteredInvoices.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Receipt size={16} className="text-[#6366F1] opacity-80" style={{ color: '#2563eb' }} />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Supplier Invoices</h2>
+            <span className="bg-[#2563eb]/10 text-[#2563eb] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredInvoices.length}</span>
+          </div>
+
+          {filteredInvoices.map(invoice => {
+            const po = invoice.purchase_order as { pss_po_no?: string; description?: string; project?: { name: string } } | undefined;
+            const vendor = invoice.vendor as { name: string } | undefined;
+            const projectName = po?.project?.name ?? '—';
+            const invoiceStatusMap: Record<string, { label: string; cls: string; border: string }> = {
+              received:    { label: 'Awaiting CM Review', cls: 'bg-amber-50 text-amber-700', border: 'border-l-amber-400' },
+              approved_cm: { label: 'CM Approved', cls: 'bg-blue-50 text-blue-700', border: 'border-l-blue-400' },
+              approved_evp:{ label: 'EVP Approved', cls: 'bg-[#1D9E75]/10 text-[#1D9E75]', border: 'border-l-[#1D9E75]' },
+              rejected:    { label: 'Rejected', cls: 'bg-[#E24B4A]/10 text-[#E24B4A]', border: 'border-l-[#E24B4A]' },
+            };
+            const s = invoiceStatusMap[invoice.status] ?? { label: invoice.status, cls: 'bg-gray-100 text-gray-600', border: 'border-l-gray-300' };
+            const canApprove =
+              (role === 'construction_manager' && invoice.status === 'received') ||
+              (role === 'evp' && invoice.status === 'approved_cm') ||
+              (role === 'ceo' && invoice.status === 'approved_evp');
+            const canReject = role === 'construction_manager' && invoice.status === 'received';
+
+            return (
+              <div key={invoice.id} className={`bg-white rounded-lg border-l-4 ${s.border} border border-gray-200 p-5`}>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
+                      {po?.pss_po_no && (
+                        <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{po.pss_po_no}</span>
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-gray-800">{projectName}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {po?.description ?? '—'}</p>
+                    {invoice.vendor_invoice_no && (
+                      <p className="text-xs text-gray-400 mt-0.5">Invoice No: <span className="font-medium text-gray-600">{invoice.vendor_invoice_no}</span></p>
+                    )}
+                    <p className="text-xs text-gray-400 mt-0.5">Logged {formatDate(invoice.created_at)}</p>
+                    {invoice.status === 'rejected' && invoice.rejection_comment && (
+                      <div className="mt-2 bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">
+                        <p className="text-xs font-medium text-[#E24B4A] mb-0.5">Rejection reason:</p>
+                        <p className="text-xs text-gray-700 italic">"{invoice.rejection_comment}"</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-right space-y-0.5">
+                    <p className="text-xs text-gray-400">Amount (incl VAT)</p>
+                    <p className="text-base font-bold text-[#0f1923]">{fmtTHB(invoice.invoice_amount_incl_vat)}</p>
+                    {invoice.wht_3pct > 0 && (
+                      <>
+                        <p className="text-xs text-gray-400">WHT 3%</p>
+                        <p className="text-xs text-[#EF9F27]">−{fmtTHB(invoice.wht_3pct)}</p>
+                        <p className="text-xs text-gray-400">Net Payable</p>
+                        <p className="text-sm font-semibold text-[#1D9E75]">{fmtTHB(invoice.net_payable)}</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {tab === 'pending' && (canApprove || canReject) && (
+                  <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
+                    {canReject && (
+                      <button
+                        onClick={() => { setInvoiceRejectModal(invoice); setInvoiceRejectComment(''); }}
+                        className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
+                      >
+                        <XCircle size={13} /> Reject
+                      </button>
+                    )}
+                    {canApprove && (
+                      <button
+                        onClick={() => handleApproveInvoice(invoice)}
+                        disabled={invoiceAction}
+                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors disabled:opacity-60"
+                      >
+                        <CheckCircle size={13} />
+                        {invoiceAction ? 'Processing...' : role === 'construction_manager' ? 'Approve — Send to EVP' : role === 'evp' && invoice.invoice_amount_incl_vat >= 3000000 ? 'Approve — Escalate to CEO' : 'Approve — Release for Payment'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {tab === 'with_others' && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <p className="text-xs text-gray-500">
+                      {invoice.status === 'received' && 'Awaiting Construction Manager review'}
+                      {invoice.status === 'approved_cm' && 'CM approved — awaiting EVP sign-off'}
+                      {invoice.status === 'approved_evp' && 'EVP approved — awaiting CEO final approval'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <CheckCircle size={16} className="text-[#EF9F27]" />
@@ -1390,6 +1553,54 @@ export default function Approvals() {
                 >
                   <CheckCircle size={15} />
                   {poAction ? 'Processing...' : 'Approve & Assign PSS No.'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {invoiceRejectModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">Reject Invoice</h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {invoiceRejectModal.vendor_invoice_no} — {fmtTHB(invoiceRejectModal.invoice_amount_incl_vat)}
+                </p>
+              </div>
+              <button onClick={() => setInvoiceRejectModal(null)}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                The invoice will be returned to the Cost Controller with your comment. They will need to resolve the issue before resubmitting.
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Reason for rejection <span className="text-[#E24B4A]">*</span></label>
+                <textarea
+                  value={invoiceRejectComment}
+                  onChange={e => setInvoiceRejectComment(e.target.value)}
+                  rows={4}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none"
+                  placeholder="e.g. Supplier did not finish the mounting, do not pay yet..."
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setInvoiceRejectModal(null)}
+                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRejectInvoice}
+                  disabled={!invoiceRejectComment.trim() || invoiceAction}
+                  className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60"
+                >
+                  <XCircle size={15} />
+                  {invoiceAction ? 'Rejecting...' : 'Confirm Rejection'}
                 </button>
               </div>
             </div>
