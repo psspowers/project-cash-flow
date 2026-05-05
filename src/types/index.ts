@@ -177,6 +177,20 @@ export type CostCategory =
   | '09_logistics'
   | '10_testing_warranty';
 
+export type POStatus =
+  | 'draft'
+  | 'pending_cc'
+  | 'pending_cm'
+  | 'pending_evp'
+  | 'pending_ceo'
+  | 'approved'
+  | 'pending_revision_approval'
+  | 'draft_revision'
+  | 'voided'
+  | 'cancelled'
+  | 'partially_paid'
+  | 'fully_paid';
+
 export interface PurchaseOrder {
   id: string;
   pss_po_no: string | null;
@@ -190,7 +204,7 @@ export interface PurchaseOrder {
   wht_applies: boolean;
   wht_3pct: number;
   po_date?: string;
-  status: 'draft' | 'pending_approval' | 'approved' | 'partially_paid' | 'fully_paid';
+  status: POStatus;
   has_supplier_milestones: boolean;
   pending_invoice_amount: number;
   pending_remaining_amount: number;
@@ -203,9 +217,27 @@ export interface PurchaseOrder {
   rejected_by?: string;
   rejected_at?: string;
   rejection_reason?: string;
+  // Versioning & revision
+  version: number;
+  parent_po_id?: string | null;
+  revision_reason?: string | null;
+  revision_requested_by?: string | null;
+  revision_requested_at?: string | null;
+  superseded_at?: string | null;
   created_at: string;
   vendor?: Entity;
   project?: Project;
+}
+
+export interface POAuditLog {
+  id: string;
+  po_id: string;
+  action: string;
+  from_status: POStatus | null;
+  to_status: POStatus;
+  actor_id: string;
+  notes?: string | null;
+  created_at: string;
 }
 
 export interface POMilestone {
