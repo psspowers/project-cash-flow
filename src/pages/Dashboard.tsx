@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   BarChart,
@@ -28,7 +28,7 @@ import {
   ChevronDown,
   Save,
 } from 'lucide-react';
-import { subMonths, format } from 'date-fns';
+import { format } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -79,6 +79,28 @@ interface TreasuryAdjustment {
   fiscal_year: number;
   created_by: string | null;
   created_at: string | null;
+}
+
+interface ChartPaidInvoice {
+  po_id: string | null;
+  invoice_date: string | null;
+  invoice_amount_incl_vat: number;
+  milestones: { amount_due: number; planned_payment_date: string | null }[];
+}
+
+interface ChartReceivedInvoice {
+  po_id: string | null;
+  project_id: string | null;
+  invoice_amount_incl_vat: number;
+  received_amount: number;
+  milestones: { amount_due: number; planned_payment_date: string | null }[];
+}
+
+interface ChartUninvoicedMilestone {
+  purchase_order_id: string;
+  project_id: string | null;
+  amount_due: number;
+  planned_payment_date: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +389,6 @@ export default function Dashboard() {
   const [clientMilestonesAll, setClientMilestonesAll] = useState<
     { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[]
   >([]);
-  const [allPOs, setAllPOs] = useState<{ project_id: string; po_amount_excl_vat: number }[]>([]);
 
   // Treasury Waterfall state
   const [sgaActuals, setSgaActuals] = useState<SgaActual[]>([]);
@@ -382,29 +403,9 @@ export default function Dashboard() {
   const [sgaEditValues, setSgaEditValues] = useState<Record<string, string>>({});
 
   // Chart-specific state — uses the same pivot-table data model
-  interface ChartPaidInvoice {
-    po_id: string | null;
-    invoice_date: string | null;
-    invoice_amount_incl_vat: number;
-    milestones: { amount_due: number; planned_payment_date: string | null }[];
-  }
-  interface ChartReceivedInvoice {
-    po_id: string | null;
-    project_id: string | null;
-    invoice_amount_incl_vat: number;
-    received_amount: number;
-    milestones: { amount_due: number; planned_payment_date: string | null }[];
-  }
-  interface ChartUninvoicedMilestone {
-    purchase_order_id: string;
-    project_id: string | null;
-    amount_due: number;
-    planned_payment_date: string | null;
-  }
   const [chartPaidInvoices, setChartPaidInvoices] = useState<ChartPaidInvoice[]>([]);
   const [chartReceivedInvoices, setChartReceivedInvoices] = useState<ChartReceivedInvoice[]>([]);
   const [chartUninvoicedMilestones, setChartUninvoicedMilestones] = useState<ChartUninvoicedMilestone[]>([]);
-  const [chartRawMilestones, setChartRawMilestones] = useState<{ purchase_order_id: string; amount_due: number; planned_payment_date: string | null }[]>([]);
 
   useEffect(() => {
     loadData();
@@ -420,16 +421,13 @@ export default function Dashboard() {
       const userId = user?.id;
       const [
         { data: proj, error: e1 },
-        { data: ciReceipts, error: e2 },
+        { data: ciAll, error: e2 },
         { data: voucs, error: e3 },
         { data: lns, error: e4 },
         { data: reports, error: e5 },
-        { data: clientInvs, error: e6 },
-        { data: costings, error: e7 },
+        { data: costings, error: e6 },
         { data: viewRows },
-        { data: viRaw, error: e8 },
-        { data: cmAll, error: e9 },
-        { data: poRaw, error: e10 },
+        { data: cmAll, error: e7 },
         { data: chartPaidRaw },
         { data: chartReceivedRaw },
         { data: chartMilestonesRaw },
@@ -441,15 +439,14 @@ export default function Dashboard() {
           .from('projects')
           .select('*, client:entities!client_entity_id(*)')
           .order('created_at'),
+        // Single query covers both receipt history and pending receivables
         supabase
           .from('client_invoices')
-          .select('project_id, received_amount, receipt_date, client_milestone_id')
-          .gt('received_amount', 0),
+          .select('project_id, received_amount, pending_amount, receipt_date, invoice_date, client_milestone_id'),
+        // Single query — issued-voucher subset derived in JS from this result
         supabase
           .from('payment_vouchers')
-          .select(
-            'id, project_id, net_paid, status, ceo_notified, voucher_no, voucher_date',
-          )
+          .select('id, project_id, net_paid, status, ceo_notified, voucher_no, voucher_date')
           .order('created_at', { ascending: false }),
         supabase
           .from('loans')
@@ -462,10 +459,6 @@ export default function Dashboard() {
           )
           .order('created_at', { ascending: false }),
         supabase
-          .from('client_invoices')
-          .select('project_id, pending_amount, invoice_date')
-          .gt('pending_amount', 0),
-        supabase
           .from('project_costings')
           .select('*, project:projects(*)')
           .in('status', ['submitted', 'cm_approved', 'evp_approved'])
@@ -477,18 +470,9 @@ export default function Dashboard() {
               .eq('user_id', userId)
           : Promise.resolve({ data: [], error: null }),
         supabase
-          .from('payment_vouchers')
-          .select('project_id, net_paid, voucher_date')
-          .eq('status', 'issued')
-          .gt('net_paid', 0),
-        supabase
           .from('client_milestones')
           .select('id, project_id, payment_plan_amount, planned_receive_date, status')
           .neq('status', 'received'),
-        supabase
-          .from('purchase_orders')
-          .select('project_id, po_amount_excl_vat')
-          .neq('status', 'cancelled'),
         // Chart-specific: paid invoices with milestone relations (mirrors MonthlyAnalysis pivot)
         supabase
           .from('vendor_invoices')
@@ -521,7 +505,7 @@ export default function Dashboard() {
           .order('created_at', { ascending: false }),
       ]);
 
-      const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8 || e9 || e10;
+      const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7;
       if (firstError) throw firstError;
 
       const viewMap: Record<string, number> = {};
@@ -529,29 +513,30 @@ export default function Dashboard() {
         viewMap[r.project_id] = r.view_count;
       });
 
-      const normalizedViPaid = (viRaw ?? [])
-        .map((pv: { project_id: string | null; net_paid: number; voucher_date: string | null }) => ({
-          project_id: pv.project_id ?? '',
-          net_paid: pv.net_paid,
-          voucher_date: pv.voucher_date,
-        }))
-        .filter((pv: { project_id: string }) => pv.project_id !== '');
+      // Split the consolidated client_invoices result into the two logical sets
+      type CiRow = { project_id: string; received_amount: number; pending_amount: number; receipt_date: string | null; invoice_date: string | null; client_milestone_id: string | null };
+      const ciRows = (ciAll ?? []) as CiRow[];
+      const ciReceiptRows = ciRows.filter(r => r.received_amount > 0);
+      const ciPendingRows = ciRows.filter(r => r.pending_amount > 0);
+
+      // Derive issued vouchers from the single payment_vouchers result
+      const voucherRows = voucs ?? [];
+      const issuedVouchers = voucherRows
+        .filter(v => v.status === 'issued' && v.net_paid > 0)
+        .map(v => ({ project_id: v.project_id ?? '', net_paid: v.net_paid, voucher_date: v.voucher_date }))
+        .filter(v => v.project_id !== '');
 
       setProjects(proj ?? []);
-      setClientInvoiceReceipts(ciReceipts ?? []);
-      setVouchers(voucs ?? []);
+      setClientInvoiceReceipts(ciReceiptRows);
+      setVouchers(voucherRows);
       setLoans(lns ?? []);
       setPendingReports(reports ?? []);
       setPendingCostings((costings as unknown as ProjectCosting[]) ?? []);
       setProjectViewCounts(viewMap);
-      setVendorInvoicePaid(normalizedViPaid);
-      const normalizedClientInvs = (clientInvs ?? []) as { project_id: string; pending_amount: number; invoice_date: string | null }[];
-      setPendingClientInvoices(normalizedClientInvs);
-      setPendingReceivablesSum(
-        normalizedClientInvs.reduce((s, r) => s + (r.pending_amount ?? 0), 0),
-      );
+      setVendorInvoicePaid(issuedVouchers);
+      setPendingClientInvoices(ciPendingRows);
+      setPendingReceivablesSum(ciPendingRows.reduce((s, r) => s + (r.pending_amount ?? 0), 0));
       setClientMilestonesAll((cmAll ?? []) as typeof clientMilestonesAll);
-      setAllPOs((poRaw as any) ?? []);
 
       // Chart data — normalize nested milestone arrays
       setChartPaidInvoices(
@@ -569,13 +554,6 @@ export default function Dashboard() {
           invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
           received_amount: vi.received_amount ?? 0,
           milestones: vi.purchase_order?.milestones ?? [],
-        }))
-      );
-      setChartRawMilestones(
-        (chartMilestonesRaw ?? []).map((m: any) => ({
-          purchase_order_id: m.purchase_order_id,
-          amount_due: m.amount_due,
-          planned_payment_date: m.planned_payment_date,
         }))
       );
       // Compute uninvoiced milestones using 1:1 matching (same as MonthlyAnalysisUninvoiced)
@@ -643,11 +621,6 @@ export default function Dashboard() {
     .filter((r) => r.receipt_date && r.receipt_date >= yearStart)
     .reduce((s, r) => s + r.received_amount, 0);
 
-  const totalReceivedAllTime = clientInvoiceReceipts.reduce(
-    (s, r) => s + r.received_amount,
-    0,
-  );
-
   // ── Outstanding Receivable ────────────────────────────────────────────────
   // Col O (receivable): client invoices pending payment — same as pending_amount sum
   const pendingReceivables = pendingReceivablesSum;
@@ -691,7 +664,7 @@ export default function Dashboard() {
 
   // ── 1:1 milestone matching for paid invoices (Historical Cash Out) ────────
   // Mirrors MonthlyAnalysis.tsx exactly.
-  const chartHistoricalByMonth = (() => {
+  const chartHistoricalByMonth = useMemo(() => {
     const pool = new Map<string, Map<string, { planned_payment_date: string | null }[]>>();
     for (const inv of chartPaidInvoices) {
       if (!inv.po_id) continue;
@@ -729,11 +702,11 @@ export default function Dashboard() {
       byMonth.set(mk, (byMonth.get(mk) ?? 0) + Number(inv.invoice_amount_incl_vat));
     }
     return byMonth;
-  })();
+  }, [chartPaidInvoices, now]);
 
   // ── 1:1 milestone matching for received invoices (Forecast Balance / Col O) ─
   // Mirrors MonthlyAnalysisBalance.tsx with roll-forward.
-  const chartBalanceByMonth = (() => {
+  const chartBalanceByMonth = useMemo(() => {
     const pool = new Map<string, Map<string, { planned_payment_date: string | null }[]>>();
     for (const inv of chartReceivedInvoices) {
       if (!inv.po_id) continue;
@@ -767,18 +740,18 @@ export default function Dashboard() {
       byMonth.set(mk, (byMonth.get(mk) ?? 0) + balance);
     }
     return byMonth;
-  })();
+  }, [chartReceivedInvoices, now]);
 
   // ── Uninvoiced milestones (Forecast Yet-to-Invoice) with roll-forward ─────
   // Mirrors MonthlyAnalysisUninvoiced.tsx.
-  const chartUninvoicedByMonth = (() => {
+  const chartUninvoicedByMonth = useMemo(() => {
     const byMonth = new Map<string, number>();
     for (const m of chartUninvoicedMilestones) {
       const mk = chartRollForwardKey(m.planned_payment_date);
       byMonth.set(mk, (byMonth.get(mk) ?? 0) + Number(m.amount_due));
     }
     return byMonth;
-  })();
+  }, [chartUninvoicedMilestones, now]);
 
   // ── Build unified month key list (all months that appear in any dataset) ──
   const allChartKeys = new Set<string>([
@@ -920,7 +893,7 @@ export default function Dashboard() {
       .reduce((s, m) => s + m.payment_plan_amount, 0);
     // Use chartRawMilestones scoped to project POs for outflow estimate
     const nextOut = chartUninvoicedMilestones
-      .filter(m => m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
+      .filter(m => m.project_id === p.id && m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
       .reduce((s, m) => s + Number(m.amount_due), 0);
     return nextOut > nextIn;
   }).length;
