@@ -45,7 +45,7 @@ export default function CashReceipts() {
 
   async function loadData() {
     const [{ data: rec }, { data: proj }, { data: comp }] = await Promise.all([
-      supabase.from('cash_receipts').select('*, project:projects(*), company:entities!company_id(*)').order('receipt_date', { ascending: false }),
+      supabase.from('cash_receipts').select('*, project:projects(name), company:entities!company_id(name)').order('receipt_date', { ascending: false }),
       supabase.from('projects').select('id, name').order('name'),
       supabase.from('entities').select('id, name').in('type', ['client', 'subsidiary']),
     ]);
