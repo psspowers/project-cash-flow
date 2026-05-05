@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Plus, Search, Pencil, X, Check, Building2, ShieldAlert,
   Globe, Phone, Mail, User, CreditCard, FileText, ChevronDown,
-  ShoppingCart, Receipt, TrendingUp,
+  ShoppingCart, Receipt, TrendingUp, Download,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -216,6 +216,38 @@ export default function Suppliers() {
       .order('name');
     setSuppliers((data as Supplier[]) || []);
     setLoading(false);
+  }
+
+  function exportCSV() {
+    const headers = [
+      'name', 'supplier_type', 'tax_id', 'is_active', 'is_related_party',
+      'address', 'website', 'phone', 'email',
+      'contact_person_name', 'contact_person_title', 'contact_person_phone', 'contact_person_email',
+      'bank_name', 'bank_branch', 'bank_account_no', 'bank_account_name',
+      'default_wht_rate', 'notes',
+    ];
+
+    const escape = (v: string | number | boolean | null | undefined): string => {
+      if (v == null) return '';
+      const s = String(v);
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const rows = suppliers.map(s =>
+      headers.map(h => escape((s as unknown as Record<string, unknown>)[h])).join(',')
+    );
+
+    const csv = [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `suppliers_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function toggleExpand(s: Supplier) {
@@ -442,15 +474,24 @@ export default function Suppliers() {
             {activeCount} active{inactiveCount > 0 ? ` · ${inactiveCount} inactive` : ''}
           </p>
         </div>
-        {canWrite && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={openAdd}
-            className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
+            onClick={exportCSV}
+            className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 hover:border-gray-300 transition-colors"
           >
-            <Plus size={16} />
-            Add Supplier
+            <Download size={15} />
+            Export CSV
           </button>
-        )}
+          {canWrite && (
+            <button
+              onClick={openAdd}
+              className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
+            >
+              <Plus size={16} />
+              Add Supplier
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
