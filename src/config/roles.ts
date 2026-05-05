@@ -7,6 +7,7 @@ export const PROCUREMENT_WRITE_ROLES: UserRole[] = ['cost_controller', 'procurem
 export const PROCUREMENT_READ_ROLES: UserRole[] = [
   'cost_controller',
   'procurement_executive',
+  'procurement_supervisor',
   'banking_finance_officer',
   'accounts_supervisor',
   'accounts_manager',

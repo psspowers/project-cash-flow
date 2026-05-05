@@ -27,6 +27,7 @@ const TEST_ROLES = [
   { value: 'construction_manager', label: 'Construction Manager' },
   { value: 'cost_controller', label: 'Cost Controller' },
   { value: 'procurement_executive', label: 'Procurement Executive' },
+  { value: 'procurement_supervisor', label: 'Procurement Supervisor' },
   { value: 'accounts_supervisor', label: 'Accounts Supervisor' },
   { value: 'accounts_manager', label: 'Accounts Manager' },
   { value: 'banking_finance_officer', label: 'Banking/Finance Exec' },
