@@ -738,6 +738,7 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
   function validate() {
     const errs: Record<string, string> = {};
     if (!name.trim()) errs.name = 'Project name is required';
+    if (!clientId) errs.clientId = 'Client is required';
     if (!contractExcl || parseFloat(contractExcl) <= 0) errs.contractExcl = 'Contract value must be greater than 0';
     setErrors(errs);
     return Object.keys(errs).length === 0;
@@ -821,11 +822,12 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
                   setClientId('');
                   setClientDropdownOpen(true);
                   setCreatingClient(false);
+                  setErrors(p => ({ ...p, clientId: '' }));
                 }}
                 onFocus={() => setClientDropdownOpen(true)}
                 onBlur={() => setTimeout(() => setClientDropdownOpen(false), 150)}
                 placeholder="Search or select client..."
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] pr-8"
+                className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] pr-8 ${errors.clientId ? 'border-[#E24B4A]' : 'border-gray-200'}`}
               />
               {clientId && (
                 <button
@@ -837,6 +839,7 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
                 </button>
               )}
             </div>
+            {errors.clientId && <p className="text-xs text-[#E24B4A] mt-1">{errors.clientId}</p>}
 
             {clientDropdownOpen && !creatingClient && (
               <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
