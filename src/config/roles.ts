@@ -21,6 +21,13 @@ export const ANALYZER_ROLES: UserRole[] = [
   'ceo',
 ];
 
+// Roles that can enter actual SG&A monthly figures (Finance team + CEO)
+export const FINANCE_ROLES: UserRole[] = [
+  'accounts_manager',
+  'accounts_supervisor',
+  'ceo',
+];
+
 export function hasRole(role: UserRole | undefined | null, allowed: UserRole[]): boolean {
   return role != null && allowed.includes(role);
 }

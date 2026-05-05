@@ -22,6 +22,11 @@ import {
   ArrowRight,
   Landmark,
   ArrowUpRight,
+  Building2,
+  Plus,
+  X,
+  ChevronDown,
+  Save,
 } from 'lucide-react';
 import { subMonths, format } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
@@ -39,6 +44,7 @@ import {
 import MetricCard from '../components/ui/MetricCard';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatDate } from '../utils/formatters';
+import { FINANCE_ROLES, hasRole } from '../config/roles';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -55,6 +61,24 @@ interface MonthlyBar {
   month: string;
   inflow: number;
   outflow: number;
+}
+
+interface SgaActual {
+  id: string;
+  year: number;
+  month: number;
+  amount: number;
+  entered_by: string | null;
+  entered_at: string | null;
+}
+
+interface TreasuryAdjustment {
+  id: string;
+  label: string;
+  amount: number;
+  fiscal_year: number;
+  created_by: string | null;
+  created_at: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +369,18 @@ export default function Dashboard() {
   >([]);
   const [allPOs, setAllPOs] = useState<{ project_id: string; po_amount_excl_vat: number }[]>([]);
 
+  // Treasury Waterfall state
+  const [sgaActuals, setSgaActuals] = useState<SgaActual[]>([]);
+  const [treasuryAdjustments, setTreasuryAdjustments] = useState<TreasuryAdjustment[]>([]);
+  const [sgaMonthly, setSgaMonthly] = useState(3_500_000);
+  const [sgaMonths, setSgaMonths] = useState(24);
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState(new Date().getFullYear());
+  const [adjLabel, setAdjLabel] = useState('');
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjSaving, setAdjSaving] = useState(false);
+  const [sgaSaving, setSgaSaving] = useState<Record<string, boolean>>({});
+  const [sgaEditValues, setSgaEditValues] = useState<Record<string, string>>({});
+
   // Chart-specific state — uses the same pivot-table data model
   interface ChartPaidInvoice {
     po_id: string | null;
@@ -398,6 +434,8 @@ export default function Dashboard() {
         { data: chartReceivedRaw },
         { data: chartMilestonesRaw },
         { data: chartAllInvoicesRaw },
+        { data: sgaActualsRaw },
+        { data: treasuryAdjustmentsRaw },
       ] = await Promise.all([
         supabase
           .from('projects')
@@ -426,7 +464,6 @@ export default function Dashboard() {
         supabase
           .from('client_invoices')
           .select('project_id, pending_amount, invoice_date')
-          .in('status', ['pending', 'partially_received'])
           .gt('pending_amount', 0),
         supabase
           .from('project_costings')
@@ -471,6 +508,17 @@ export default function Dashboard() {
         supabase
           .from('vendor_invoices')
           .select('po_id, invoice_amount_incl_vat'),
+        // Treasury: SG&A actuals entered by finance team
+        supabase
+          .from('sga_actuals')
+          .select('id, year, month, amount, entered_by, entered_at')
+          .order('year', { ascending: true })
+          .order('month', { ascending: true }),
+        // Treasury: one-time corporate adjustments
+        supabase
+          .from('treasury_adjustments')
+          .select('id, label, amount, fiscal_year, created_by, created_at')
+          .order('created_at', { ascending: false }),
       ]);
 
       const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7 || e8 || e9 || e10;
@@ -557,6 +605,20 @@ export default function Dashboard() {
             planned_payment_date: m.planned_payment_date,
           }))
       );
+
+      setSgaActuals((sgaActualsRaw ?? []) as SgaActual[]);
+      setTreasuryAdjustments((treasuryAdjustmentsRaw ?? []) as TreasuryAdjustment[]);
+
+      // Seed edit values with existing actuals (only if not already edited by user)
+      const editSeed: Record<string, string> = {};
+      ((sgaActualsRaw ?? []) as SgaActual[]).forEach(a => {
+        editSeed[`${a.year}-${a.month}`] = String(a.amount);
+      });
+      setSgaEditValues(prev => {
+        const merged = { ...editSeed };
+        Object.keys(prev).forEach(k => { if (prev[k] !== '') merged[k] = prev[k]; });
+        return merged;
+      });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
     } finally {
@@ -919,6 +981,97 @@ export default function Dashboard() {
   );
 
   // ---------------------------------------------------------------------------
+  // Treasury Waterfall calculations
+  // ---------------------------------------------------------------------------
+
+  // Historical cash from Jan 2025 — total actually received from clients
+  const TREASURY_START = '2025-01-01';
+  const historicalCashIn = clientInvoiceReceipts
+    .filter(r => r.receipt_date && r.receipt_date >= TREASURY_START)
+    .reduce((s, r) => s + Number(r.received_amount), 0);
+
+  // Historical cash out — issued payment vouchers from Jan 2025
+  const historicalCashOut = vendorInvoicePaid
+    .filter(v => v.voucher_date && v.voucher_date >= TREASURY_START)
+    .reduce((s, v) => s + Number(v.net_paid), 0);
+
+  const historicalProjectNet = historicalCashIn - historicalCashOut;
+
+  // Future net = outstanding receivable minus outstanding payable
+  const futureProjectNet = totalOutstandingReceivable - totalOutstandingPayable;
+
+  // Financing: loans received minus what's already been repaid (principal - outstanding = repaid)
+  const allLoansReceived = loans.filter(l => l.loan_type === 'received');
+  const netFinancingCash = allLoansReceived.reduce((s, l) => s + Number(l.principal) - Number(l.outstanding_balance), 0);
+  const totalLoanObligations = allLoansReceived.reduce((s, l) => s + Number(l.outstanding_balance), 0);
+
+  // SG&A hybrid: use actuals where entered, projection for the rest
+  // Build a map of year-month -> actual for fast lookup
+  const sgaActualMap = new Map(sgaActuals.map(a => [`${a.year}-${a.month}`, a.amount]));
+  const sgaWindowStart = new Date(2025, 0, 1);
+  const sgaWindowEnd = new Date(now.getFullYear(), now.getMonth() + sgaMonths, 1);
+  let sgaActualTotal = 0;
+  let sgaProjectedTotal = 0;
+  let sgaActualMonthCount = 0;
+  let sgaProjectedMonthCount = 0;
+  const cur = new Date(sgaWindowStart);
+  while (cur < sgaWindowEnd) {
+    const key = `${cur.getFullYear()}-${cur.getMonth() + 1}`;
+    const actual = sgaActualMap.get(key);
+    if (actual != null) {
+      sgaActualTotal += Number(actual);
+      sgaActualMonthCount++;
+    } else {
+      sgaProjectedTotal += sgaMonthly;
+      sgaProjectedMonthCount++;
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  const totalSgaBurn = sgaActualTotal + sgaProjectedTotal;
+
+  // Adjustments total (all years)
+  const adjustmentsTotal = treasuryAdjustments.reduce((s, a) => s + Number(a.amount), 0);
+  const selectedYearAdjustments = treasuryAdjustments.filter(a => a.fiscal_year === selectedFiscalYear);
+
+  // Bottom line
+  const projectedEndingCash = netFinancingCash + adjustmentsTotal + historicalProjectNet + futureProjectNet - totalSgaBurn;
+
+  // Treasury mutation helpers
+  async function addAdjustment() {
+    const amt = parseFloat(adjAmount);
+    if (!adjLabel.trim() || isNaN(amt)) return;
+    setAdjSaving(true);
+    await supabase.from('treasury_adjustments').insert({
+      label: adjLabel.trim(),
+      amount: amt,
+      fiscal_year: selectedFiscalYear,
+      created_by: user?.id ?? null,
+    });
+    setAdjLabel('');
+    setAdjAmount('');
+    setAdjSaving(false);
+    loadData();
+  }
+
+  async function deleteAdjustment(id: string) {
+    await supabase.from('treasury_adjustments').delete().eq('id', id);
+    loadData();
+  }
+
+  async function saveSgaActual(year: number, month: number) {
+    const key = `${year}-${month}`;
+    const val = parseFloat(sgaEditValues[key] ?? '');
+    if (isNaN(val)) return;
+    setSgaSaving(prev => ({ ...prev, [key]: true }));
+    await supabase.from('sga_actuals').upsert(
+      { year, month, amount: val, entered_by: user?.id ?? null },
+      { onConflict: 'year,month' }
+    );
+    setSgaSaving(prev => ({ ...prev, [key]: false }));
+    loadData();
+  }
+
+  // ---------------------------------------------------------------------------
   // Approval queue items
   // ---------------------------------------------------------------------------
 
@@ -1273,6 +1426,319 @@ export default function Dashboard() {
                   ? 'Receivables exceed payables — net positive position'
                   : 'Payables exceed receivables — cash shortfall risk'}
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Treasury Cash Waterfall — CEO only */}
+      {!loading && profile?.role === 'ceo' && (
+        <div className="bg-white rounded-lg border border-black/[0.08] overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-[#0f1923]">
+            <div className="flex items-center gap-2.5">
+              <Building2 size={15} className="text-white/60" />
+              <h2 className="text-[13px] font-semibold text-white">Treasury Cash Waterfall</h2>
+              <span className="text-xs text-white/40 ml-1">— projected bank balance when all active projects complete</span>
+            </div>
+            {/* Fiscal year selector for adjustments */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-white/50">Adjustments Year:</span>
+              <div className="relative">
+                <select
+                  value={selectedFiscalYear}
+                  onChange={e => setSelectedFiscalYear(Number(e.target.value))}
+                  className="appearance-none text-xs bg-white/10 text-white border border-white/20 rounded-md px-2.5 py-1 pr-6 cursor-pointer focus:outline-none"
+                >
+                  {[2024, 2025, 2026, 2027, 2028].map(y => (
+                    <option key={y} value={y} className="text-gray-900 bg-white">{y}</option>
+                  ))}
+                </select>
+                <ChevronDown size={11} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+
+          {/* Four-column grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+
+            {/* Column 1 — Financing */}
+            <div className="p-5 space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Financing Cash</p>
+              <div>
+                <p className="text-xs text-gray-400 mb-0.5">Net cash from loans received</p>
+                <p className={`text-xl font-bold tabular-nums ${netFinancingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {netFinancingCash >= 0 ? '+' : ''}{fmtTHBCompact(netFinancingCash)}
+                </p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Principal received minus repayments made</p>
+              </div>
+              {totalLoanObligations > 0 && (
+                <div className="bg-amber-50 border border-amber-100 rounded-md p-2.5">
+                  <p className="text-[11px] text-amber-700 font-medium">Still owed to lenders</p>
+                  <p className="text-sm font-bold text-amber-800 tabular-nums">{fmtTHBCompact(totalLoanObligations)}</p>
+                  <p className="text-[10px] text-amber-600 mt-0.5">Outstanding balance — must be repaid</p>
+                </div>
+              )}
+              {allLoansReceived.length === 0 && (
+                <p className="text-xs text-gray-300 text-center py-3">No loans recorded</p>
+              )}
+            </div>
+
+            {/* Column 2 — One-Time Adjustments */}
+            <div className="p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">One-Time Adjustments</p>
+                <span className="text-[10px] text-gray-400">{selectedFiscalYear}</span>
+              </div>
+
+              {/* List of adjustments for selected year */}
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {selectedYearAdjustments.length === 0 ? (
+                  <p className="text-xs text-gray-300 text-center py-3">No adjustments for {selectedFiscalYear}</p>
+                ) : (
+                  selectedYearAdjustments.map(adj => (
+                    <div key={adj.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-gray-50 group">
+                      <span className="text-xs text-gray-700 truncate flex-1">{adj.label}</span>
+                      <span className={`text-xs font-semibold tabular-nums shrink-0 ${Number(adj.amount) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                        {Number(adj.amount) >= 0 ? '+' : ''}{fmtTHBCompact(Number(adj.amount))}
+                      </span>
+                      <button
+                        onClick={() => deleteAdjustment(adj.id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-[#E24B4A] shrink-0"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Subtotal for selected year */}
+              {selectedYearAdjustments.length > 0 && (
+                <div className="flex items-center justify-between pt-1 border-t border-gray-100">
+                  <span className="text-[10px] text-gray-400">{selectedFiscalYear} subtotal</span>
+                  <span className={`text-xs font-bold tabular-nums ${selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                    {selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? '+' : ''}
+                    {fmtTHBCompact(selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0))}
+                  </span>
+                </div>
+              )}
+
+              {/* Add adjustment form */}
+              <div className="space-y-1.5 pt-1 border-t border-gray-100">
+                <input
+                  type="text"
+                  placeholder="Label (e.g. Old Project Debt)"
+                  value={adjLabel}
+                  onChange={e => setAdjLabel(e.target.value)}
+                  className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300"
+                />
+                <div className="flex gap-1.5">
+                  <input
+                    type="number"
+                    placeholder="Amount (negative = deduction)"
+                    value={adjAmount}
+                    onChange={e => setAdjAmount(e.target.value)}
+                    className="flex-1 text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300"
+                  />
+                  <button
+                    onClick={addAdjustment}
+                    disabled={adjSaving || !adjLabel.trim() || !adjAmount}
+                    className="shrink-0 flex items-center gap-1 text-xs bg-[#0f1923] text-white px-2.5 py-1.5 rounded-md hover:bg-gray-800 disabled:opacity-40 transition-colors"
+                  >
+                    <Plus size={11} />
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* All-years total note */}
+              {treasuryAdjustments.length > 0 && (
+                <p className="text-[10px] text-gray-400">
+                  All-years net: <span className={`font-semibold ${adjustmentsTotal >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                    {adjustmentsTotal >= 0 ? '+' : ''}{fmtTHBCompact(adjustmentsTotal)}
+                  </span>
+                </p>
+              )}
+            </div>
+
+            {/* Column 3 — Project Operations */}
+            <div className="p-5 space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Project Operations</p>
+
+              <div className="space-y-2">
+                {/* Historical */}
+                <div className="bg-gray-50 rounded-md p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Historical (Jan 2025 – Today)</p>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Cash in from clients</span>
+                      <span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(historicalCashIn)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Cash out to suppliers</span>
+                      <span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(historicalCashOut)})</span>
+                    </div>
+                    <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+                      <span className="font-semibold text-gray-700">Historical Net</span>
+                      <span className={`font-bold tabular-nums ${historicalProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                        {historicalProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(historicalProjectNet)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Future */}
+                <div className="bg-gray-50 rounded-md p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Projected (Remaining Work)</p>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Outstanding receivable</span>
+                      <span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-gray-500">Outstanding payable</span>
+                      <span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(totalOutstandingPayable)})</span>
+                    </div>
+                    <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+                      <span className="font-semibold text-gray-700">Future Net</span>
+                      <span className={`font-bold tabular-nums ${futureProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                        {futureProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(futureProjectNet)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-1 border-t border-gray-100">
+                <span className="text-xs font-semibold text-gray-700">Total Project Contribution</span>
+                <span className={`text-sm font-bold tabular-nums ${(historicalProjectNet + futureProjectNet) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {(historicalProjectNet + futureProjectNet) >= 0 ? '+' : ''}{fmtTHBCompact(historicalProjectNet + futureProjectNet)}
+                </span>
+              </div>
+            </div>
+
+            {/* Column 4 — SG&A Overhead */}
+            <div className="p-5 space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Corporate SG&A</p>
+
+              {/* CEO projection inputs */}
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase tracking-wide">Monthly Estimate (฿)</label>
+                  <input
+                    type="number"
+                    value={sgaMonthly}
+                    onChange={e => setSgaMonthly(Number(e.target.value))}
+                    className="mt-1 w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-400 uppercase tracking-wide">Estimated Months Remaining</label>
+                  <input
+                    type="number"
+                    value={sgaMonths}
+                    onChange={e => setSgaMonths(Number(e.target.value))}
+                    className="mt-1 w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
+                  />
+                </div>
+              </div>
+
+              {/* Summary */}
+              <div className="bg-gray-50 rounded-md p-3 space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">{sgaActualMonthCount} actual months</span>
+                  <span className="font-medium text-gray-700 tabular-nums">{fmtTHBCompact(sgaActualTotal)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months</span>
+                  <span className="font-medium text-gray-500 tabular-nums">{fmtTHBCompact(sgaProjectedTotal)}</span>
+                </div>
+                <div className="flex justify-between text-xs border-t border-gray-200 pt-1">
+                  <span className="font-semibold text-gray-700">Total SG&A Burn</span>
+                  <span className="font-bold text-[#E24B4A] tabular-nums">({fmtTHBCompact(totalSgaBurn)})</span>
+                </div>
+              </div>
+
+              {/* Monthly actuals entry — Finance roles only */}
+              {hasRole(profile?.role, FINANCE_ROLES) && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Enter Monthly Actuals</p>
+                  <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                    {(() => {
+                      const rows = [];
+                      const d = new Date(2025, 0, 1);
+                      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+                      while (d < end) {
+                        const y = d.getFullYear();
+                        const m = d.getMonth() + 1;
+                        const key = `${y}-${m}`;
+                        const hasActual = sgaActualMap.has(key);
+                        const monthLabel = format(new Date(y, m - 1, 1), 'MMM yyyy');
+                        rows.push(
+                          <div key={key} className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-400 w-16 shrink-0">{monthLabel}</span>
+                            <input
+                              type="number"
+                              value={sgaEditValues[key] ?? ''}
+                              onChange={e => setSgaEditValues(prev => ({ ...prev, [key]: e.target.value }))}
+                              placeholder={hasActual ? String(sgaActualMap.get(key)) : 'Estimate'}
+                              className={`flex-1 text-[11px] border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums ${hasActual ? 'border-[#1D9E75]/40 bg-[#1D9E75]/5' : 'border-gray-200'}`}
+                            />
+                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${hasActual ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'bg-gray-100 text-gray-400'}`}>
+                              {hasActual ? 'ACT' : 'EST'}
+                            </span>
+                            <button
+                              onClick={() => saveSgaActual(y, m)}
+                              disabled={!!sgaSaving[key]}
+                              className="shrink-0 text-gray-300 hover:text-[#1D9E75] disabled:opacity-40 transition-colors"
+                            >
+                              <Save size={11} />
+                            </button>
+                          </div>
+                        );
+                        d.setMonth(d.getMonth() + 1);
+                      }
+                      return rows;
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Full-width bottom line */}
+          <div className={`px-6 py-5 border-t-2 ${projectedEndingCash >= 0 ? 'border-[#1D9E75]/30 bg-[#1D9E75]/5' : 'border-[#E24B4A]/30 bg-[#E24B4A]/5'}`}>
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Projected Ending Cash Position</p>
+                <p className="text-[10px] text-gray-400">Net Financing + Adjustments + Project Cash − SG&A</p>
+              </div>
+              <div className="text-right">
+                <p className={`text-3xl font-bold tabular-nums ${projectedEndingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {projectedEndingCash >= 0 ? '+' : ''}{fmtTHB(projectedEndingCash)}
+                </p>
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  {projectedEndingCash >= 0 ? 'Positive balance when all active projects complete' : 'Cash shortfall — review SG&A or adjust timeline'}
+                </p>
+              </div>
+            </div>
+            {/* Breakdown pills */}
+            <div className="flex flex-wrap gap-2 mt-4">
+              {[
+                { label: 'Financing', value: netFinancingCash },
+                { label: 'Adjustments', value: adjustmentsTotal },
+                { label: 'Historical Project', value: historicalProjectNet },
+                { label: 'Future Project', value: futureProjectNet },
+                { label: 'SG&A Burn', value: -totalSgaBurn },
+              ].map(item => (
+                <div key={item.label} className="flex items-center gap-1.5 bg-white/70 border border-gray-100 rounded-full px-3 py-1">
+                  <span className="text-[10px] text-gray-500">{item.label}:</span>
+                  <span className={`text-[10px] font-semibold tabular-nums ${item.value >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                    {item.value >= 0 ? '+' : ''}{fmtTHBCompact(item.value)}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
