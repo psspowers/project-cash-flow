@@ -1404,8 +1404,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Treasury Cash Waterfall — CEO only */}
-      {!loading && profile?.role === 'ceo' && (
+      {/* Treasury Cash Waterfall — CEO and Accounts Manager */}
+      {!loading && (profile?.role === 'ceo' || profile?.role === 'accounts_manager') && (
         <div className="bg-white rounded-lg border border-black/[0.08] overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-[#0f1923]">
