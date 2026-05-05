@@ -148,7 +148,7 @@ export default function CashReceipts() {
                   {r.pss_invoice_no && <p className="text-xs text-gray-400">{r.pss_invoice_no}</p>}
                 </td>
                 <td className="px-4 py-3 text-right text-sm text-gray-800">{formatTHB(r.amount_received)}</td>
-                <td className="px-4 py-3 text-right text-xs text-[#E24B4A]">({formatTHB(r.wht_deducted)})</td>
+                <td className="px-4 py-3 text-right text-xs text-[#E24B4A]">{r.wht_deducted > 0 ? `(${formatTHB(r.wht_deducted)})` : <span className="text-gray-300">—</span>}</td>
                 <td className="px-4 py-3 text-right text-sm font-semibold text-[#1D9E75]">{formatTHB(r.net_received)}</td>
                 <td className="px-4 py-3 text-xs text-gray-500">{r.bank_account || '—'}</td>
               </tr>
