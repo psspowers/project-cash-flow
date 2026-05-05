@@ -3,6 +3,7 @@ import { X, ChevronRight, ChevronLeft, Plus, Trash2, AlertTriangle, CheckCircle 
 import { supabase } from '../../lib/supabase';
 import { Project, Entity, CostCategory, COST_CATEGORY_LABELS, fmtTHB, PurchaseOrder } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useTaxConfig } from '../../hooks/useTaxConfig';
 import VendorCombobox from '../ui/VendorCombobox';
 
 interface Props {
@@ -32,6 +33,7 @@ const PO_THRESHOLD_EVP = 5_000_000;
 
 export default function POCreationWizard({ projects, vendors, onClose, onSuccess, editPo }: Props) {
   const { user } = useAuth();
+  const { vatRate, whtRate } = useTaxConfig();
   const isEdit = !!editPo;
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -87,9 +89,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
   }, [editPo]);
 
   const exclVatNum = Number(exclVat) || 0;
-  const vatNum = +(exclVatNum * 0.07).toFixed(2);
+  const vatNum = +(exclVatNum * vatRate).toFixed(2);
   const inclVatNum = +(exclVatNum + vatNum).toFixed(2);
-  const whtNum = +(exclVatNum * 0.03).toFixed(2);
+  const whtNum = +(exclVatNum * whtRate).toFixed(2);
 
   const totalMilestonePct = milestones.reduce((sum, m) => sum + (Number(m.pct) || 0), 0);
   const totalSimpleAmount = simplePayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);

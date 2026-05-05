@@ -10,6 +10,7 @@ import Badge, { statusVariant } from '../../ui/Badge';
 import { formatDate } from '../../../utils/formatters';
 import VendorCombobox from '../../ui/VendorCombobox';
 import { CATEGORY_MAP, CATEGORY_KEY_LABELS } from '../projectDetailConstants';
+import { useTaxConfig } from '../../../hooks/useTaxConfig';
 import { useAuth } from '../../../context/AuthContext';
 import { submitInvoice } from '../../../services/workflow';
 import PODetailModal from '../../pos/PODetailModal';
@@ -29,6 +30,7 @@ interface OverrunInfo {
 export default function OrdersTab() {
   const { project, orders, poMilestones, vendors, budget, vos, reload, isCostController, isCM } = useProjectDetail();
   const { user } = useAuth();
+  const { vatRate } = useTaxConfig();
 
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
   const [detailPO, setDetailPO] = useState<PurchaseOrder | null>(null);
@@ -182,7 +184,7 @@ export default function OrdersTab() {
       return;
     }
     const amt = parseFloat(poForm.po_amount_excl_vat) || 0;
-    const vat = amt * 0.07;
+    const vat = amt * vatRate;
     const total = amt + vat;
     const { error } = await supabase.from('purchase_orders').insert({
       project_id: project.id,
@@ -564,7 +566,7 @@ export default function OrdersTab() {
                 />
                 {poForm.po_amount_excl_vat && (
                   <p className="text-xs text-gray-400 mt-1">
-                    VAT 7%: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * 0.07)} | Total incl VAT: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * 1.07)}
+                    VAT {(vatRate * 100).toFixed(0)}%: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * vatRate)} | Total incl VAT: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * (1 + vatRate))}
                   </p>
                 )}
               </div>
