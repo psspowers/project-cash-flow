@@ -32,7 +32,7 @@ export default function PaymentQueue() {
 
   async function loadData() {
     const [{ data: inv }, { data: vouc }] = await Promise.all([
-      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*), project:projects(*), purchase_order:purchase_orders(*)').eq('status', 'released').order('created_at', { ascending: false }),
+      supabase.from('vendor_invoices').select('*, project:projects(name), purchase_order:purchase_orders(supplier_name_raw, wht_rate, vendor:entities(name))').eq('status', 'released').order('created_at', { ascending: false }),
       supabase.from('payment_vouchers').select('*').order('created_at', { ascending: false }),
     ]);
     setInvoices(inv || []);
@@ -128,7 +128,12 @@ export default function PaymentQueue() {
     setSubmitting(true);
 
     const voucherNo = await getNextVoucherNo();
-    const netPaid = selectedInvoice.net_payable;
+    const po = (selectedInvoice as any).purchase_order;
+    const gross = selectedInvoice.invoice_amount_incl_vat || 0;
+    const whtRate = po?.wht_rate || 0;
+    const exclVat = gross / 1.07;
+    const whtAmount = exclVat * whtRate;
+    const netPaid = gross - whtAmount;
     const requiresManager = netPaid >= 1000000;
     const ceoPay = netPaid >= 3000000;
 
@@ -136,8 +141,8 @@ export default function PaymentQueue() {
       voucher_no: voucherNo,
       vendor_invoice_id: selectedInvoice.id,
       project_id: selectedInvoice.project_id,
-      amount: selectedInvoice.invoice_amount_incl_vat,
-      wht_amount: selectedInvoice.wht_3pct,
+      amount: gross,
+      wht_amount: whtAmount,
       net_paid: netPaid,
       voucher_date: data.check_date,
       prepared_by: user.id,
@@ -148,7 +153,7 @@ export default function PaymentQueue() {
     }).select().maybeSingle();
 
     if (!error && voucherData) {
-      const vendorName = (selectedInvoice as any).vendor?.name ?? 'Unknown vendor';
+      const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? 'Unknown vendor';
       const projectName = (selectedInvoice as any).project?.name ?? 'Unknown project';
 
       await Promise.all([
@@ -260,16 +265,24 @@ export default function PaymentQueue() {
           <tbody>
             {invoices.length === 0 ? (
               <tr><td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td></tr>
-            ) : invoices.map(inv => (
+            ) : invoices.map(inv => {
+              const invPo = (inv as any).purchase_order;
+              const invGross = inv.invoice_amount_incl_vat || 0;
+              const invWhtRate = invPo?.wht_rate || 0;
+              const invExclVat = invGross / 1.07;
+              const invWhtAmount = invExclVat * invWhtRate;
+              const invNetPayable = invGross - invWhtAmount;
+              const invVendorName = invPo?.vendor?.name ?? invPo?.supplier_name_raw ?? '—';
+              return (
               <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                <td className="px-4 py-3 text-sm text-gray-800">{(inv as any).vendor?.name || '—'}</td>
-                <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">{(inv as any).project?.name?.split('–')[0] || '—'}</td>
+                <td className="px-4 py-3 text-sm text-gray-800">{invVendorName}</td>
+                <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">{(inv as any).project?.name?.split('–')[0]?.trim() || '—'}</td>
                 <td className="px-4 py-3 text-xs text-gray-600">{inv.vendor_invoice_no || '—'}</td>
-                <td className="px-4 py-3 text-right text-sm text-gray-700">{formatTHB(inv.invoice_amount_incl_vat)}</td>
-                <td className="px-4 py-3 text-right text-xs text-[#E24B4A]">({formatTHB(inv.wht_3pct)})</td>
-                <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">{formatTHB(inv.net_payable)}</td>
+                <td className="px-4 py-3 text-right text-sm text-gray-700">{formatTHB(invGross)}</td>
+                <td className="px-4 py-3 text-right text-xs text-[#E24B4A]">{invWhtAmount > 0 ? `(${formatTHB(invWhtAmount)})` : <span className="text-gray-300">—</span>}</td>
+                <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">{formatTHB(invNetPayable)}</td>
                 <td className="px-4 py-3 text-center">
-                  {inv.net_payable >= 1000000 ? (
+                  {invNetPayable >= 1000000 ? (
                     <span className="text-xs text-[#EF9F27] font-medium">Required</span>
                   ) : (
                     <span className="text-xs text-gray-300">—</span>
@@ -290,13 +303,22 @@ export default function PaymentQueue() {
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       {/* Issue Check Modal */}
-      {selectedInvoice && (
+      {selectedInvoice && (() => {
+        const modalPo = (selectedInvoice as any).purchase_order;
+        const modalGross = selectedInvoice.invoice_amount_incl_vat || 0;
+        const modalWhtRate = modalPo?.wht_rate || 0;
+        const modalExclVat = modalGross / 1.07;
+        const modalWhtAmount = modalExclVat * modalWhtRate;
+        const modalNetPayable = modalGross - modalWhtAmount;
+        const modalVendorName = modalPo?.vendor?.name ?? modalPo?.supplier_name_raw ?? '—';
+        return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
@@ -305,14 +327,14 @@ export default function PaymentQueue() {
             </div>
             <div className="p-6 space-y-4">
               <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-gray-500">Vendor</span><span className="font-medium">{(selectedInvoice as any).vendor?.name}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Invoice No.</span><span>{selectedInvoice.vendor_invoice_no}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Gross Amount</span><span>{formatTHB(selectedInvoice.invoice_amount_incl_vat)}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">WHT 3%</span><span className="text-[#E24B4A]">({formatTHB(selectedInvoice.wht_3pct)})</span></div>
-                <div className="flex justify-between border-t border-gray-200 pt-2 mt-2"><span className="font-semibold text-gray-700">Net Payable</span><span className="font-bold text-gray-900 text-base">{formatTHB(selectedInvoice.net_payable)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Vendor</span><span className="font-medium">{modalVendorName}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Invoice No.</span><span>{selectedInvoice.vendor_invoice_no || '—'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Gross Amount</span><span>{formatTHB(modalGross)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">WHT {modalWhtRate > 0 ? `${(modalWhtRate * 100).toFixed(0)}%` : ''}</span><span className={modalWhtAmount > 0 ? 'text-[#E24B4A]' : 'text-gray-400'}>{modalWhtAmount > 0 ? `(${formatTHB(modalWhtAmount)})` : '—'}</span></div>
+                <div className="flex justify-between border-t border-gray-200 pt-2 mt-2"><span className="font-semibold text-gray-700">Net Payable</span><span className="font-bold text-gray-900 text-base">{formatTHB(modalNetPayable)}</span></div>
               </div>
 
-              {selectedInvoice.net_payable >= 1000000 && (
+              {modalNetPayable >= 1000000 && (
                 <div className="flex items-start gap-2 p-3 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg">
                   <AlertTriangle size={14} className="text-[#EF9F27] shrink-0 mt-0.5" />
                   <p className="text-xs text-[#EF9F27] font-medium">
@@ -321,7 +343,7 @@ export default function PaymentQueue() {
                 </div>
               )}
 
-              {selectedInvoice.net_payable >= 3000000 && (
+              {modalNetPayable >= 3000000 && (
                 <div className="flex items-start gap-2 p-3 bg-[#E24B4A]/10 border border-[#E24B4A]/30 rounded-lg">
                   <AlertTriangle size={14} className="text-[#E24B4A] shrink-0 mt-0.5" />
                   <p className="text-xs text-[#E24B4A] font-medium">
@@ -356,7 +378,8 @@ export default function PaymentQueue() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
