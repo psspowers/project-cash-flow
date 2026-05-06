@@ -240,7 +240,7 @@ export default function MonthlyAnalysisBalance() {
           milestones:po_milestones ( id, amount_due, planned_payment_date )
         )
       `)
-      .eq('status', 'received')
+      .in('status', ['received', 'approved_cm', 'approved_evp', 'released'])
       .order('invoice_date', { ascending: true });
 
     if (!error && data) setInvoices(data as unknown as RawInvoice[]);

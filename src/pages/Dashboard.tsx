@@ -482,7 +482,7 @@ export default function Dashboard() {
         supabase
           .from('vendor_invoices')
           .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(project_id, milestones:po_milestones(amount_due, planned_payment_date))')
-          .in('status', ['received', 'approved_cm', 'approved_evp', 'released', 'rejected']),
+          .in('status', ['received', 'approved_cm', 'approved_evp', 'released']),
         // Chart-specific: all po_milestones for uninvoiced matching (mirrors MonthlyAnalysisUninvoiced)
         supabase
           .from('po_milestones')
