@@ -23,10 +23,14 @@ export default function PaymentQueue() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // Voucher form state (controlled, no react-hook-form needed here)
+  // Voucher form state
   const [bankAccount, setBankAccount] = useState('KBank PSS Main');
-  const [checkNo, setCheckNo] = useState('');
-  const [checkDate, setCheckDate] = useState('');
+
+  // Write-check modal (Banking Officer)
+  const [writeCheckVoucher, setWriteCheckVoucher] = useState<PaymentVoucher | null>(null);
+  const [writeCheckNo, setWriteCheckNo] = useState('');
+  const [writeCheckDate, setWriteCheckDate] = useState('');
+  const [writingCheck, setWritingCheck] = useState(false);
 
   // WHT picker — null means not yet confirmed
   const [selectedWhtRate, setSelectedWhtRate] = useState<number | null>(null);
@@ -53,14 +57,25 @@ export default function PaymentQueue() {
     setSelectedWhtRate(preRate);
     setPickerOpen(false);
     setBankAccount('KBank PSS Main');
-    setCheckNo('');
-    setCheckDate('');
   }
 
   function closeModal() {
     setSelectedInvoice(null);
     setSelectedWhtRate(null);
     setPickerOpen(false);
+    setBankAccount('KBank PSS Main');
+  }
+
+  function openWriteCheck(voucher: PaymentVoucher) {
+    setWriteCheckVoucher(voucher);
+    setWriteCheckNo('');
+    setWriteCheckDate(new Date().toISOString().substring(0, 10));
+  }
+
+  function closeWriteCheck() {
+    setWriteCheckVoucher(null);
+    setWriteCheckNo('');
+    setWriteCheckDate('');
   }
 
   async function loadData() {
@@ -152,7 +167,7 @@ export default function PaymentQueue() {
 
   async function issueVoucher() {
     if (!selectedInvoice || !user || selectedWhtRate === null) return;
-    if (!bankAccount || !checkNo || !checkDate) return;
+    if (!bankAccount) return;
     setSubmitting(true);
 
     const voucherNo = await getNextVoucherNo();
@@ -178,7 +193,7 @@ export default function PaymentQueue() {
         requires_manager_approval: requiresManager,
         ceo_notified: ceoPay,
         ceo_notified_at: ceoPay ? new Date().toISOString() : null,
-        status: requiresManager ? 'pending_manager' : 'issued',
+        status: requiresManager ? 'pending_manager' : 'approved',
       })
       .select()
       .maybeSingle();
@@ -187,23 +202,20 @@ export default function PaymentQueue() {
       const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? 'Unknown vendor';
       const projectName = (selectedInvoice as any).project?.name ?? 'Unknown project';
 
+      // Insert check record with null check_no/check_date — Banking Officer fills these in
       await Promise.all([
         supabase.from('checks').insert({
           voucher_id: voucherData.id,
           bank_account: bankAccount,
-          check_no: checkNo,
-          check_date: checkDate,
+          check_no: null,
+          check_date: null,
           payee: vendorName,
           amount: netPaid,
-          status: requiresManager ? 'draft' : 'issued',
+          status: 'draft',
         }),
         supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', selectedInvoice.id),
-        insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName, checkNo),
+        insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName, ''),
       ]);
-
-      if (!requiresManager && selectedInvoice.project_id && user) {
-        await checkAndNotifyOverrun(supabase, selectedInvoice.project_id, checkNo, user.id);
-      }
     }
 
     closeModal();
@@ -213,41 +225,63 @@ export default function PaymentQueue() {
 
   async function approveVoucher(voucherId: string) {
     if (!user) return;
-    const { data: vData } = await supabase
-      .from('payment_vouchers').select('project_id').eq('id', voucherId).maybeSingle();
+    // Manager co-signs: advance voucher to 'approved' for Banking Officer to write the check.
+    // The checks record stays 'draft' — Banking Officer completes it via Write Check.
     await supabase
       .from('payment_vouchers')
-      .update({ status: 'issued', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
+      .update({ status: 'approved', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
       .eq('id', voucherId);
-    const { data: checkData } = await supabase
-      .from('checks').select('check_no').eq('voucher_id', voucherId).maybeSingle();
     await supabase
       .from('checks')
-      .update({ status: 'issued', signed_by_manager: user.id })
+      .update({ signed_by_manager: user.id })
       .eq('voucher_id', voucherId);
-    if (vData && checkData) {
-      await checkAndNotifyOverrun(
-        supabase,
-        (vData as { project_id: string }).project_id,
-        (checkData as { check_no: string }).check_no,
-        user.id,
-      );
+    loadData();
+  }
+
+  async function submitWriteCheck() {
+    if (!writeCheckVoucher || !writeCheckNo || !writeCheckDate || !user) return;
+    setWritingCheck(true);
+
+    const { data: checkData } = await supabase
+      .from('checks')
+      .select('id, amount, payee')
+      .eq('voucher_id', writeCheckVoucher.id)
+      .maybeSingle();
+
+    await Promise.all([
+      supabase
+        .from('checks')
+        .update({ check_no: writeCheckNo, check_date: writeCheckDate, status: 'issued' })
+        .eq('voucher_id', writeCheckVoucher.id),
+      supabase
+        .from('payment_vouchers')
+        .update({ status: 'issued' })
+        .eq('id', writeCheckVoucher.id),
+    ]);
+
+    if (writeCheckVoucher.project_id && checkData) {
+      await checkAndNotifyOverrun(supabase, writeCheckVoucher.project_id, writeCheckNo, user.id);
     }
+
+    closeWriteCheck();
+    setWritingCheck(false);
     loadData();
   }
 
   const isSupervisor = profile?.role === 'accounts_supervisor';
   const isManager = profile?.role === 'accounts_manager';
   const isCEO = profile?.role === 'ceo';
+  const isBankingOfficer = profile?.role === 'banking_finance_officer';
 
   const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
+  const approvedVouchers = vouchers.filter(v => v.status === 'approved');
 
   // Live modal calculations
   const modalGross = selectedInvoice?.invoice_amount_incl_vat ?? 0;
   const modalExclVat = modalGross / 1.07;
   const modalWhtAmt = selectedWhtRate !== null ? +(modalExclVat * selectedWhtRate).toFixed(2) : null;
   const modalNetPayable = modalWhtAmt !== null ? +(modalGross - modalWhtAmt).toFixed(2) : modalGross;
-  const canSubmit = selectedWhtRate !== null && bankAccount && checkNo && checkDate;
+  const canSubmit = selectedWhtRate !== null && bankAccount;
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -288,6 +322,40 @@ export default function PaymentQueue() {
                     </button>
                   ) : (
                     <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Banking Officer — approved vouchers awaiting check issuance */}
+      {(isBankingOfficer || isCEO) && approvedVouchers.length > 0 && (
+        <div className="bg-[#1D9E75]/5 border border-[#1D9E75]/30 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <CreditCard size={15} className="text-[#1D9E75]" />
+            <span className="text-sm font-semibold text-[#1D9E75]">Ready to Write Check</span>
+          </div>
+          <div className="space-y-2">
+            {approvedVouchers.map(v => (
+              <div key={v.id} className="bg-white rounded-md border border-[#1D9E75]/20 p-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
+                  <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
+                  {isBankingOfficer ? (
+                    <button
+                      onClick={() => openWriteCheck(v)}
+                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
+                    >
+                      <CreditCard size={12} />
+                      Write Check
+                    </button>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
                   )}
                 </div>
               </div>
@@ -370,6 +438,59 @@ export default function PaymentQueue() {
           </tbody>
         </table>
       </div>
+
+      {/* Write Check Modal (Banking Officer) */}
+      {writeCheckVoucher && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-sm border border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">Write Check</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{writeCheckVoucher.voucher_no} — {formatTHB(writeCheckVoucher.net_paid)}</p>
+              </div>
+              <button onClick={closeWriteCheck}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Check No. *</label>
+                <input
+                  value={writeCheckNo}
+                  onChange={e => setWriteCheckNo(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                  placeholder="e.g. 001234"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Check Date *</label>
+                <input
+                  type="date"
+                  value={writeCheckDate}
+                  onChange={e => setWriteCheckDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={closeWriteCheck}
+                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitWriteCheck}
+                  disabled={writingCheck || !writeCheckNo || !writeCheckDate}
+                  className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {writingCheck ? 'Saving...' : 'Confirm & Issue'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Issue Payment Voucher Modal */}
       {selectedInvoice && (() => {
@@ -521,23 +642,8 @@ export default function PaymentQueue() {
                       <option value="SCB PSS Project">SCB PSS Project</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-gray-600 mb-1 block">Check No.</label>
-                    <input
-                      value={checkNo}
-                      onChange={e => setCheckNo(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
-                      placeholder="CHK-001"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-gray-600 mb-1 block">Check Date</label>
-                    <input
-                      type="date"
-                      value={checkDate}
-                      onChange={e => setCheckDate(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
-                    />
+                  <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                    <span className="text-xs text-blue-600">Check number and date will be entered by the Banking Officer when the physical check is written.</span>
                   </div>
                 </div>
 
