@@ -1,12 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import {
-  AlertTriangle, Clock, CheckCircle, ShoppingCart, FileText,
-  BarChart2, CreditCard, RefreshCw, User, TrendingUp,
+  ShoppingCart, FileText, BarChart2, TrendingUp, CreditCard,
+  ChevronRight, RefreshCw, CheckCircle, Filter,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import { formatTHB, formatDate } from '../utils/formatters';
+import {
+  VendorInvoice, PurchaseOrder, Project, Entity,
+} from '../types';
+import { formatTHBCompact, formatDate } from '../utils/formatters';
+import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
+import PODetailModal from '../components/pos/PODetailModal';
+import {
+  approveInvoiceCM, approveInvoiceEVP, approveInvoiceCEO,
+  rejectInvoice, rejectInvoiceCM,
+} from '../services/workflow';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,25 +24,37 @@ import { formatTHB, formatDate } from '../utils/formatters';
 
 type AgingLevel = 'fresh' | 'amber' | 'red';
 
-interface PipelineItem {
+type CardType = 'po' | 'invoice' | 'costing' | 'progress_report' | 'voucher';
+
+interface KanbanCard {
   id: string;
-  label: string;           // document reference / title
-  sublabel?: string;       // project name or supplier name
-  amount?: number;
+  type: CardType;
+  label: string;
+  projectName: string;
+  projectId: string;
+  amount: number;
   updatedAt: string;
   daysWaiting: number;
   aging: AgingLevel;
-  entityType: 'po' | 'invoice' | 'costing' | 'progress_report' | 'voucher';
-  actionRequired: boolean; // true = current user's desk
+  // Raw objects needed for modals
+  rawInvoice?: VendorInvoice;
+  rawPO?: PurchaseOrder;
 }
 
-interface DeskGroup {
-  desk: string;
-  ownerLabel: string;
-  icon: React.ReactNode;
-  color: string;           // tailwind color token base (border / text)
-  bgColor: string;
-  items: PipelineItem[];
+interface DeskColumn {
+  key: string;
+  title: string;
+  roleOwner?: string; // matches UserRole
+  borderColor: string;
+  headerBg: string;
+  headerText: string;
+  cards: KanbanCard[];
+}
+
+interface Swimlane {
+  title: string;
+  subtitle: string;
+  columns: DeskColumn[];
 }
 
 // ---------------------------------------------------------------------------
@@ -45,323 +67,616 @@ function agingLevel(days: number): AgingLevel {
   return 'fresh';
 }
 
-function agingBadge(item: PipelineItem) {
-  const cls =
-    item.aging === 'red'
-      ? 'bg-[#E24B4A]/10 text-[#E24B4A] border border-[#E24B4A]/30'
-      : item.aging === 'amber'
-      ? 'bg-[#EF9F27]/10 text-[#EF9F27] border border-[#EF9F27]/30'
-      : 'bg-gray-100 text-gray-500 border border-gray-200';
-  const icon =
-    item.aging === 'red' ? (
-      <AlertTriangle size={10} />
-    ) : item.aging === 'amber' ? (
-      <Clock size={10} />
-    ) : (
-      <CheckCircle size={10} />
-    );
-  return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cls}`}>
-      {icon}
-      {item.daysWaiting}d
-    </span>
-  );
+function agingStyle(aging: AgingLevel) {
+  if (aging === 'red') return { border: 'border-[#E24B4A]/25 bg-[#E24B4A]/[0.04]', strip: 'bg-[#E24B4A]', text: 'text-[#E24B4A]' };
+  if (aging === 'amber') return { border: 'border-[#EF9F27]/25 bg-[#EF9F27]/[0.04]', strip: 'bg-[#EF9F27]', text: 'text-[#EF9F27]' };
+  return { border: 'border-gray-100 bg-white', strip: 'bg-gray-200', text: 'text-gray-400' };
 }
 
-function entityIcon(type: PipelineItem['entityType']) {
+function typeIcon(type: CardType, size = 12) {
   switch (type) {
-    case 'po': return <ShoppingCart size={13} className="shrink-0" />;
-    case 'invoice': return <FileText size={13} className="shrink-0" />;
-    case 'costing': return <BarChart2 size={13} className="shrink-0" />;
-    case 'progress_report': return <TrendingUp size={13} className="shrink-0" />;
-    case 'voucher': return <CreditCard size={13} className="shrink-0" />;
+    case 'po': return <ShoppingCart size={size} />;
+    case 'invoice': return <FileText size={size} />;
+    case 'costing': return <BarChart2 size={size} />;
+    case 'progress_report': return <TrendingUp size={size} />;
+    case 'voucher': return <CreditCard size={size} />;
   }
 }
 
-function ItemCard({ item }: { item: PipelineItem }) {
+function typeLabel(type: CardType) {
+  switch (type) {
+    case 'po': return 'Purchase Order';
+    case 'invoice': return 'Vendor Invoice';
+    case 'costing': return 'Project Costing';
+    case 'progress_report': return 'Progress Report';
+    case 'voucher': return 'Payment Voucher';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Card Component
+// ---------------------------------------------------------------------------
+
+function KanbanCardItem({
+  card,
+  isMyDesk,
+  onClick,
+}: {
+  card: KanbanCard;
+  isMyDesk: boolean;
+  onClick: (card: KanbanCard) => void;
+}) {
+  const s = agingStyle(card.aging);
   return (
     <div
-      className={`rounded-lg border px-3 py-2.5 flex items-start justify-between gap-3 transition-colors ${
-        item.aging === 'red'
-          ? 'border-[#E24B4A]/25 bg-[#E24B4A]/5'
-          : item.aging === 'amber'
-          ? 'border-[#EF9F27]/25 bg-[#EF9F27]/5'
-          : 'border-gray-200 bg-white'
-      }`}
+      onClick={() => onClick(card)}
+      className={`relative rounded-lg border cursor-pointer group transition-all duration-150 hover:shadow-md hover:-translate-y-0.5 ${s.border} ${isMyDesk ? 'ring-1 ring-[#1D9E75]/20' : ''}`}
     >
-      <div className="flex items-start gap-2 min-w-0">
-        <span className={`mt-0.5 ${item.aging === 'red' ? 'text-[#E24B4A]' : item.aging === 'amber' ? 'text-[#EF9F27]' : 'text-gray-400'}`}>
-          {entityIcon(item.entityType)}
-        </span>
-        <div className="min-w-0">
-          <p className="text-[13px] font-medium text-gray-800 truncate">{item.label}</p>
-          {item.sublabel && (
-            <p className="text-[11px] text-gray-400 truncate mt-0.5">{item.sublabel}</p>
-          )}
+      {/* Aging strip */}
+      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${s.strip}`} />
+
+      <div className="pl-3 pr-2.5 pt-2.5 pb-2 ml-1">
+        {/* Type badge + icon */}
+        <div className="flex items-center gap-1 mb-1.5">
+          <span className={`${s.text} opacity-70`}>{typeIcon(card.type)}</span>
+          <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{typeLabel(card.type)}</span>
         </div>
-      </div>
-      <div className="flex flex-col items-end gap-1 shrink-0">
-        {item.amount != null && (
-          <span className="text-[12px] font-semibold text-gray-700">{formatTHB(item.amount)}</span>
-        )}
-        {agingBadge(item)}
+
+        {/* Identifier */}
+        <p className="text-[12px] font-semibold text-gray-800 leading-tight truncate group-hover:text-[#1D9E75] transition-colors">
+          {card.label}
+        </p>
+
+        {/* Project */}
+        <p className="text-[11px] text-gray-400 truncate mt-0.5">{card.projectName}</p>
+
+        {/* Footer: amount + aging */}
+        <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-gray-100">
+          <span className="text-[11px] font-semibold text-gray-600">
+            {card.amount > 0 ? formatTHBCompact(card.amount) : '—'}
+          </span>
+          <span className={`text-[10px] font-semibold ${s.text}`}>
+            {card.daysWaiting === 0 ? 'Today' : `${card.daysWaiting}d waiting`}
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// Desk Column Component
+// ---------------------------------------------------------------------------
+
+function DeskColumnView({
+  col,
+  isMyDesk,
+  showArrowAfter,
+  onCardClick,
+}: {
+  col: DeskColumn;
+  isMyDesk: boolean;
+  showArrowAfter: boolean;
+  onCardClick: (card: KanbanCard) => void;
+}) {
+  const totalValue = col.cards.reduce((s, c) => s + c.amount, 0);
+  const redCount = col.cards.filter(c => c.aging === 'red').length;
+
+  return (
+    <div className="flex items-start gap-0 shrink-0">
+      {/* Column */}
+      <div className={`w-[240px] shrink-0 rounded-xl border ${isMyDesk ? 'border-[#1D9E75]/30 shadow-sm shadow-[#1D9E75]/10' : 'border-gray-200'} overflow-hidden`}>
+        {/* Column header */}
+        <div className={`${col.headerBg} px-3 py-2.5 border-b ${isMyDesk ? 'border-[#1D9E75]/20' : 'border-gray-200'}`}>
+          {/* Top accent bar */}
+          <div className={`-mx-3 -mt-2.5 mb-2 h-0.5 ${col.borderColor}`} />
+
+          <div className="flex items-start justify-between gap-1">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <p className={`text-[12px] font-bold truncate ${col.headerText}`}>{col.title}</p>
+                {isMyDesk && (
+                  <span className="text-[9px] font-bold bg-[#1D9E75] text-white px-1.5 py-0.5 rounded-full uppercase tracking-wide shrink-0">
+                    Your Desk
+                  </span>
+                )}
+              </div>
+              {/* Financial gravity */}
+              <p className="text-[13px] font-extrabold text-gray-800 mt-0.5">
+                {totalValue > 0 ? formatTHBCompact(totalValue) : '—'}
+              </p>
+              {totalValue > 0 && (
+                <p className="text-[10px] text-gray-400">blocked</p>
+              )}
+            </div>
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full ${
+                col.cards.length > 0
+                  ? 'bg-gray-200 text-gray-700'
+                  : 'bg-[#1D9E75]/10 text-[#1D9E75]'
+              }`}>
+                {col.cards.length}
+              </span>
+              {redCount > 0 && (
+                <span className="text-[9px] font-bold text-[#E24B4A] bg-[#E24B4A]/10 px-1 py-0.5 rounded">
+                  {redCount} overdue
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Cards body */}
+        <div className="bg-gray-50 p-2 min-h-[120px] space-y-2 max-h-[calc(100vh-340px)] overflow-y-auto">
+          {col.cards.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-6 text-center">
+              <div className="w-8 h-8 rounded-full bg-[#1D9E75]/10 flex items-center justify-center mb-2">
+                <CheckCircle size={16} className="text-[#1D9E75]" />
+              </div>
+              <p className="text-[11px] font-semibold text-[#1D9E75]">Desk Clear</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">No items waiting</p>
+            </div>
+          ) : (
+            col.cards.map(card => (
+              <KanbanCardItem
+                key={`${card.type}-${card.id}`}
+                card={card}
+                isMyDesk={isMyDesk}
+                onClick={onCardClick}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Arrow connector */}
+      {showArrowAfter && (
+        <div className="flex items-start pt-[38px] px-1 shrink-0">
+          <ChevronRight size={16} className="text-gray-300" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Swimlane Component
+// ---------------------------------------------------------------------------
+
+function SwimlaneView({
+  lane,
+  myRole,
+  onCardClick,
+}: {
+  lane: Swimlane;
+  myRole: string | undefined;
+  onCardClick: (card: KanbanCard) => void;
+}) {
+  const totalItems = lane.columns.reduce((s, c) => s + c.cards.length, 0);
+  const totalValue = lane.columns.reduce((s, c) => s + c.cards.reduce((cs, card) => cs + card.amount, 0), 0);
+
+  return (
+    <div>
+      {/* Swimlane header */}
+      <div className="flex items-center gap-3 mb-3">
+        <div>
+          <h2 className="text-[15px] font-bold text-gray-900">{lane.title}</h2>
+          <p className="text-[12px] text-gray-400">{lane.subtitle}</p>
+        </div>
+        <div className="h-px flex-1 bg-gray-200" />
+        <div className="text-right shrink-0">
+          <p className="text-[13px] font-bold text-gray-700">{formatTHBCompact(totalValue)}</p>
+          <p className="text-[10px] text-gray-400">{totalItems} items in motion</p>
+        </div>
+      </div>
+
+      {/* Horizontally scrollable columns */}
+      <div className="overflow-x-auto pb-2" style={{ scrollSnapType: 'x mandatory' }}>
+        <div className="flex items-start gap-0 w-max">
+          {lane.columns.map((col, idx) => (
+            <div key={col.key} style={{ scrollSnapAlign: 'start' }}>
+              <DeskColumnView
+                col={col}
+                isMyDesk={col.roleOwner === myRole}
+                showArrowAfter={idx < lane.columns.length - 1}
+                onCardClick={onCardClick}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Page
 // ---------------------------------------------------------------------------
 
 export default function WorkflowEfficiency() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
+  const navigate = useNavigate();
+
   const [loading, setLoading] = useState(true);
-  const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [actionItems, setActionItems] = useState<PipelineItem[]>([]);
-  const [monitorGroups, setMonitorGroups] = useState<DeskGroup[]>([]);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-  const isEVP = profile?.role === 'evp';
-  const isCEO = profile?.role === 'ceo';
+  // Raw data
+  const [allPos, setAllPos] = useState<any[]>([]);
+  const [allInvoices, setAllInvoices] = useState<any[]>([]);
+  const [allCostings, setAllCostings] = useState<any[]>([]);
+  const [allReports, setAllReports] = useState<any[]>([]);
+  const [allVouchers, setAllVouchers] = useState<any[]>([]);
+  const [allProjects, setAllProjects] = useState<{ id: string; name: string }[]>([]);
 
-  useEffect(() => {
-    if (profile) loadData();
-  }, [profile]);
+  // Filter
+  const [projectFilter, setProjectFilter] = useState<string>('');
+
+  // Modal state
+  const [invoiceModal, setInvoiceModal] = useState<VendorInvoice | null>(null);
+  const [approvingInvoice, setApprovingInvoice] = useState(false);
+  const [poModal, setPoModal] = useState<PurchaseOrder | null>(null);
+  const [poProjects, setPoProjects] = useState<Project[]>([]);
+  const [poVendors, setPoVendors] = useState<Entity[]>([]);
+
+  useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
-
     const now = new Date();
 
-    // Fetch all pipeline data in parallel
-    const [posRes, invRes, costingsRes, reportsRes, vouchersRes] = await Promise.all([
+    const [posRes, invRes, costingsRes, reportsRes, vouchersRes, projRes] = await Promise.all([
       supabase
         .from('purchase_orders')
-        .select('id, pss_po_no, description, po_amount_incl_vat, status, updated_at, supplier_name_raw, vendor:vendor_id(name), project:project_id(name)')
-        .in('status', ['pending_cm', 'pending_evp', 'pending_ceo', 'draft_revision', 'pending_revision_approval']),
+        .select('id, pss_po_no, description, po_amount_incl_vat, status, updated_at, supplier_name_raw, project_id, vendor_id, vendor:entities!vendor_id(id,name), project:projects!project_id(id,name)')
+        .in('status', ['draft', 'draft_revision', 'pending_cm', 'pending_evp', 'pending_revision_approval', 'pending_ceo']),
       supabase
         .from('vendor_invoices')
-        .select('id, vendor_invoice_no, invoice_amount_incl_vat, status, updated_at, project:project_id(name), purchase_order:po_id(pss_po_no, vendor:vendor_id(name), supplier_name_raw)')
-        .in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
+        .select('*, project:projects!project_id(id,name), purchase_order:purchase_orders!po_id(id,pss_po_no,description,supplier_name_raw,vendor:entities!vendor_id(id,name))')
+        .in('status', ['rejected', 'received', 'approved_cm', 'approved_evp', 'released']),
       supabase
         .from('project_costings')
-        .select('id, stage, status, updated_at, project:project_id(name, contract_incl_vat)')
-        .in('status', ['submitted', 'cm_approved']),
+        .select('id, stage, status, updated_at, project:projects!project_id(id,name,contract_incl_vat)')
+        .in('status', ['draft', 'cm_rejected', 'evp_rejected', 'submitted', 'cm_approved']),
       supabase
         .from('progress_reports')
-        .select('id, status, updated_at, project:project_id(name), vendor_invoice:vendor_invoice_id(invoice_amount_incl_vat, vendor_invoice_no)')
+        .select('id, status, updated_at, project:projects!project_id(id,name), vendor_invoice:vendor_invoices!vendor_invoice_id(id,invoice_amount_incl_vat,vendor_invoice_no)')
         .in('status', ['submitted', 'cm_approved']),
       supabase
         .from('payment_vouchers')
-        .select('id, voucher_no, net_paid, status, updated_at, project:project_id(name)')
+        .select('id, voucher_no, net_paid, status, updated_at, project:projects!project_id(id,name)')
         .in('status', ['pending_manager', 'approved']),
+      supabase
+        .from('projects')
+        .select('id, name')
+        .order('name'),
     ]);
 
-    function makePOItem(po: any, desk: 'cm' | 'evp' | 'ceo' | 'cc'): PipelineItem {
-      const days = differenceInDays(now, new Date(po.updated_at));
-      const vendorName = po.vendor?.name ?? po.supplier_name_raw ?? '—';
-      return {
-        id: po.id,
-        label: po.pss_po_no ?? po.description ?? 'Purchase Order',
-        sublabel: `${vendorName} · ${(po.project as any)?.name ?? '—'}`,
-        amount: po.po_amount_incl_vat,
-        updatedAt: po.updated_at,
-        daysWaiting: days,
-        aging: agingLevel(days),
-        entityType: 'po',
-        actionRequired: (isEVP && desk === 'evp') || (isCEO && desk === 'ceo'),
-      };
-    }
-
-    function makeInvoiceItem(inv: any, desk: 'cm' | 'evp' | 'ceo' | 'cc'): PipelineItem {
-      const days = differenceInDays(now, new Date(inv.updated_at));
-      const po = inv.purchase_order as any;
-      const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
-      return {
-        id: inv.id,
-        label: inv.vendor_invoice_no ?? 'Vendor Invoice',
-        sublabel: `${vendorName} · ${(inv.project as any)?.name ?? '—'}`,
-        amount: inv.invoice_amount_incl_vat,
-        updatedAt: inv.updated_at,
-        daysWaiting: days,
-        aging: agingLevel(days),
-        entityType: 'invoice',
-        actionRequired: (isEVP && desk === 'evp') || (isCEO && desk === 'ceo'),
-      };
-    }
-
-    function makeCostingItem(c: any, desk: 'cm' | 'evp'): PipelineItem {
-      const days = differenceInDays(now, new Date(c.updated_at));
-      const project = c.project as any;
-      return {
-        id: c.id,
-        label: `${c.stage === 'estimation' ? 'Estimation' : 'Budget'} Costing`,
-        sublabel: project?.name ?? '—',
-        amount: project?.contract_incl_vat,
-        updatedAt: c.updated_at,
-        daysWaiting: days,
-        aging: agingLevel(days),
-        entityType: 'costing',
-        actionRequired: (isEVP && desk === 'evp'),
-      };
-    }
-
-    function makeReportItem(r: any, desk: 'cm' | 'evp'): PipelineItem {
-      const days = differenceInDays(now, new Date(r.updated_at));
-      const inv = r.vendor_invoice as any;
-      return {
-        id: r.id,
-        label: `Progress Report${inv?.vendor_invoice_no ? ` · ${inv.vendor_invoice_no}` : ''}`,
-        sublabel: (r.project as any)?.name ?? '—',
-        amount: inv?.invoice_amount_incl_vat,
-        updatedAt: r.updated_at,
-        daysWaiting: days,
-        aging: agingLevel(days),
-        entityType: 'progress_report',
-        actionRequired: (isEVP && desk === 'evp'),
-      };
-    }
-
-    function makeVoucherItem(v: any, desk: 'finance'): PipelineItem {
-      const days = differenceInDays(now, new Date(v.updated_at));
-      return {
-        id: v.id,
-        label: v.voucher_no,
-        sublabel: (v.project as any)?.name ?? '—',
-        amount: v.net_paid,
-        updatedAt: v.updated_at,
-        daysWaiting: days,
-        aging: agingLevel(days),
-        entityType: 'voucher',
-        actionRequired: false,
-      };
-    }
-
-    // Build item arrays by desk
-    const pos = posRes.data ?? [];
-    const invs = invRes.data ?? [];
-    const costings = costingsRes.data ?? [];
-    const reports = reportsRes.data ?? [];
-    const vouchers = vouchersRes.data ?? [];
-
-    // --- Procurement / Cost Controller desk ---
-    const ccItems: PipelineItem[] = [
-      ...pos.filter((p: any) => p.status === 'draft_revision').map((p: any) => makePOItem(p, 'cc')),
-      ...invs.filter((i: any) => i.status === 'rejected').map((i: any) => makeInvoiceItem(i, 'cc')),
-    ];
-
-    // --- Construction Manager desk ---
-    const cmItems: PipelineItem[] = [
-      ...pos.filter((p: any) => p.status === 'pending_cm').map((p: any) => makePOItem(p, 'cm')),
-      ...invs.filter((i: any) => i.status === 'received').map((i: any) => makeInvoiceItem(i, 'cm')),
-      ...costings.filter((c: any) => c.status === 'submitted').map((c: any) => makeCostingItem(c, 'cm')),
-      ...reports.filter((r: any) => r.status === 'submitted').map((r: any) => makeReportItem(r, 'cm')),
-    ];
-
-    // --- EVP desk ---
-    const evpItems: PipelineItem[] = [
-      ...pos.filter((p: any) => ['pending_evp', 'pending_revision_approval'].includes(p.status)).map((p: any) => makePOItem(p, 'evp')),
-      ...invs.filter((i: any) => i.status === 'approved_cm').map((i: any) => makeInvoiceItem(i, 'evp')),
-      ...costings.filter((c: any) => c.status === 'cm_approved').map((c: any) => makeCostingItem(c, 'evp')),
-      ...reports.filter((r: any) => r.status === 'cm_approved').map((r: any) => makeReportItem(r, 'evp')),
-    ];
-
-    // --- CEO desk ---
-    const ceoItems: PipelineItem[] = [
-      ...pos.filter((p: any) => p.status === 'pending_ceo').map((p: any) => makePOItem(p, 'ceo')),
-      ...invs.filter((i: any) => i.status === 'approved_evp').map((i: any) => makeInvoiceItem(i, 'ceo')),
-    ];
-
-    // --- Finance desk ---
-    const financeItems: PipelineItem[] = [
-      ...vouchers.map((v: any) => makeVoucherItem(v, 'finance')),
-    ];
-
-    // Sort each group by daysWaiting desc (oldest first = most urgent)
-    const sortByAge = (a: PipelineItem, b: PipelineItem) => b.daysWaiting - a.daysWaiting;
-
-    ccItems.sort(sortByAge);
-    cmItems.sort(sortByAge);
-    evpItems.sort(sortByAge);
-    ceoItems.sort(sortByAge);
-    financeItems.sort(sortByAge);
-
-    // Action Required: the current user's own desk
-    const myItems = isEVP ? evpItems : isCEO ? ceoItems : [];
-    setActionItems(myItems);
-
-    // Monitoring: all other desks (excluding own desk)
-    const groups: DeskGroup[] = [];
-
-    if (ccItems.length > 0) {
-      groups.push({
-        desk: 'cc',
-        ownerLabel: 'Procurement / Cost Controller',
-        icon: <ShoppingCart size={14} />,
-        color: 'text-gray-600',
-        bgColor: 'bg-gray-50 border-gray-200',
-        items: ccItems,
-      });
-    }
-
-    if (cmItems.length > 0) {
-      groups.push({
-        desk: 'cm',
-        ownerLabel: 'Construction Manager',
-        icon: <User size={14} />,
-        color: 'text-blue-600',
-        bgColor: 'bg-blue-50 border-blue-200',
-        items: cmItems,
-      });
-    }
-
-    if (isEVP && ceoItems.length > 0) {
-      groups.push({
-        desk: 'ceo',
-        ownerLabel: "CEO's Desk",
-        icon: <User size={14} />,
-        color: 'text-[#1D9E75]',
-        bgColor: 'bg-[#1D9E75]/5 border-[#1D9E75]/20',
-        items: ceoItems,
-      });
-    }
-
-    if (isCEO && evpItems.length > 0) {
-      groups.push({
-        desk: 'evp',
-        ownerLabel: "EVP's Desk",
-        icon: <User size={14} />,
-        color: 'text-[#1D9E75]',
-        bgColor: 'bg-[#1D9E75]/5 border-[#1D9E75]/20',
-        items: evpItems,
-      });
-    }
-
-    if (financeItems.length > 0) {
-      groups.push({
-        desk: 'finance',
-        ownerLabel: 'Finance / Accounts',
-        icon: <CreditCard size={14} />,
-        color: 'text-[#EF9F27]',
-        bgColor: 'bg-[#EF9F27]/5 border-[#EF9F27]/20',
-        items: financeItems,
-      });
-    }
-
-    setMonitorGroups(groups);
-    setLastRefresh(new Date());
+    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    setAllProjects(projRes.data ?? []);
+    setLastRefresh(now);
     setLoading(false);
   }
 
-  // Summary counts
-  const totalPipeline =
-    actionItems.length + monitorGroups.reduce((s, g) => s + g.items.length, 0);
-  const urgentCount = [
-    ...actionItems,
-    ...monitorGroups.flatMap(g => g.items),
-  ].filter(i => i.aging === 'red').length;
+  // ---------------------------------------------------------------------------
+  // Card builders
+  // ---------------------------------------------------------------------------
 
-  const actionValue = actionItems.reduce((s, i) => s + (i.amount ?? 0), 0);
+  function poCard(po: any): KanbanCard {
+    const vendorName = po.vendor?.name ?? po.supplier_name_raw ?? '—';
+    return {
+      id: po.id,
+      type: 'po',
+      label: po.pss_po_no ?? po.description ?? 'Draft PO',
+      projectName: po.project?.name ?? '—',
+      projectId: po.project_id,
+      amount: po.po_amount_incl_vat ?? 0,
+      updatedAt: po.updated_at,
+      daysWaiting: po._days,
+      aging: agingLevel(po._days),
+      rawPO: po as PurchaseOrder,
+    };
+  }
+
+  function invoiceCard(inv: any): KanbanCard {
+    const po = inv.purchase_order;
+    const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
+    return {
+      id: inv.id,
+      type: 'invoice',
+      label: inv.vendor_invoice_no ?? `Invoice (${po?.pss_po_no ?? '—'})`,
+      projectName: inv.project?.name ?? '—',
+      projectId: inv.project_id,
+      amount: inv.invoice_amount_incl_vat ?? 0,
+      updatedAt: inv.updated_at,
+      daysWaiting: inv._days,
+      aging: agingLevel(inv._days),
+      rawInvoice: inv as VendorInvoice,
+    };
+  }
+
+  function costingCard(c: any): KanbanCard {
+    return {
+      id: c.id,
+      type: 'costing',
+      label: `${c.stage === 'estimation' ? 'Estimation' : 'Budget'} Costing`,
+      projectName: c.project?.name ?? '—',
+      projectId: c.project?.id ?? '',
+      amount: c.project?.contract_incl_vat ?? 0,
+      updatedAt: c.updated_at,
+      daysWaiting: c._days,
+      aging: agingLevel(c._days),
+    };
+  }
+
+  function reportCard(r: any): KanbanCard {
+    return {
+      id: r.id,
+      type: 'progress_report',
+      label: `Progress Report${r.vendor_invoice?.vendor_invoice_no ? ` · ${r.vendor_invoice.vendor_invoice_no}` : ''}`,
+      projectName: r.project?.name ?? '—',
+      projectId: r.project?.id ?? '',
+      amount: r.vendor_invoice?.invoice_amount_incl_vat ?? 0,
+      updatedAt: r.updated_at,
+      daysWaiting: r._days,
+      aging: agingLevel(r._days),
+    };
+  }
+
+  function voucherCard(v: any): KanbanCard {
+    return {
+      id: v.id,
+      type: 'voucher',
+      label: v.voucher_no,
+      projectName: v.project?.name ?? '—',
+      projectId: v.project?.id ?? '',
+      amount: v.net_paid ?? 0,
+      updatedAt: v.updated_at,
+      daysWaiting: v._days,
+      aging: agingLevel(v._days),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Build swimlanes (memoized, recalculated on filter change)
+  // ---------------------------------------------------------------------------
+
+  const swimlanes: Swimlane[] = useMemo(() => {
+    const filterFn = (projectId: string) =>
+      !projectFilter || projectId === projectFilter;
+
+    const pos = allPos.filter(p => filterFn(p.project_id));
+    const invs = allInvoices.filter(i => filterFn(i.project_id));
+    const costings = allCostings.filter(c => filterFn(c.project?.id ?? ''));
+    const reports = allReports.filter(r => filterFn(r.project?.id ?? ''));
+    const vouchers = allVouchers.filter(v => filterFn(v.project?.id ?? ''));
+
+    const sortByAge = (a: KanbanCard, b: KanbanCard) => b.daysWaiting - a.daysWaiting;
+
+    // ── Swimlane 1: Project Budgeting Pipeline ──
+    const budgetingCols: DeskColumn[] = [
+      {
+        key: 'cc_costing',
+        title: 'Cost Controller',
+        roleOwner: 'cost_controller',
+        borderColor: 'bg-gray-400',
+        headerBg: 'bg-white',
+        headerText: 'text-gray-700',
+        cards: costings
+          .filter(c => ['draft', 'cm_rejected', 'evp_rejected'].includes(c.status))
+          .map(costingCard)
+          .sort(sortByAge),
+      },
+      {
+        key: 'cm_costing',
+        title: 'Construction Manager',
+        roleOwner: 'construction_manager',
+        borderColor: 'bg-blue-400',
+        headerBg: 'bg-blue-50/50',
+        headerText: 'text-blue-700',
+        cards: costings
+          .filter(c => c.status === 'submitted')
+          .map(costingCard)
+          .sort(sortByAge),
+      },
+      {
+        key: 'evp_costing',
+        title: 'EVP',
+        roleOwner: 'evp',
+        borderColor: 'bg-[#1D9E75]',
+        headerBg: 'bg-[#1D9E75]/5',
+        headerText: 'text-[#1D9E75]',
+        cards: costings
+          .filter(c => c.status === 'cm_approved')
+          .map(costingCard)
+          .sort(sortByAge),
+      },
+    ];
+
+    // ── Swimlane 2: Execution & Payments Pipeline ──
+    const executionCols: DeskColumn[] = [
+      {
+        key: 'cc_exec',
+        title: 'Procurement / CC',
+        roleOwner: 'cost_controller',
+        borderColor: 'bg-gray-400',
+        headerBg: 'bg-white',
+        headerText: 'text-gray-700',
+        cards: [
+          ...pos.filter(p => ['draft', 'draft_revision'].includes(p.status)).map(poCard),
+          ...invs.filter(i => i.status === 'rejected').map(invoiceCard),
+        ].sort(sortByAge),
+      },
+      {
+        key: 'cm_exec',
+        title: 'Construction Manager',
+        roleOwner: 'construction_manager',
+        borderColor: 'bg-blue-400',
+        headerBg: 'bg-blue-50/50',
+        headerText: 'text-blue-700',
+        cards: [
+          ...pos.filter(p => p.status === 'pending_cm').map(poCard),
+          ...invs.filter(i => i.status === 'received').map(invoiceCard),
+          ...reports.filter(r => r.status === 'submitted').map(reportCard),
+        ].sort(sortByAge),
+      },
+      {
+        key: 'evp_exec',
+        title: 'EVP',
+        roleOwner: 'evp',
+        borderColor: 'bg-[#1D9E75]',
+        headerBg: 'bg-[#1D9E75]/5',
+        headerText: 'text-[#1D9E75]',
+        cards: [
+          ...pos.filter(p => ['pending_evp', 'pending_revision_approval'].includes(p.status)).map(poCard),
+          ...invs.filter(i => i.status === 'approved_cm').map(invoiceCard),
+          ...reports.filter(r => r.status === 'cm_approved').map(reportCard),
+        ].sort(sortByAge),
+      },
+      {
+        key: 'ceo_exec',
+        title: 'CEO',
+        roleOwner: 'ceo',
+        borderColor: 'bg-[#2563EB]',
+        headerBg: 'bg-blue-50/70',
+        headerText: 'text-blue-800',
+        cards: [
+          ...pos.filter(p => p.status === 'pending_ceo').map(poCard),
+          ...invs.filter(i => i.status === 'approved_evp').map(invoiceCard),
+        ].sort(sortByAge),
+      },
+      {
+        key: 'finance_exec',
+        title: 'Finance / Accounts',
+        roleOwner: 'accounts_supervisor',
+        borderColor: 'bg-[#EF9F27]',
+        headerBg: 'bg-[#EF9F27]/5',
+        headerText: 'text-[#EF9F27]',
+        cards: [
+          ...invs.filter(i => i.status === 'released').map(invoiceCard),
+          ...vouchers.map(voucherCard),
+        ].sort(sortByAge),
+      },
+    ];
+
+    return [
+      {
+        title: 'Project Budgeting Pipeline',
+        subtitle: 'Estimation & budget costings flowing from Cost Controller → CM → EVP',
+        columns: budgetingCols,
+      },
+      {
+        title: 'Execution & Payments Pipeline',
+        subtitle: 'POs, vendor invoices, and payment vouchers from procurement to finance',
+        columns: executionCols,
+      },
+    ];
+  }, [allPos, allInvoices, allCostings, allReports, allVouchers, projectFilter]);
+
+  // ---------------------------------------------------------------------------
+  // Card click handler
+  // ---------------------------------------------------------------------------
+
+  async function handleCardClick(card: KanbanCard) {
+    if (card.type === 'invoice' && card.rawInvoice) {
+      setInvoiceModal(card.rawInvoice);
+      return;
+    }
+
+    if (card.type === 'po') {
+      // Fetch full PO + supporting data for modal
+      const [poRes, projectsRes, vendorsRes] = await Promise.all([
+        supabase
+          .from('purchase_orders')
+          .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects!project_id(*)')
+          .eq('id', card.id)
+          .maybeSingle(),
+        supabase.from('projects').select('*'),
+        supabase.from('entities').select('*').eq('type', 'vendor'),
+      ]);
+      if (poRes.data) setPoModal(poRes.data as PurchaseOrder);
+      setPoProjects((projectsRes.data ?? []) as Project[]);
+      setPoVendors((vendorsRes.data ?? []) as Entity[]);
+      return;
+    }
+
+    if (card.type === 'costing' || card.type === 'progress_report') {
+      navigate(`/projects/${card.projectId}`);
+      return;
+    }
+
+    if (card.type === 'voucher') {
+      navigate('/payment-queue');
+      return;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Invoice modal approve/reject
+  // ---------------------------------------------------------------------------
+
+  async function handleInvoiceApprove() {
+    if (!invoiceModal || !user) return;
+    setApprovingInvoice(true);
+    const inv = invoiceModal;
+    const projectName = (inv as any).project?.name ?? '';
+    const invoiceNo = inv.vendor_invoice_no ?? '';
+    const projectId = inv.project_id;
+
+    let err: string | null = null;
+    if (profile?.role === 'construction_manager') {
+      const res = await approveInvoiceCM(inv.id, user.id, projectName, invoiceNo, projectId);
+      err = res.error;
+    } else if (profile?.role === 'evp') {
+      const res = await approveInvoiceEVP(inv.id, user.id, inv.invoice_amount_incl_vat, projectName, invoiceNo, projectId);
+      err = res.error;
+    } else if (profile?.role === 'ceo') {
+      const res = await approveInvoiceCEO(inv.id, user.id, projectName, invoiceNo, inv.invoice_amount_incl_vat, projectId);
+      err = res.error;
+    }
+
+    setApprovingInvoice(false);
+    if (!err) {
+      setInvoiceModal(null);
+      loadData();
+    }
+  }
+
+  async function handleInvoiceReject(comment: string) {
+    if (!invoiceModal || !user) return;
+    setApprovingInvoice(true);
+    const inv = invoiceModal;
+    const projectName = (inv as any).project?.name ?? '';
+    const invoiceNo = inv.vendor_invoice_no ?? '';
+    const projectId = inv.project_id;
+
+    if (profile?.role === 'construction_manager') {
+      await rejectInvoiceCM(inv.id, user.id, comment, projectName, invoiceNo, projectId);
+    } else {
+      await rejectInvoice(inv.id, user.id, comment, projectName, invoiceNo, projectId);
+    }
+
+    setApprovingInvoice(false);
+    setInvoiceModal(null);
+    loadData();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Derived stats for top bar
+  // ---------------------------------------------------------------------------
+
+  const totalItems = swimlanes.reduce((s, l) => s + l.columns.reduce((cs, c) => cs + c.cards.length, 0), 0);
+  const overdueItems = swimlanes.reduce(
+    (s, l) => s + l.columns.reduce((cs, c) => cs + c.cards.filter(card => card.aging === 'red').length, 0),
+    0,
+  );
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
 
   if (loading) {
     return (
@@ -373,134 +688,102 @@ export default function WorkflowEfficiency() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
+
+      {/* Page header */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Workflow Efficiency</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Live pipeline view — {totalPipeline} items in motion
-            {urgentCount > 0 && (
-              <span className="ml-2 text-[#E24B4A] font-medium">· {urgentCount} overdue (&gt;7 days)</span>
+            Live value stream map · {totalItems} items in motion
+            {overdueItems > 0 && (
+              <span className="ml-2 text-[#E24B4A] font-semibold">· {overdueItems} overdue</span>
             )}
           </p>
         </div>
-        <button
-          onClick={loadData}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <RefreshCw size={13} />
-          Refreshed {formatDate(lastRefresh.toISOString())}
-        </button>
+
+        <div className="flex items-center gap-3">
+          {/* Project filter */}
+          <div className="relative">
+            <Filter size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <select
+              value={projectFilter}
+              onChange={e => setProjectFilter(e.target.value)}
+              className="pl-7 pr-3 py-1.5 text-[12px] border border-gray-200 rounded-lg bg-white text-gray-700 appearance-none focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 cursor-pointer min-w-[160px]"
+            >
+              <option value="">All Projects</option>
+              {allProjects.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Refresh */}
+          <button
+            onClick={loadData}
+            className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <RefreshCw size={13} />
+            {formatDate(lastRefresh.toISOString())}
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 text-xs text-gray-500">
+      <div className="flex items-center gap-5 text-[11px] text-gray-500">
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-gray-200 border border-gray-300 inline-block" />
-          0–3 days — On track
+          0–3 days
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[#EF9F27]/40 border border-[#EF9F27]/60 inline-block" />
-          4–7 days — Follow up
+          4–7 days
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[#E24B4A]/40 border border-[#E24B4A]/60 inline-block" />
-          &gt;7 days — Overdue
+          &gt;7 days overdue
         </span>
-      </div>
-
-      {/* ── ACTION REQUIRED section ── */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-2 h-5 rounded-full bg-[#E24B4A]" />
-          <h2 className="text-base font-bold text-gray-900">Action Required — Your Desk</h2>
-          {actionItems.length > 0 && (
-            <span className="bg-[#E24B4A] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-              {actionItems.length}
-            </span>
-          )}
-          {actionValue > 0 && (
-            <span className="ml-auto text-sm font-semibold text-gray-700">{formatTHB(actionValue)} total value</span>
-          )}
-        </div>
-
-        {actionItems.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[#1D9E75]/40 bg-[#1D9E75]/5 p-6 text-center">
-            <CheckCircle size={28} className="text-[#1D9E75] mx-auto mb-2" />
-            <p className="text-sm font-medium text-[#1D9E75]">Your desk is clear</p>
-            <p className="text-xs text-gray-400 mt-1">No items waiting for your approval or action.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {actionItems.map(item => (
-              <div key={`${item.entityType}-${item.id}`} className="relative">
-                <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-lg bg-[#E24B4A]" />
-                <div className="ml-1">
-                  <ItemCard item={item} />
-                </div>
-              </div>
-            ))}
-          </div>
+        {projectFilter && (
+          <button
+            onClick={() => setProjectFilter('')}
+            className="ml-auto text-[#1D9E75] font-medium hover:underline"
+          >
+            Clear filter
+          </button>
         )}
       </div>
 
-      {/* ── MONITORING section ── */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <div className="w-2 h-5 rounded-full bg-gray-400" />
-          <h2 className="text-base font-bold text-gray-900">Monitoring — Awaiting Others</h2>
-        </div>
+      {/* Swimlanes */}
+      {swimlanes.map(lane => (
+        <SwimlaneView
+          key={lane.title}
+          lane={lane}
+          myRole={profile?.role}
+          onCardClick={handleCardClick}
+        />
+      ))}
 
-        {monitorGroups.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
-            <CheckCircle size={28} className="text-gray-300 mx-auto mb-2" />
-            <p className="text-sm font-medium text-gray-500">Pipeline is clear</p>
-            <p className="text-xs text-gray-400 mt-1">No items are currently blocked at other desks.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {monitorGroups.map(group => {
-              const groupValue = group.items.reduce((s, i) => s + (i.amount ?? 0), 0);
-              const redCount = group.items.filter(i => i.aging === 'red').length;
-              const amberCount = group.items.filter(i => i.aging === 'amber').length;
-              return (
-                <div key={group.desk} className={`rounded-xl border p-4 ${group.bgColor}`}>
-                  {/* Group header */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className={group.color}>{group.icon}</span>
-                      <span className={`text-sm font-semibold ${group.color}`}>{group.ownerLabel}</span>
-                      <span className="bg-white/70 text-gray-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-gray-200">
-                        {group.items.length}
-                      </span>
-                      {redCount > 0 && (
-                        <span className="flex items-center gap-0.5 text-[10px] font-semibold text-[#E24B4A]">
-                          <AlertTriangle size={10} /> {redCount} overdue
-                        </span>
-                      )}
-                      {amberCount > 0 && (
-                        <span className="flex items-center gap-0.5 text-[10px] font-semibold text-[#EF9F27]">
-                          <Clock size={10} /> {amberCount} late
-                        </span>
-                      )}
-                    </div>
-                    {groupValue > 0 && (
-                      <span className="text-xs font-semibold text-gray-600">{formatTHB(groupValue)}</span>
-                    )}
-                  </div>
+      {/* Invoice Modal */}
+      {invoiceModal && (
+        <InvoiceDetailModal
+          invoice={invoiceModal}
+          role={profile?.role ?? ''}
+          onApprove={handleInvoiceApprove}
+          onReject={handleInvoiceReject}
+          onClose={() => setInvoiceModal(null)}
+          approving={approvingInvoice}
+        />
+      )}
 
-                  {/* Item grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-                    {group.items.map(item => (
-                      <ItemCard key={`${item.entityType}-${item.id}`} item={item} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* PO Modal */}
+      {poModal && (
+        <PODetailModal
+          po={poModal}
+          projects={poProjects}
+          vendors={poVendors}
+          onClose={() => setPoModal(null)}
+          onSuccess={() => { setPoModal(null); loadData(); }}
+        />
+      )}
     </div>
   );
 }
