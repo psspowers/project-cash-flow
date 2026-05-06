@@ -12,9 +12,12 @@ interface AppLayoutProps {
   title?: string;
 }
 
+const PAYMENT_QUEUE_ROLES = ['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'];
+
 export default function AppLayout({ children, title }: AppLayoutProps) {
   const { user, profile, loading } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [releasedInvoiceCount, setReleasedInvoiceCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
@@ -35,6 +38,23 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
+  useEffect(() => {
+    if (!profile) return;
+    if (!PAYMENT_QUEUE_ROLES.includes(profile.role)) return;
+    loadReleasedInvoiceCount();
+
+    const channel = supabase
+      .channel('released-invoices-count')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'vendor_invoices',
+      }, () => { loadReleasedInvoiceCount(); })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [profile]);
+
   async function loadNotifications() {
     if (!user) return;
     const { data } = await supabase
@@ -44,6 +64,14 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
       .order('created_at', { ascending: false })
       .limit(50);
     setNotifications(data || []);
+  }
+
+  async function loadReleasedInvoiceCount() {
+    const { count } = await supabase
+      .from('vendor_invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'released');
+    setReleasedInvoiceCount(count ?? 0);
   }
 
   async function handleNotificationRead(id: string) {
@@ -73,7 +101,7 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
   }
 
   const pendingApprovals = notifications.filter(n => !n.is_read && n.related_entity_type === 'progress_report').length;
-  const pendingPayments = notifications.filter(n => !n.is_read && n.related_entity_type === 'payment_voucher').length;
+  const pendingPayments = releasedInvoiceCount;
   const ceoAlerts = notifications.filter(n => !n.is_read && n.type === 'alert').length;
 
   return (

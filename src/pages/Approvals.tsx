@@ -171,7 +171,7 @@ export default function Approvals() {
   function filterCostings(): CostingWithProject[] {
     if (!profile) return [];
     const r = profile.role;
-    if (r === 'ceo') return costings;
+    if (r === 'ceo' || r === 'accounts_manager') return costings;
 
     if (tab === 'pending') {
       if (r === 'construction_manager') {
@@ -214,7 +214,7 @@ export default function Approvals() {
   function filterReports(): ProgressReport[] {
     if (!profile) return [];
     const r = profile.role;
-    if (r === 'ceo') return reports;
+    if (r === 'ceo' || r === 'accounts_manager') return reports;
 
     if (tab === 'pending') {
       if (r === 'cost_controller') return reports.filter(rep => rep.status === 'draft' || rep.status === 'cm_rejected' || rep.status === 'evp_rejected');
@@ -442,6 +442,7 @@ export default function Approvals() {
   }
 
   const role = profile?.role ?? '';
+  const isReadOnly = role === 'accounts_manager';
   const filteredCostings = filterCostings();
   const filteredReports = filterReports();
   const filteredInvoices = filterInvoices();
@@ -479,10 +480,14 @@ export default function Approvals() {
     if (role === 'accounts_supervisor') {
       if (tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved');
     }
+    if (role === 'accounts_manager') {
+      return transfers;
+    }
     return [];
   }
 
   function filterInvoices(): VendorInvoice[] {
+    if (role === 'accounts_manager') return invoices;
     if (tab === 'pending') {
       if (role === 'construction_manager') return invoices.filter(i => i.status === 'received');
       if (role === 'evp') return invoices.filter(i => i.status === 'approved_cm');
@@ -650,6 +655,7 @@ export default function Approvals() {
   function filterPendingPOs(): PurchaseOrder[] {
     if (!profile) return [];
     const r = profile.role;
+    if (r === 'accounts_manager') return pendingPOs;
     if (tab === 'pending') {
       if (r === 'construction_manager') return pendingPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
       if (r === 'evp') return pendingPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
@@ -667,7 +673,7 @@ export default function Approvals() {
     if (r === 'construction_manager') return completedPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
     if (r === 'evp') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
     if (r === 'ceo') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_EVP);
-    if (r === 'cost_controller') return completedPOs;
+    if (r === 'cost_controller' || r === 'accounts_manager') return completedPOs;
     return [];
   }
 
@@ -749,21 +755,21 @@ export default function Approvals() {
     </div>
   );
 
-  const showCostingSection = role === 'construction_manager' || role === 'evp' || role === 'ceo' ||
+  const showCostingSection = role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'accounts_manager' ||
     (role === 'cost_controller' && tab === 'with_others');
 
   const filteredTransfers = filterTransfers();
-  const showTransfersSection = (role === 'evp' || role === 'ceo' || role === 'cost_controller' || role === 'accounts_supervisor') &&
+  const showTransfersSection = (role === 'evp' || role === 'ceo' || role === 'cost_controller' || role === 'accounts_supervisor' || role === 'accounts_manager') &&
     filteredTransfers.length > 0;
 
   const filteredPOs = filterPendingPOs();
   const showPOSection = filteredPOs.length > 0 &&
-    (role === 'construction_manager' || role === 'evp' || role === 'ceo' ||
+    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'accounts_manager' ||
      (role === 'cost_controller' && tab === 'with_others'));
 
   const filteredCompletedPOs = filterCompletedPOs();
   const showCompletedPOSection = tab === 'completed' && filteredCompletedPOs.length > 0 &&
-    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'cost_controller');
+    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'cost_controller' || role === 'accounts_manager');
 
   return (
     <div className="space-y-5">
@@ -772,15 +778,23 @@ export default function Approvals() {
           <h1 className="text-xl font-bold text-gray-900">Approvals</h1>
           <p className="text-sm text-gray-500 mt-0.5">Project costing & progress report workflow</p>
         </div>
-        {canCreate && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
-          >
-            <Plus size={16} />
-            New Progress Report
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {isReadOnly && (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-[#EF9F27] bg-[#EF9F27]/10 border border-[#EF9F27]/20 px-3 py-1.5 rounded-lg">
+              <FileText size={13} />
+              Read-only view
+            </span>
+          )}
+          {canCreate && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
+            >
+              <Plus size={16} />
+              New Progress Report
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-1 bg-white border border-gray-200 rounded-lg p-1 w-fit">

@@ -208,7 +208,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         <Divider />
 
         {/* Approvals */}
-        {['cost_controller', 'construction_manager', 'evp', 'procurement'].includes(role) && (
+        {['cost_controller', 'construction_manager', 'evp', 'procurement', 'accounts_manager'].includes(role) && (
           <NavItem
             to="/approvals"
             label="Approvals"
@@ -241,7 +241,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
             <NavItem to="/vat-report" label="VAT Report (PP.30)" icon={<FileText size={16} />} />
           </>
         )}
-        {role === 'ceo' && (
+        {['ceo', 'accounts_supervisor'].includes(role) && (
           <NavItem to="/ceo-alerts" label="Alerts" icon={<Bell size={16} />} badge={badges['alerts']} />
         )}
 
