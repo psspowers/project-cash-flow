@@ -5,8 +5,7 @@ export type UserRole =
   | 'accounts_supervisor'
   | 'accounts_manager'
   | 'ceo'
-  | 'procurement_executive'
-  | 'procurement_supervisor'
+  | 'procurement'
   | 'banking_finance_officer';
 
 export interface UserProfile {
@@ -480,8 +479,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   accounts_supervisor: 'Accounts Supervisor',
   accounts_manager: 'Accounts Manager',
   ceo: 'CEO',
-  procurement_executive: 'Procurement Executive',
-  procurement_supervisor: 'Procurement Supervisor',
+  procurement: 'Procurement',
   banking_finance_officer: 'Banking & Finance Officer',
 };
 

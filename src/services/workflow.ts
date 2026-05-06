@@ -474,7 +474,7 @@ export async function approvePO_EVP(
 
     await logPOAction(poId, 'approved_evp_final', currentStatus, 'approved', actorId, evpNotes);
 
-    const procurement = await getProfileByRole('procurement_executive');
+    const procurement = await getProfileByRole('procurement');
     if (procurement) {
       await notify(
         procurement.id,
@@ -535,7 +535,7 @@ export async function approvePO_CEO(
 
   await logPOAction(poId, 'approved_ceo', currentStatus, 'approved', actorId, ceoNotes);
 
-  const procurement = await getProfileByRole('procurement_executive');
+  const procurement = await getProfileByRole('procurement');
   if (procurement) {
     await notify(
       procurement.id,
@@ -592,7 +592,7 @@ export async function rejectPO(
 
   const [cc, procurement] = await Promise.all([
     getProfileByRole('cost_controller'),
-    getProfileByRole('procurement_executive'),
+    getProfileByRole('procurement'),
   ]);
 
   for (const profile of [cc, procurement]) {
@@ -691,7 +691,7 @@ export async function grantPOChange(params: GrantPOChangeParams): Promise<{ erro
 
     const [cc, procurement] = await Promise.all([
       getProfileByRole('cost_controller'),
-      getProfileByRole('procurement_executive'),
+      getProfileByRole('procurement'),
     ]);
 
     for (const profile of [cc, procurement]) {
@@ -762,7 +762,7 @@ export async function grantPOChange(params: GrantPOChangeParams): Promise<{ erro
 
   const [cc, procurement] = await Promise.all([
     getProfileByRole('cost_controller'),
-    getProfileByRole('procurement_executive'),
+    getProfileByRole('procurement'),
   ]);
 
   for (const profile of [cc, procurement]) {
@@ -808,7 +808,7 @@ export async function rejectPOChangeRequest(
 
   const [cc, procurement] = await Promise.all([
     getProfileByRole('cost_controller'),
-    getProfileByRole('procurement_executive'),
+    getProfileByRole('procurement'),
   ]);
 
   for (const profile of [cc, procurement]) {

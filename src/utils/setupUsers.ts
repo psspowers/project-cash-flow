@@ -7,7 +7,7 @@ const DEFAULT_USERS = [
   { email: 'nareerat@psspowers.com', password: 'PSS@2026', full_name: 'Nareerat Maksoongnern', role: 'accounts_supervisor' },
   { email: 'chudapak@psspowers.com', password: 'PSS@2026', full_name: 'Chudapak Juthachutinan', role: 'accounts_manager' },
   { email: 'sam@psspowers.com', password: 'PSS@2026', full_name: 'Sam Yamdagni', role: 'ceo' },
-  { email: 'kanokthip@psspowers.com', password: 'PSS@2026', full_name: 'Kanokthip', role: 'procurement_executive' },
+  { email: 'kanokthip@psspowers.com', password: 'PSS@2026', full_name: 'Kanokthip', role: 'procurement' },
   { email: 'pawitchaya@psspowers.com', password: 'PSS@2026', full_name: 'Pawitchaya', role: 'banking_finance_officer' },
 ];
 

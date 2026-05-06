@@ -1,13 +1,12 @@
 import type { UserRole } from '../types';
 
 // Roles that can create POs, submit drafts, and write supplier data
-export const PROCUREMENT_WRITE_ROLES: UserRole[] = ['cost_controller', 'procurement_executive', 'procurement_supervisor'];
+export const PROCUREMENT_WRITE_ROLES: UserRole[] = ['cost_controller', 'procurement'];
 
 // Roles that can view Purchase Orders and Suppliers (finance team is read-only)
 export const PROCUREMENT_READ_ROLES: UserRole[] = [
   'cost_controller',
-  'procurement_executive',
-  'procurement_supervisor',
+  'procurement',
   'banking_finance_officer',
   'accounts_supervisor',
   'accounts_manager',

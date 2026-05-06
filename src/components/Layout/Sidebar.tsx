@@ -208,7 +208,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         <Divider />
 
         {/* Approvals */}
-        {['cost_controller', 'construction_manager', 'evp', 'procurement_supervisor'].includes(role) && (
+        {['cost_controller', 'construction_manager', 'evp', 'procurement'].includes(role) && (
           <NavItem
             to="/approvals"
             label="Approvals"
@@ -221,7 +221,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {['evp', 'ceo'].includes(role) && (
           <NavItem to="/variance" label="Cost Variance" icon={<BarChart3 size={16} />} />
         )}
-        {['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement_supervisor'].includes(role) && (
+        {['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'].includes(role) && (
           <NavItem
             to="/payment-queue"
             label="Payment Queue"
