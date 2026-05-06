@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send, FileText } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
+import { VENDOR_INVOICE_UNPAID_STATUSES } from '../../../config/statusConstants';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import {
   fmtTHB, COSTING_CATEGORY_KEYS, PROJECT_STATUS_LABELS, CostCategory,
@@ -326,7 +327,7 @@ export default function OrdersTab() {
                                     .select('id, vendor_invoice_no, invoice_amount_incl_vat')
                                     .eq('po_id', o.id)
                                     .is('po_milestone_id', null)
-                                    .eq('status', 'received')
+                                    .in('status', VENDOR_INVOICE_UNPAID_STATUSES)
                                     .order('created_at', { ascending: false })
                                     .limit(1)
                                     .maybeSingle();

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { VENDOR_INVOICE_UNPAID_STATUSES, VENDOR_INVOICE_PAID_STATUSES } from '../config/statusConstants';
 import {
   DndContext,
   DragEndEvent,
@@ -517,7 +518,7 @@ export default function CashFlowPlanner() {
       supabase
         .from('vendor_invoices')
         .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(*)')
-        .in('status', ['released', 'approved_evp']),
+        .in('status', VENDOR_INVOICE_UNPAID_STATUSES),
       supabase
         .from('client_invoice_payments')
         .select('amount')
@@ -552,12 +553,12 @@ export default function CashFlowPlanner() {
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_date, invoice_amount_incl_vat, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
-        .eq('status', 'paid'),
-      // Forecast Balance: received-but-unpaid invoices with milestone relations
+        .in('status', VENDOR_INVOICE_PAID_STATUSES),
+      // Forecast Balance: unpaid invoices (full pipeline) with milestone relations
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
-        .eq('status', 'received'),
+        .in('status', VENDOR_INVOICE_UNPAID_STATUSES),
       // For uninvoiced matching: all milestones
       supabase
         .from('po_milestones')

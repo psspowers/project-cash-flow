@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { X, AlertCircle, Pencil, Check, XCircle, Download } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { VENDOR_INVOICE_UNPAID_STATUSES } from '../../config/statusConstants';
 import { toMonthKey, toMonthLabel, fmtTHB2dp, formatProjectName } from './AnalysisPivotTable';
 
 // ---------------------------------------------------------------------------
@@ -240,7 +241,7 @@ export default function MonthlyAnalysisBalance() {
           milestones:po_milestones ( id, amount_due, planned_payment_date )
         )
       `)
-      .in('status', ['received', 'approved_cm', 'approved_evp', 'released'])
+      .in('status', VENDOR_INVOICE_UNPAID_STATUSES)
       .order('invoice_date', { ascending: true });
 
     if (!error && data) setInvoices(data as unknown as RawInvoice[]);
