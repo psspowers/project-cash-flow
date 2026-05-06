@@ -565,11 +565,19 @@ export default function PaymentQueue() {
             </tr>
           </thead>
           <tbody>
-            {invoices.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
-              </tr>
-            ) : sortedInvoices.map(inv => {
+            {(() => {
+              const subThresholdInvoices = sortedInvoices.filter(inv => {
+                const po = (inv as any).purchase_order;
+                const gross = inv.invoice_amount_incl_vat || 0;
+                const net = +(gross - +((gross / 1.07) * (po?.wht_rate ?? 0)).toFixed(2)).toFixed(2);
+                return net < 1000000;
+              });
+              if (subThresholdInvoices.length === 0) return (
+                <tr>
+                  <td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
+                </tr>
+              );
+              return subThresholdInvoices.map(inv => {
               const invPo = (inv as any).purchase_order;
               const invGross = inv.invoice_amount_incl_vat || 0;
               const invWhtRate = invPo?.wht_rate ?? 0;
@@ -597,13 +605,13 @@ export default function PaymentQueue() {
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">{formatTHB(invNetPayable)}</td>
                   <td className="px-4 py-3 text-center">
-                    {invNetPayable >= 1000000
-                      ? <span className="text-xs text-[#EF9F27] font-medium">Required</span>
-                      : <span className="text-xs text-gray-300">—</span>
-                    }
+                    <span className="text-xs text-gray-300">—</span>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1D9E75] bg-[#1D9E75]/8 px-2 py-0.5 rounded-full whitespace-nowrap">
+                      <CheckCircle size={11} />
+                      Supervisor Approved
+                    </span>
                   </td>
                   {isSupervisor && (
                     <td className="px-4 py-3 text-center">
@@ -618,7 +626,8 @@ export default function PaymentQueue() {
                   )}
                 </tr>
               );
-            })}
+            });
+            })()}
           </tbody>
         </table>
       </div>
