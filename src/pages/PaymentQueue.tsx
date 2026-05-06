@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { CreditCard, AlertTriangle, X, CheckCircle, ChevronDown } from 'lucide-react';
+import { CreditCard, AlertTriangle, X, CheckCircle, ChevronDown, Info } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
 import { VendorInvoice, PaymentVoucher } from '../types';
@@ -8,12 +8,26 @@ import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { checkAndNotifyOverrun } from '../utils/overrunNotification';
 
-const WHT_OPTIONS = [
+const SIMPLE_WHT_OPTIONS = [
   { rate: 0,    label: 'None' },
   { rate: 0.01, label: '1% — Transport / freight' },
   { rate: 0.03, label: '3% — Professional services' },
   { rate: 0.05, label: '5% — Rent / other' },
 ] as const;
+
+const CUSTOM_TIERS = [
+  { rate: 0.01, label: '1%' },
+  { rate: 0.03, label: '3%' },
+  { rate: 0.05, label: '5%' },
+];
+
+interface CustomLine {
+  rate: number;
+  label: string;
+  baseAmount: string;
+}
+
+type WhtMode = 'simple' | 'custom';
 
 export default function PaymentQueue() {
   const { profile, user } = useAuth();
@@ -26,20 +40,27 @@ export default function PaymentQueue() {
   // Voucher form state
   const [bankAccount, setBankAccount] = useState('KBank PSS Main');
 
+  // WHT — simple mode
+  const [whtMode, setWhtMode] = useState<WhtMode>('simple');
+  const [selectedWhtRate, setSelectedWhtRate] = useState<number | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  // WHT — custom mode
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [customLines, setCustomLines] = useState<CustomLine[]>(
+    CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' }))
+  );
+  const [appliedCustomLines, setAppliedCustomLines] = useState<CustomLine[] | null>(null);
+
   // Write-check modal (Banking Officer)
   const [writeCheckVoucher, setWriteCheckVoucher] = useState<PaymentVoucher | null>(null);
   const [writeCheckNo, setWriteCheckNo] = useState('');
   const [writeCheckDate, setWriteCheckDate] = useState('');
   const [writingCheck, setWritingCheck] = useState(false);
 
-  // WHT picker — null means not yet confirmed
-  const [selectedWhtRate, setSelectedWhtRate] = useState<number | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const pickerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => { loadData(); }, []);
 
-  // Close picker on outside click
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
@@ -54,16 +75,46 @@ export default function PaymentQueue() {
     const po = (inv as any).purchase_order;
     const preRate = (po?.wht_rate != null) ? po.wht_rate : null;
     setSelectedInvoice(inv);
+    setWhtMode('simple');
     setSelectedWhtRate(preRate);
     setPickerOpen(false);
     setBankAccount('KBank PSS Main');
+    setCustomLines(CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' })));
+    setAppliedCustomLines(null);
   }
 
   function closeModal() {
     setSelectedInvoice(null);
+    setWhtMode('simple');
     setSelectedWhtRate(null);
     setPickerOpen(false);
     setBankAccount('KBank PSS Main');
+    setCustomLines(CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' })));
+    setAppliedCustomLines(null);
+  }
+
+  function openCustomModal() {
+    if (appliedCustomLines) {
+      setCustomLines(appliedCustomLines.map(l => ({ ...l })));
+    } else {
+      setCustomLines(CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' })));
+    }
+    setCustomModalOpen(true);
+    setPickerOpen(false);
+  }
+
+  function cancelCustomModal() {
+    setCustomModalOpen(false);
+    if (!appliedCustomLines) {
+      setWhtMode('simple');
+    }
+  }
+
+  function applyCustomModal() {
+    setAppliedCustomLines(customLines.map(l => ({ ...l })));
+    setWhtMode('custom');
+    setSelectedWhtRate(null);
+    setCustomModalOpen(false);
   }
 
   function openWriteCheck(voucher: PaymentVoucher) {
@@ -82,7 +133,7 @@ export default function PaymentQueue() {
     const [{ data: inv }, { data: vouc }] = await Promise.all([
       supabase
         .from('vendor_invoices')
-        .select('*, project:projects(name), purchase_order:purchase_orders(supplier_name_raw, wht_rate, vendor:entities(name))')
+        .select('*, project:projects(name), purchase_order:purchase_orders(supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
         .eq('status', 'released')
         .order('created_at', { ascending: false }),
       supabase.from('payment_vouchers').select('*').order('created_at', { ascending: false }),
@@ -116,7 +167,6 @@ export default function PaymentQueue() {
     netPaid: number,
     vendorName: string,
     projectName: string,
-    checkNoVal: string,
   ) {
     const notifications: {
       user_id: string;
@@ -151,7 +201,7 @@ export default function PaymentQueue() {
         notifications.push({
           user_id: ceoProfile.id,
           title: 'Large payment approved',
-          message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} has been approved. Check no: ${checkNoVal}.`,
+          message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} has been approved.`,
           type: 'info',
           is_read: false,
           related_entity_type: 'payment_voucher',
@@ -166,7 +216,9 @@ export default function PaymentQueue() {
   }
 
   async function issueVoucher() {
-    if (!selectedInvoice || !user || selectedWhtRate === null) return;
+    if (!selectedInvoice || !user) return;
+    if (whtMode === 'simple' && selectedWhtRate === null) return;
+    if (whtMode === 'custom' && !appliedCustomLines) return;
     if (!bankAccount) return;
     setSubmitting(true);
 
@@ -174,8 +226,18 @@ export default function PaymentQueue() {
     const po = (selectedInvoice as any).purchase_order;
     const gross = selectedInvoice.invoice_amount_incl_vat || 0;
     const exclVat = gross / 1.07;
-    const whtAmount = +(exclVat * selectedWhtRate).toFixed(2);
-    const netPaid = +(gross - whtAmount).toFixed(2);
+
+    let totalWhtAmount = 0;
+    if (whtMode === 'simple') {
+      totalWhtAmount = +(exclVat * selectedWhtRate!).toFixed(2);
+    } else {
+      totalWhtAmount = +appliedCustomLines!.reduce((sum, l) => {
+        const base = parseFloat(l.baseAmount) || 0;
+        return sum + base * l.rate;
+      }, 0).toFixed(2);
+    }
+
+    const netPaid = +(gross - totalWhtAmount).toFixed(2);
     const requiresManager = netPaid >= 1000000;
     const ceoPay = netPaid >= 3000000;
 
@@ -186,7 +248,7 @@ export default function PaymentQueue() {
         vendor_invoice_id: selectedInvoice.id,
         project_id: selectedInvoice.project_id,
         amount: gross,
-        wht_amount: whtAmount,
+        wht_amount: totalWhtAmount,
         net_paid: netPaid,
         voucher_date: new Date().toISOString().substring(0, 10),
         prepared_by: user.id,
@@ -202,8 +264,30 @@ export default function PaymentQueue() {
       const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? 'Unknown vendor';
       const projectName = (selectedInvoice as any).project?.name ?? 'Unknown project';
 
-      // Insert check record with null check_no/check_date — Banking Officer fills these in
+      let whtLines: { voucher_id: string; base_amount: number; wht_rate: number; wht_amount: number }[];
+      if (whtMode === 'simple') {
+        whtLines = [{
+          voucher_id: voucherData.id,
+          base_amount: +exclVat.toFixed(2),
+          wht_rate: selectedWhtRate!,
+          wht_amount: totalWhtAmount,
+        }];
+      } else {
+        whtLines = appliedCustomLines!
+          .filter(l => parseFloat(l.baseAmount) > 0)
+          .map(l => {
+            const base = parseFloat(l.baseAmount);
+            return {
+              voucher_id: voucherData.id,
+              base_amount: base,
+              wht_rate: l.rate,
+              wht_amount: +(base * l.rate).toFixed(2),
+            };
+          });
+      }
+
       await Promise.all([
+        supabase.from('voucher_wht_lines').insert(whtLines),
         supabase.from('checks').insert({
           voucher_id: voucherData.id,
           bank_account: bankAccount,
@@ -214,7 +298,7 @@ export default function PaymentQueue() {
           status: 'draft',
         }),
         supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', selectedInvoice.id),
-        insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName, ''),
+        insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName),
       ]);
     }
 
@@ -225,8 +309,6 @@ export default function PaymentQueue() {
 
   async function approveVoucher(voucherId: string) {
     if (!user) return;
-    // Manager co-signs: advance voucher to 'approved' for Banking Officer to write the check.
-    // The checks record stays 'draft' — Banking Officer completes it via Write Check.
     await supabase
       .from('payment_vouchers')
       .update({ status: 'approved', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
@@ -279,9 +361,29 @@ export default function PaymentQueue() {
   // Live modal calculations
   const modalGross = selectedInvoice?.invoice_amount_incl_vat ?? 0;
   const modalExclVat = modalGross / 1.07;
-  const modalWhtAmt = selectedWhtRate !== null ? +(modalExclVat * selectedWhtRate).toFixed(2) : null;
-  const modalNetPayable = modalWhtAmt !== null ? +(modalGross - modalWhtAmt).toFixed(2) : modalGross;
-  const canSubmit = selectedWhtRate !== null && bankAccount;
+
+  const customWorkingTotalBase = customLines.reduce((s, l) => s + (parseFloat(l.baseAmount) || 0), 0);
+  const customWorkingTotalWht = customLines.reduce((s, l) => {
+    const base = parseFloat(l.baseAmount) || 0;
+    return s + base * l.rate;
+  }, 0);
+
+  const appliedTotalWht: number | null =
+    whtMode === 'custom' && appliedCustomLines
+      ? +appliedCustomLines.reduce((s, l) => {
+          const base = parseFloat(l.baseAmount) || 0;
+          return s + base * l.rate;
+        }, 0).toFixed(2)
+      : whtMode === 'simple' && selectedWhtRate !== null
+        ? +(modalExclVat * selectedWhtRate).toFixed(2)
+        : null;
+
+  const modalNetPayable = appliedTotalWht !== null ? +(modalGross - appliedTotalWht).toFixed(2) : modalGross;
+
+  const canSubmit = !!bankAccount && (
+    (whtMode === 'simple' && selectedWhtRate !== null) ||
+    (whtMode === 'custom' && appliedCustomLines !== null)
+  );
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -471,11 +573,7 @@ export default function PaymentQueue() {
                 />
               </div>
               <div className="flex gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={closeWriteCheck}
-                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
-                >
+                <button type="button" onClick={closeWriteCheck} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
                   Cancel
                 </button>
                 <button
@@ -492,10 +590,135 @@ export default function PaymentQueue() {
         </div>
       )}
 
+      {/* Custom WHT Breakdown Modal (z-60, sits above the voucher modal) */}
+      {customModalOpen && selectedInvoice && (() => {
+        const remaining = +(modalExclVat - customWorkingTotalBase).toFixed(2);
+        const isBalanced = Math.abs(remaining) < 1;
+        const isOver = remaining < -1;
+        return (
+          <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div>
+                  <h2 className="text-base font-semibold text-gray-800">Custom WHT Breakdown</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Enter the ex-VAT taxable base for each applicable rate</p>
+                </div>
+                <button onClick={cancelCustomModal}><X size={16} className="text-gray-400" /></button>
+              </div>
+
+              {/* Unallocated balance helper */}
+              <div className={`mx-6 mt-4 rounded-lg px-4 py-3 flex items-start gap-3 transition-colors ${
+                isBalanced ? 'bg-[#1D9E75]/8 border border-[#1D9E75]/25' :
+                isOver ? 'bg-[#E24B4A]/5 border border-[#E24B4A]/25' :
+                'bg-gray-50 border border-gray-100'
+              }`}>
+                <Info size={14} className={`mt-0.5 shrink-0 ${isBalanced ? 'text-[#1D9E75]' : isOver ? 'text-[#E24B4A]' : 'text-gray-400'}`} />
+                <div className="text-xs space-y-1 w-full">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Invoice Ex-VAT total</span>
+                    <span className="font-medium text-gray-700">{formatTHB(modalExclVat)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Allocated so far</span>
+                    <span className="font-medium text-gray-700">{formatTHB(customWorkingTotalBase)}</span>
+                  </div>
+                  <div className={`flex justify-between font-semibold border-t pt-1 mt-0.5 ${
+                    isBalanced ? 'border-[#1D9E75]/20 text-[#1D9E75]' :
+                    isOver ? 'border-[#E24B4A]/20 text-[#E24B4A]' :
+                    'border-gray-200 text-gray-800'
+                  }`}>
+                    <span>Remaining unallocated</span>
+                    <span>{formatTHB(remaining)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 pt-4 pb-2">
+                {/* Column headers */}
+                <div className="grid grid-cols-3 gap-3 mb-2">
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Amount (Ex-VAT ฿)</span>
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-center">WHT Rate</span>
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-right">WHT Total</span>
+                </div>
+
+                {/* Rate rows */}
+                <div className="space-y-2.5">
+                  {customLines.map((line, i) => {
+                    const base = parseFloat(line.baseAmount) || 0;
+                    const whtTotal = +(base * line.rate).toFixed(2);
+                    return (
+                      <div key={line.rate} className="grid grid-cols-3 gap-3 items-center">
+                        <input
+                          type="number"
+                          min="0"
+                          value={line.baseAmount}
+                          onChange={e => {
+                            const next = [...customLines];
+                            next[i] = { ...next[i], baseAmount: e.target.value };
+                            setCustomLines(next);
+                          }}
+                          placeholder="0"
+                          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-right tabular-nums"
+                        />
+                        <div className="flex justify-center">
+                          <span className="bg-gray-100 text-gray-700 text-xs font-bold px-3 py-1.5 rounded-full">
+                            {line.label}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className={`text-sm font-semibold tabular-nums ${whtTotal > 0 ? 'text-[#E24B4A]' : 'text-gray-200'}`}>
+                            {whtTotal > 0 ? formatTHB(whtTotal) : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Total WHT row */}
+                <div className="grid grid-cols-3 gap-3 items-center border-t border-gray-150 mt-4 pt-3">
+                  <span className="text-xs font-bold text-gray-700 col-span-2">Total WHT withheld</span>
+                  <div className="text-right">
+                    <span className={`text-sm font-bold tabular-nums ${customWorkingTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-300'}`}>
+                      {customWorkingTotalWht > 0 ? formatTHB(customWorkingTotalWht) : '—'}
+                    </span>
+                  </div>
+                </div>
+
+                {isOver && (
+                  <p className="text-xs text-[#E24B4A] font-medium mt-2">
+                    Allocated base exceeds ex-VAT total by {formatTHB(Math.abs(remaining))}.
+                  </p>
+                )}
+              </div>
+
+              <div className="px-6 py-4 flex gap-3">
+                <button type="button" onClick={cancelCustomModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={applyCustomModal}
+                  disabled={customWorkingTotalBase === 0 || isOver}
+                  className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Issue Payment Voucher Modal */}
       {selectedInvoice && (() => {
         const modalPo = (selectedInvoice as any).purchase_order;
         const modalVendorName = modalPo?.vendor?.name ?? modalPo?.supplier_name_raw ?? '—';
+        const vendorBankName: string | null = modalPo?.vendor?.bank_name ?? null;
+        const vendorBankAccNo: string | null = modalPo?.vendor?.bank_account_no ?? null;
+        const vendorBankAccName: string | null = modalPo?.vendor?.bank_account_name ?? null;
+        const hasBankDetails = vendorBankName || vendorBankAccNo;
+
         return (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
@@ -507,10 +730,21 @@ export default function PaymentQueue() {
               <div className="p-6 space-y-4">
                 {/* Summary panel */}
                 <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Vendor</span>
-                    <span className="font-medium">{modalVendorName}</span>
+
+                  {/* Vendor row — name + bank details below */}
+                  <div className="flex justify-between items-start">
+                    <span className="text-gray-500 shrink-0">Vendor</span>
+                    <div className="text-right ml-4">
+                      <p className="font-medium text-gray-800">{modalVendorName}</p>
+                      {hasBankDetails && (
+                        <p className="text-xs text-gray-400 mt-0.5 leading-snug">
+                          {[vendorBankName, vendorBankAccNo].filter(Boolean).join(' · ')}
+                          {vendorBankAccName ? ` (${vendorBankAccName})` : ''}
+                        </p>
+                      )}
+                    </div>
                   </div>
+
                   <div className="flex justify-between">
                     <span className="text-gray-500">Invoice No.</span>
                     <span>{selectedInvoice.vendor_invoice_no || '—'}</span>
@@ -526,25 +760,37 @@ export default function PaymentQueue() {
                       type="button"
                       onClick={() => setPickerOpen(o => !o)}
                       className={`w-full flex justify-between items-center rounded-md px-2 py-1.5 -mx-2 transition-colors text-sm ${
-                        selectedWhtRate === null
+                        appliedTotalWht === null
                           ? 'bg-[#E24B4A]/8 hover:bg-[#E24B4A]/12'
                           : 'hover:bg-gray-100'
                       }`}
                     >
-                      <span className={selectedWhtRate === null ? 'text-[#E24B4A] font-medium' : 'text-gray-500'}>
-                        WHT{selectedWhtRate !== null ? ` ${(selectedWhtRate * 100).toFixed(0)}%` : ''}
+                      <span className={appliedTotalWht === null ? 'text-[#E24B4A] font-medium' : 'text-gray-500'}>
+                        {whtMode === 'custom'
+                          ? 'WHT Custom'
+                          : `WHT${selectedWhtRate !== null ? ` ${(selectedWhtRate * 100).toFixed(0)}%` : ''}`
+                        }
                       </span>
                       <div className="flex items-center gap-1.5">
                         <span className={
-                          selectedWhtRate === null
+                          appliedTotalWht === null
                             ? 'text-xs italic text-[#E24B4A]'
-                            : modalWhtAmt! > 0 ? 'text-[#E24B4A]' : 'text-gray-400'
+                            : appliedTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-400'
                         }>
-                          {selectedWhtRate === null
+                          {appliedTotalWht === null
                             ? 'tap to select'
-                            : modalWhtAmt! > 0 ? `(${formatTHB(modalWhtAmt!)})` : '฿0'
+                            : appliedTotalWht > 0 ? `(${formatTHB(appliedTotalWht)})` : '฿0'
                           }
                         </span>
+                        {whtMode === 'custom' && appliedCustomLines && (
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); openCustomModal(); }}
+                            className="text-xs text-[#1D9E75] underline underline-offset-2 ml-1 hover:text-[#178a64]"
+                          >
+                            Edit
+                          </button>
+                        )}
                         <ChevronDown
                           size={13}
                           className={`text-gray-400 transition-transform ${pickerOpen ? 'rotate-180' : ''}`}
@@ -552,21 +798,26 @@ export default function PaymentQueue() {
                       </div>
                     </button>
 
-                    {/* WHT breakdown dropdown */}
+                    {/* WHT dropdown */}
                     {pickerOpen && (
                       <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 overflow-hidden">
                         <div className="px-4 pt-3 pb-1.5">
                           <p className="text-xs font-semibold text-gray-700">Fill Applicable WHT Amount</p>
                         </div>
                         <div className="px-2 pb-1">
-                          {WHT_OPTIONS.map(opt => {
+                          {SIMPLE_WHT_OPTIONS.map(opt => {
                             const optWhtAmt = +(modalExclVat * opt.rate).toFixed(2);
-                            const isSelected = selectedWhtRate === opt.rate;
+                            const isSelected = whtMode === 'simple' && selectedWhtRate === opt.rate;
                             return (
                               <button
                                 key={opt.rate}
                                 type="button"
-                                onClick={() => { setSelectedWhtRate(opt.rate); setPickerOpen(false); }}
+                                onClick={() => {
+                                  setWhtMode('simple');
+                                  setSelectedWhtRate(opt.rate);
+                                  setAppliedCustomLines(null);
+                                  setPickerOpen(false);
+                                }}
                                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
                                   isSelected
                                     ? 'bg-[#1D9E75]/10 text-[#1D9E75]'
@@ -586,11 +837,34 @@ export default function PaymentQueue() {
                               </button>
                             );
                           })}
+
+                          {/* Custom / mixed-rate option */}
+                          <button
+                            type="button"
+                            onClick={openCustomModal}
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
+                              whtMode === 'custom'
+                                ? 'bg-[#1D9E75]/10 text-[#1D9E75]'
+                                : 'hover:bg-gray-50 text-gray-700'
+                            }`}
+                          >
+                            <span className="font-semibold w-8 text-left shrink-0 text-xs">Mix</span>
+                            <span className="flex-1 text-left text-xs text-gray-500 pl-1">
+                              Custom — split by rate
+                            </span>
+                            <span className={`font-medium text-right text-xs ${whtMode === 'custom' ? 'text-[#1D9E75]' : 'text-gray-500'}`}>
+                              {whtMode === 'custom' && appliedCustomLines
+                                ? formatTHB(appliedTotalWht ?? 0)
+                                : 'Enter amounts →'
+                              }
+                            </span>
+                            {whtMode === 'custom' && <CheckCircle size={13} className="text-[#1D9E75] ml-2 shrink-0" />}
+                          </button>
                         </div>
                         <div className="border-t border-gray-100 mx-3 mb-2.5 pt-2 flex justify-between items-center">
                           <span className="text-xs font-semibold text-gray-600">Net Payable</span>
                           <span className="text-sm font-bold text-gray-900">
-                            {selectedWhtRate !== null ? formatTHB(modalNetPayable) : '—'}
+                            {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
                           </span>
                         </div>
                       </div>
@@ -599,19 +873,19 @@ export default function PaymentQueue() {
 
                   <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
                     <span className="font-semibold text-gray-700">Net Payable</span>
-                    <span className={`font-bold text-base ${selectedWhtRate !== null ? 'text-gray-900' : 'text-gray-400'}`}>
-                      {selectedWhtRate !== null ? formatTHB(modalNetPayable) : '—'}
+                    <span className={`font-bold text-base ${appliedTotalWht !== null ? 'text-gray-900' : 'text-gray-400'}`}>
+                      {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
                     </span>
                   </div>
                 </div>
 
-                {selectedWhtRate === null && (
+                {appliedTotalWht === null && (
                   <p className="text-xs text-[#E24B4A] font-medium -mt-2">
                     WHT selection is required before issuing this voucher.
                   </p>
                 )}
 
-                {selectedWhtRate !== null && modalNetPayable >= 1000000 && (
+                {appliedTotalWht !== null && modalNetPayable >= 1000000 && (
                   <div className="flex items-start gap-2 p-3 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg">
                     <AlertTriangle size={14} className="text-[#EF9F27] shrink-0 mt-0.5" />
                     <p className="text-xs text-[#EF9F27] font-medium">
@@ -620,7 +894,7 @@ export default function PaymentQueue() {
                   </div>
                 )}
 
-                {selectedWhtRate !== null && modalNetPayable >= 3000000 && (
+                {appliedTotalWht !== null && modalNetPayable >= 3000000 && (
                   <div className="flex items-start gap-2 p-3 bg-[#E24B4A]/10 border border-[#E24B4A]/30 rounded-lg">
                     <AlertTriangle size={14} className="text-[#E24B4A] shrink-0 mt-0.5" />
                     <p className="text-xs text-[#E24B4A] font-medium">
@@ -629,7 +903,7 @@ export default function PaymentQueue() {
                   </div>
                 )}
 
-                {/* Form fields */}
+                {/* Bank account selector */}
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs font-medium text-gray-600 mb-1 block">Bank Account</label>
@@ -648,11 +922,7 @@ export default function PaymentQueue() {
                 </div>
 
                 <div className="flex gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
-                  >
+                  <button type="button" onClick={closeModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
                     Cancel
                   </button>
                   <button
