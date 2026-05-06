@@ -1913,8 +1913,8 @@ export default function Dashboard() {
                   <th className="text-left pb-2 font-medium">Project</th>
                   <th className="text-right pb-2 font-medium">Received</th>
                   <th className="text-right pb-2 font-medium">Cost Paid</th>
-                  <th className="text-right pb-2 font-medium">Next In</th>
-                  <th className="text-right pb-2 font-medium">Next Out</th>
+                  <th className="text-right pb-2 font-medium">30-Day In</th>
+                  <th className="text-right pb-2 font-medium">30-Day Out</th>
                   <th className="text-right pb-2 font-medium">30-Day Net</th>
                 </tr>
               </thead>
@@ -1929,14 +1929,6 @@ export default function Dashboard() {
                     .reduce((s, inv) => s + Math.max(0, Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0)), 0);
                   // Uninvoiced milestones for this project
                   const projUninvoiced = chartUninvoicedMilestones.filter(m => m.project_id === project.id);
-                  const nextIn = clientMilestonesAll
-                    .filter(m => m.project_id === project.id && m.planned_receive_date)
-                    .sort((a, b) => (a.planned_receive_date ?? '').localeCompare(b.planned_receive_date ?? ''))
-                    [0];
-                  const nextOutMilestone = projUninvoiced
-                    .filter(m => m.planned_payment_date)
-                    .sort((a, b) => (a.planned_payment_date ?? '').localeCompare(b.planned_payment_date ?? ''))
-                    [0];
                   const net30In =
                     clientMilestonesAll
                       .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
@@ -1971,28 +1963,22 @@ export default function Dashboard() {
                         {fmtTHBCompact(totalCostPaid)}
                       </td>
                       <td className="py-2.5 text-right">
-                        {projPendingInvsTotal > 0 ? (
+                        {net30In > 0 ? (
                           <div>
-                            <p className="text-[13px] font-medium text-amber-600">{fmtTHBCompact(projPendingInvsTotal)}</p>
-                            <p className="text-[10px] text-amber-600/70">Awaiting Payment</p>
-                          </div>
-                        ) : nextIn ? (
-                          <div>
-                            <p className="text-[13px] font-medium text-[#1D9E75]">{fmtTHBCompact(nextIn.payment_plan_amount)}</p>
-                            <p className="text-[10px] text-gray-400">{formatDate(nextIn.planned_receive_date)}</p>
+                            <p className="text-[13px] font-medium text-[#1D9E75]">{fmtTHBCompact(net30In)}</p>
+                            {projPendingInvsTotal > 0 && (
+                              <p className="text-[10px] text-amber-600/70">incl. awaiting pmt</p>
+                            )}
                           </div>
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
                       <td className="py-2.5 text-right">
-                        {projBalanceInvoicesTotal > 0 ? (
+                        {net30Out > 0 ? (
                           <div>
-                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(projBalanceInvoicesTotal)}</p>
-                            <p className="text-[10px] text-[#E24B4A]/70">Supplier Invoiced</p>
-                          </div>
-                        ) : nextOutMilestone ? (
-                          <div>
-                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(Number(nextOutMilestone.amount_due))}</p>
-                            <p className="text-[10px] text-gray-400">{formatDate(nextOutMilestone.planned_payment_date)}</p>
+                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(net30Out)}</p>
+                            {projBalanceInvoicesTotal > 0 && (
+                              <p className="text-[10px] text-[#E24B4A]/70">incl. supplier inv.</p>
+                            )}
                           </div>
                         ) : <span className="text-gray-300 text-xs">—</span>}
                       </td>
