@@ -350,7 +350,18 @@ export interface Check {
   signed_by_supervisor?: string;
   signed_by_manager?: string;
   status: 'draft' | 'issued' | 'cleared' | 'bounced';
+  cleared_at?: string;
+  cleared_note?: string;
   created_at: string;
+  // joined relations (populated by CheckManagement page queries)
+  payment_voucher?: PaymentVoucher & {
+    vendor_invoice?: VendorInvoice & {
+      purchase_order?: PurchaseOrder & {
+        vendor?: Entity;
+      };
+      project?: Project;
+    };
+  };
 }
 
 export interface CashReceipt {

@@ -229,6 +229,20 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
             badge={badges['payments']}
           />
         )}
+
+        {/* ── Finance (Banking Officer only) ── */}
+        {role === 'banking_finance_officer' && (
+          <>
+            <Divider />
+            <SectionLabel label="Finance" />
+            <NavItem
+              to="/checks"
+              label="Check Management"
+              icon={<CreditCard size={16} />}
+              badge={badges['checks']}
+            />
+          </>
+        )}
         {role === 'accounts_supervisor' && (
           <NavItem to="/cash-receipts" label="Cash Receipts" icon={<Receipt size={16} />} />
         )}
