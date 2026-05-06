@@ -33,7 +33,7 @@ const PO_THRESHOLD_EVP = 5_000_000;
 
 export default function POCreationWizard({ projects, vendors, onClose, onSuccess, editPo }: Props) {
   const { user } = useAuth();
-  const { vatRate, whtRate } = useTaxConfig();
+  const { vatRate } = useTaxConfig();
   const isEdit = !!editPo;
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -45,12 +45,21 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
   const [description, setDescription] = useState(editPo?.description ?? '');
   const [vendorId, setVendorId] = useState(editPo?.vendor_id ?? '');
   const [costCategory, setCostCategory] = useState<CostCategory | ''>(editPo?.cost_category ?? '');
-  const [whtApplies, setWhtApplies] = useState(editPo?.wht_applies ?? false);
+  const [whtRate, setWhtRate] = useState<number>(editPo?.wht_rate ?? 0);
 
   const [exclVat, setExclVat] = useState(editPo ? String(editPo.po_amount_excl_vat) : '');
 
   const [simplePayments, setSimplePayments] = useState<SimplePaymentRow[]>([{ payment_month: '', amount: '' }]);
   const [milestones, setMilestones] = useState<MilestoneRow[]>([{ description: '', pct: '', planned_payment_date: '' }]);
+
+  // Pre-fill WHT rate from vendor's default when vendor changes (new PO only)
+  useEffect(() => {
+    if (isEdit || !vendorId) return;
+    const vendor = vendors.find(v => v.id === vendorId);
+    if (vendor?.default_wht_rate != null) {
+      setWhtRate(vendor.default_wht_rate);
+    }
+  }, [vendorId, isEdit, vendors]);
 
   // Load child records when editing
   useEffect(() => {
@@ -165,8 +174,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
           po_amount_excl_vat: exclVatNum,
           vat_7pct: vatNum,
           po_amount_incl_vat: inclVatNum,
-          wht_applies: whtApplies,
-          wht_3pct: whtApplies ? whtNum : 0,
+          wht_applies: whtRate > 0,
+          wht_rate: whtRate,
+          wht_3pct: whtNum,
           status,
           has_supplier_milestones: poType === 'milestone',
           submitted_by: status === 'pending_approval' ? user.id : editPo.submitted_by ?? null,
@@ -244,8 +254,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
         po_amount_excl_vat: exclVatNum,
         vat_7pct: vatNum,
         po_amount_incl_vat: inclVatNum,
-        wht_applies: whtApplies,
-        wht_3pct: whtApplies ? whtNum : 0,
+        wht_applies: whtRate > 0,
+        wht_rate: whtRate,
+        wht_3pct: whtNum,
         status,
         has_supplier_milestones: poType === 'milestone',
         submitted_by: mode === 'submit' ? user.id : null,
@@ -417,10 +428,20 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                   {Object.entries(COST_CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input type="checkbox" checked={whtApplies} onChange={e => setWhtApplies(e.target.checked)} className="w-4 h-4 accent-[#1D9E75]" />
-                <span className="text-sm text-gray-700">WHT 3% applies (individual consultant / Thai national)</span>
-              </label>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Withholding Tax (WHT)</label>
+                <select
+                  value={whtRate}
+                  onChange={e => setWhtRate(Number(e.target.value))}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
+                >
+                  <option value={0}>0% — None</option>
+                  <option value={0.01}>1% — Transport / freight services</option>
+                  <option value={0.03}>3% — Professional / consulting services</option>
+                  <option value={0.05}>5% — Rent / other</option>
+                </select>
+                <p className="text-xs text-gray-400 mt-1">Pre-filled from vendor default where available.</p>
+              </div>
             </div>
           )}
 
@@ -434,12 +455,13 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
               </div>
               {exclVatNum > 0 && (
                 <div className="bg-gray-50 rounded-lg p-4 space-y-2 border border-gray-100">
-                  {[['Contract excl. VAT', fmtTHB(exclVatNum), 'text-gray-800'],
+                  {[
+                    ['Contract excl. VAT', fmtTHB(exclVatNum), 'text-gray-800'],
                     ['VAT 7%', fmtTHB(vatNum), 'text-gray-600'],
-                    ...(whtApplies ? [['WHT 3% (withheld)', fmtTHB(whtNum), 'text-[#EF9F27]']] : []),
+                    ...(whtRate > 0 ? [[`WHT ${(whtRate * 100).toFixed(0)}% (withheld)`, fmtTHB(whtNum), 'text-[#EF9F27]']] : []),
                   ].map(([label, val, cls]) => (
                     <div key={label} className="flex justify-between text-sm">
-                      <span className={`text-gray-500 ${label === 'WHT 3% (withheld)' ? 'text-[#EF9F27]' : ''}`}>{label}</span>
+                      <span className={`${whtRate > 0 && label.startsWith('WHT') ? 'text-[#EF9F27]' : 'text-gray-500'}`}>{label}</span>
                       <span className={`font-medium ${cls}`}>{val}</span>
                     </div>
                   ))}
@@ -447,7 +469,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                     <span>Total incl. VAT</span>
                     <span className="text-base">{fmtTHB(inclVatNum)}</span>
                   </div>
-                  {whtApplies && (
+                  {whtRate > 0 && (
                     <div className="flex justify-between text-xs text-gray-400 border-t border-gray-100 pt-1">
                       <span>Net payable after WHT</span>
                       <span>{fmtTHB(inclVatNum - whtNum)}</span>
@@ -579,7 +601,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                 <div className="border-t border-gray-200 pt-2 space-y-1">
                   <div className="flex justify-between text-xs text-gray-500"><span>excl. VAT</span><span>{fmtTHB(exclVatNum)}</span></div>
                   <div className="flex justify-between text-xs text-gray-500"><span>VAT 7%</span><span>{fmtTHB(vatNum)}</span></div>
-                  {whtApplies && <div className="flex justify-between text-xs text-[#EF9F27]"><span>WHT 3%</span><span>{fmtTHB(whtNum)}</span></div>}
+                  {whtRate > 0 && <div className="flex justify-between text-xs text-[#EF9F27]"><span>WHT {(whtRate * 100).toFixed(0)}%</span><span>{fmtTHB(whtNum)}</span></div>}
                   <div className="flex justify-between font-bold text-gray-900"><span>Total incl. VAT</span><span className="text-base">{fmtTHB(inclVatNum)}</span></div>
                 </div>
               </div>

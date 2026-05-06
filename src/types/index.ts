@@ -201,6 +201,7 @@ export interface PurchaseOrder {
   vat_7pct: number;
   po_amount_incl_vat: number;
   wht_applies: boolean;
+  wht_rate: number;
   wht_3pct: number;
   po_date?: string;
   status: POStatus;
