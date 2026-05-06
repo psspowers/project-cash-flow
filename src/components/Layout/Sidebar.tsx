@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderKanban, ShoppingCart, CheckCircle,
   CreditCard, Receipt, BookOpen, FileText, Bell, CalendarRange,
   BarChart3, Zap, ChevronDown, ChevronRight,
-  CheckCircle2, Clock, CalendarClock, TrendingUp, Building2,
+  CheckCircle2, Clock, CalendarClock, TrendingUp, Building2, GitPullRequest,
 } from 'lucide-react';
 import { UserRole } from '../../types';
 import { ANALYZER_ROLES, PROCUREMENT_READ_ROLES } from '../../config/roles';
@@ -133,6 +133,20 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {/* Dashboard */}
         <NavItem to="/dashboard" label="Dashboard" icon={<LayoutDashboard size={16} />} />
 
+        {/* ── Executive section (EVP + CEO only) ── */}
+        {['evp', 'ceo'].includes(role) && (
+          <>
+            <Divider />
+            <SectionLabel label="Executive" />
+            <NavItem
+              to="/workflow"
+              label="Workflow Efficiency"
+              icon={<GitPullRequest size={16} />}
+              badge={badges['workflow']}
+            />
+          </>
+        )}
+
         {/* ── Analytics group ── */}
         {ANALYZER_ROLES.includes(role) && (
           <>
@@ -221,7 +235,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {['evp', 'ceo'].includes(role) && (
           <NavItem to="/variance" label="Cost Variance" icon={<BarChart3 size={16} />} />
         )}
-        {['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'].includes(role) && (
+        {['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement', 'evp'].includes(role) && (
           <NavItem
             to="/payment-queue"
             label="Payment Queue"
@@ -246,7 +260,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {role === 'accounts_supervisor' && (
           <NavItem to="/cash-receipts" label="Cash Receipts" icon={<Receipt size={16} />} />
         )}
-        {['accounts_supervisor', 'accounts_manager', 'ceo'].includes(role) && (
+        {['accounts_supervisor', 'accounts_manager', 'ceo', 'evp'].includes(role) && (
           <NavItem to="/loan-ledger" label="Loan Ledger" icon={<BookOpen size={16} />} />
         )}
         {['accounts_supervisor', 'accounts_manager'].includes(role) && (
@@ -255,7 +269,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
             <NavItem to="/vat-report" label="VAT Report (PP.30)" icon={<FileText size={16} />} />
           </>
         )}
-        {['ceo', 'accounts_supervisor'].includes(role) && (
+        {['ceo', 'accounts_supervisor', 'evp'].includes(role) && (
           <NavItem to="/ceo-alerts" label="Alerts" icon={<Bell size={16} />} badge={badges['alerts']} />
         )}
 

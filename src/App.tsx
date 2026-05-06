@@ -18,6 +18,7 @@ import CashFlowPlanner from './pages/CashFlowPlanner';
 import CostVariance from './pages/CostVariance';
 import MonthlyAnalyzer from './pages/MonthlyAnalyzer';
 import CheckManagement from './pages/CheckManagement';
+import WorkflowEfficiency from './pages/WorkflowEfficiency';
 
 function AppRoutes() {
   return (
@@ -39,6 +40,7 @@ function AppRoutes() {
       <Route path="/variance" element={<AppLayout><CostVariance /></AppLayout>} />
       <Route path="/monthly-analyzer" element={<AppLayout><MonthlyAnalyzer /></AppLayout>} />
       <Route path="/checks" element={<AppLayout><CheckManagement /></AppLayout>} />
+      <Route path="/workflow" element={<AppLayout><WorkflowEfficiency /></AppLayout>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

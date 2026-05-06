@@ -9,6 +9,8 @@ export const PROCUREMENT_READ_ROLES: UserRole[] = [
   'procurement',
   'accounts_supervisor',
   'accounts_manager',
+  'evp',
+  'ceo',
 ];
 
 // Roles that can access the analytics / monthly analyzer section
