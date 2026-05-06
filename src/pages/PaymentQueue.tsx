@@ -6,7 +6,6 @@ import { VendorInvoice, PaymentVoucher, PurchaseOrder, Project, Entity } from '.
 import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
-import { checkAndNotifyOverrun } from '../utils/overrunNotification';
 import PODetailModal from '../components/pos/PODetailModal';
 
 const SIMPLE_WHT_OPTIONS = [
@@ -63,12 +62,6 @@ export default function PaymentQueue() {
     CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' }))
   );
   const [appliedCustomLines, setAppliedCustomLines] = useState<CustomLine[] | null>(null);
-
-  // Write-check modal (Banking Officer)
-  const [writeCheckVoucher, setWriteCheckVoucher] = useState<PaymentVoucher | null>(null);
-  const [writeCheckNo, setWriteCheckNo] = useState('');
-  const [writeCheckDate, setWriteCheckDate] = useState('');
-  const [writingCheck, setWritingCheck] = useState(false);
 
   useEffect(() => { loadData(); }, []);
 
@@ -128,17 +121,6 @@ export default function PaymentQueue() {
     setCustomModalOpen(false);
   }
 
-  function openWriteCheck(voucher: PaymentVoucher) {
-    setWriteCheckVoucher(voucher);
-    setWriteCheckNo('');
-    setWriteCheckDate(new Date().toISOString().substring(0, 10));
-  }
-
-  function closeWriteCheck() {
-    setWriteCheckVoucher(null);
-    setWriteCheckNo('');
-    setWriteCheckDate('');
-  }
 
   async function loadData() {
     const [{ data: inv }, { data: vouc }, { data: proj }, { data: vend }] = await Promise.all([
@@ -376,40 +358,9 @@ export default function PaymentQueue() {
     }
   }
 
-  async function submitWriteCheck() {
-    if (!writeCheckVoucher || !writeCheckNo || !writeCheckDate || !user) return;
-    setWritingCheck(true);
-
-    const { data: checkData } = await supabase
-      .from('checks')
-      .select('id, amount, payee')
-      .eq('voucher_id', writeCheckVoucher.id)
-      .maybeSingle();
-
-    await Promise.all([
-      supabase
-        .from('checks')
-        .update({ check_no: writeCheckNo, check_date: writeCheckDate, status: 'issued' })
-        .eq('voucher_id', writeCheckVoucher.id),
-      supabase
-        .from('payment_vouchers')
-        .update({ status: 'issued' })
-        .eq('id', writeCheckVoucher.id),
-    ]);
-
-    if (writeCheckVoucher.project_id && checkData) {
-      await checkAndNotifyOverrun(supabase, writeCheckVoucher.project_id, writeCheckNo, user.id);
-    }
-
-    closeWriteCheck();
-    setWritingCheck(false);
-    loadData();
-  }
-
   const isSupervisor = profile?.role === 'accounts_supervisor';
   const isManager = profile?.role === 'accounts_manager';
   const isCEO = profile?.role === 'ceo';
-  const isBankingOfficer = profile?.role === 'banking_finance_officer';
 
   const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
   const approvedVouchers = vouchers.filter(v => v.status === 'approved');
@@ -599,8 +550,8 @@ export default function PaymentQueue() {
         </div>
       )}
 
-      {/* Banking Officer — approved vouchers awaiting check issuance */}
-      {(isBankingOfficer || isCEO) && approvedVouchers.length > 0 && (
+      {/* CEO visibility — approved vouchers awaiting check issuance by Banking Officer */}
+      {isCEO && approvedVouchers.length > 0 && (
         <div className="bg-[#1D9E75]/5 border border-[#1D9E75]/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-3">
             <CreditCard size={15} className="text-[#1D9E75]" />
@@ -625,17 +576,7 @@ export default function PaymentQueue() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                    {isBankingOfficer ? (
-                      <button
-                        onClick={() => openWriteCheck(v)}
-                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
-                      >
-                        <CreditCard size={12} />
-                        Write Check
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
-                    )}
+                    <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
                   </div>
                 </div>
               );
@@ -781,54 +722,6 @@ export default function PaymentQueue() {
         </table>
       </div>
 
-      {/* Write Check Modal (Banking Officer) */}
-      {writeCheckVoucher && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-sm border border-gray-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div>
-                <h2 className="text-base font-semibold text-gray-800">Write Check</h2>
-                <p className="text-xs text-gray-400 mt-0.5">{writeCheckVoucher.voucher_no} — {formatTHB(writeCheckVoucher.net_paid)}</p>
-              </div>
-              <button onClick={closeWriteCheck}><X size={16} className="text-gray-400" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Check No. *</label>
-                <input
-                  value={writeCheckNo}
-                  onChange={e => setWriteCheckNo(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
-                  placeholder="e.g. 001234"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Check Date *</label>
-                <input
-                  type="date"
-                  value={writeCheckDate}
-                  onChange={e => setWriteCheckDate(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
-                />
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button type="button" onClick={closeWriteCheck} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={submitWriteCheck}
-                  disabled={writingCheck || !writeCheckNo || !writeCheckDate}
-                  className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {writingCheck ? 'Saving...' : 'Confirm & Issue'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Custom WHT Breakdown Modal (z-60, sits above the voucher modal) */}
       {customModalOpen && selectedInvoice && (() => {
