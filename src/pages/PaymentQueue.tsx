@@ -2,11 +2,12 @@ import { useEffect, useState, useRef } from 'react';
 import { CreditCard, AlertTriangle, X, CheckCircle, ChevronDown, Info } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { VendorInvoice, PaymentVoucher } from '../types';
+import { VendorInvoice, PaymentVoucher, PurchaseOrder, Project, Entity } from '../types';
 import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { checkAndNotifyOverrun } from '../utils/overrunNotification';
+import PODetailModal from '../components/pos/PODetailModal';
 
 const SIMPLE_WHT_OPTIONS = [
   { rate: 0,    label: 'None' },
@@ -36,6 +37,11 @@ export default function PaymentQueue() {
   const [selectedInvoice, setSelectedInvoice] = useState<VendorInvoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // PO drill-down
+  const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
+  const [poProjects, setPoProjects] = useState<Project[]>([]);
+  const [poVendors, setPoVendors] = useState<Entity[]>([]);
 
   // Voucher form state
   const [bankAccount, setBankAccount] = useState('KBank PSS Main');
@@ -130,17 +136,33 @@ export default function PaymentQueue() {
   }
 
   async function loadData() {
-    const [{ data: inv }, { data: vouc }] = await Promise.all([
+    const [{ data: inv }, { data: vouc }, { data: proj }, { data: vend }] = await Promise.all([
       supabase
         .from('vendor_invoices')
-        .select('*, project:projects(name), purchase_order:purchase_orders(supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
+        .select('*, project:projects(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
         .eq('status', 'released')
         .order('created_at', { ascending: false }),
-      supabase.from('payment_vouchers').select('*').order('created_at', { ascending: false }),
+      supabase
+        .from('payment_vouchers')
+        .select('*, vendor_invoice:vendor_invoices(po_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name)))')
+        .order('created_at', { ascending: false }),
+      supabase.from('projects').select('id, name, status').order('name'),
+      supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
     ]);
     setInvoices(inv || []);
     setVouchers(vouc || []);
+    setPoProjects(proj || []);
+    setPoVendors(vend || []);
     setLoading(false);
+  }
+
+  async function openPODrillDown(poId: string) {
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects(*)')
+      .eq('id', poId)
+      .maybeSingle();
+    if (data) setSelectedPO(data as PurchaseOrder);
   }
 
   async function getNextVoucherNo(): Promise<string> {
@@ -444,28 +466,39 @@ export default function PaymentQueue() {
           {/* Active vouchers needing co-sign */}
           {pendingManagerVouchers.length > 0 && (
             <div className="space-y-2 mb-4">
-              {pendingManagerVouchers.map(v => (
-                <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/30 p-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                    <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+              {pendingManagerVouchers.map(v => {
+                const vPo = (v as any).vendor_invoice?.purchase_order;
+                return (
+                  <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/30 p-3 flex items-center justify-between">
+                    <div>
+                      {vPo?.pss_po_no && (
+                        <button
+                          onClick={() => openPODrillDown(vPo.id)}
+                          className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
+                        >
+                          {vPo.pss_po_no}
+                        </button>
+                      )}
+                      <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
+                      <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
+                      {isManager ? (
+                        <button
+                          onClick={() => approveVoucher(v.id)}
+                          className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64]"
+                        >
+                          <CheckCircle size={12} />
+                          Co-sign
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                    {isManager ? (
-                      <button
-                        onClick={() => approveVoucher(v.id)}
-                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64]"
-                      >
-                        <CheckCircle size={12} />
-                        Co-sign
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -489,6 +522,14 @@ export default function PaymentQueue() {
                   return (
                     <div key={inv.id} className="bg-white rounded-md border border-gray-200 px-3 py-2.5 flex items-center justify-between">
                       <div>
+                        {po?.pss_po_no && (
+                          <button
+                            onClick={() => openPODrillDown(po.id)}
+                            className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
+                          >
+                            {po.pss_po_no}
+                          </button>
+                        )}
                         <p className="text-sm font-medium text-gray-800">{vendorName}</p>
                         <p className="text-xs text-gray-400">{projectShort} · {inv.vendor_invoice_no || 'No invoice no.'}</p>
                       </div>
@@ -522,28 +563,39 @@ export default function PaymentQueue() {
             <span className="text-sm font-semibold text-[#1D9E75]">Ready to Write Check</span>
           </div>
           <div className="space-y-2">
-            {approvedVouchers.map(v => (
-              <div key={v.id} className="bg-white rounded-md border border-[#1D9E75]/20 p-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                  <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+            {approvedVouchers.map(v => {
+              const vPo = (v as any).vendor_invoice?.purchase_order;
+              return (
+                <div key={v.id} className="bg-white rounded-md border border-[#1D9E75]/20 p-3 flex items-center justify-between">
+                  <div>
+                    {vPo?.pss_po_no && (
+                      <button
+                        onClick={() => openPODrillDown(vPo.id)}
+                        className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
+                      >
+                        {vPo.pss_po_no}
+                      </button>
+                    )}
+                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
+                    <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
+                    {isBankingOfficer ? (
+                      <button
+                        onClick={() => openWriteCheck(v)}
+                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
+                      >
+                        <CreditCard size={12} />
+                        Write Check
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                  {isBankingOfficer ? (
-                    <button
-                      onClick={() => openWriteCheck(v)}
-                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
-                    >
-                      <CreditCard size={12} />
-                      Write Check
-                    </button>
-                  ) : (
-                    <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -553,6 +605,7 @@ export default function PaymentQueue() {
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50/50 border-b border-gray-100">
+              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">PO No.</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Project</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoice No.</th>
@@ -574,7 +627,7 @@ export default function PaymentQueue() {
               });
               if (subThresholdInvoices.length === 0) return (
                 <tr>
-                  <td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
+                  <td colSpan={10} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
                 </tr>
               );
               return subThresholdInvoices.map(inv => {
@@ -587,6 +640,18 @@ export default function PaymentQueue() {
               const invVendorName = invPo?.vendor?.name ?? invPo?.supplier_name_raw ?? '—';
               return (
                 <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                  <td className="px-4 py-3">
+                    {invPo?.pss_po_no ? (
+                      <button
+                        onClick={() => openPODrillDown(invPo.id)}
+                        className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 text-left"
+                      >
+                        {invPo.pss_po_no}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-300">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-800">{invVendorName}</td>
                   <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">
                     {(inv as any).project?.name?.split('–')[0]?.trim() || '—'}
@@ -1030,6 +1095,17 @@ export default function PaymentQueue() {
           </div>
         );
       })()}
+
+      {/* PO Drill-Down Modal */}
+      {selectedPO && (
+        <PODetailModal
+          po={selectedPO}
+          projects={poProjects}
+          vendors={poVendors}
+          onClose={() => setSelectedPO(null)}
+          onSuccess={() => { setSelectedPO(null); loadData(); }}
+        />
+      )}
     </div>
   );
 }
