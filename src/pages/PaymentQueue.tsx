@@ -43,6 +43,11 @@ export default function PaymentQueue() {
   const [poProjects, setPoProjects] = useState<Project[]>([]);
   const [poVendors, setPoVendors] = useState<Entity[]>([]);
 
+  // Manager reject voucher
+  const [rejectingVoucher, setRejectingVoucher] = useState<PaymentVoucher | null>(null);
+  const [rejectComment, setRejectComment] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
   // Voucher form state
   const [bankAccount, setBankAccount] = useState('KBank PSS Main');
 
@@ -342,6 +347,35 @@ export default function PaymentQueue() {
     loadData();
   }
 
+  async function rejectVoucher() {
+    if (!rejectingVoucher || !user || !rejectComment.trim()) return;
+    setRejecting(true);
+    try {
+      // Mark voucher rejected
+      await supabase
+        .from('payment_vouchers')
+        .update({
+          status: 'rejected',
+          rejection_comment: rejectComment.trim(),
+          rejected_by: user.id,
+          rejected_at: new Date().toISOString(),
+        })
+        .eq('id', rejectingVoucher.id);
+      // Reset the linked vendor invoice back to 'released' so supervisor can re-issue
+      if ((rejectingVoucher as any).vendor_invoice_id) {
+        await supabase
+          .from('vendor_invoices')
+          .update({ status: 'released' })
+          .eq('id', (rejectingVoucher as any).vendor_invoice_id);
+      }
+      setRejectingVoucher(null);
+      setRejectComment('');
+      loadData();
+    } finally {
+      setRejecting(false);
+    }
+  }
+
   async function submitWriteCheck() {
     if (!writeCheckVoucher || !writeCheckNo || !writeCheckDate || !user) return;
     setWritingCheck(true);
@@ -379,6 +413,7 @@ export default function PaymentQueue() {
 
   const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
   const approvedVouchers = vouchers.filter(v => v.status === 'approved');
+  const rejectedVouchers = vouchers.filter(v => v.status === 'rejected');
 
   // Invoices ≥ ฿1M that have not yet had a voucher issued (no voucher references them)
   const voucherInvoiceIds = new Set(vouchers.map(v => (v as any).vendor_invoice_id).filter(Boolean));
@@ -485,13 +520,22 @@ export default function PaymentQueue() {
                     <div className="flex items-center gap-3">
                       <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
                       {isManager ? (
-                        <button
-                          onClick={() => approveVoucher(v.id)}
-                          className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64]"
-                        >
-                          <CheckCircle size={12} />
-                          Co-sign
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => { setRejectingVoucher(v); setRejectComment(''); }}
+                            className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
+                          >
+                            <X size={12} />
+                            Reject
+                          </button>
+                          <button
+                            onClick={() => approveVoucher(v.id)}
+                            className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
+                          >
+                            <CheckCircle size={12} />
+                            Co-sign
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
                       )}
@@ -597,6 +641,46 @@ export default function PaymentQueue() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Rejected vouchers banner — visible to Supervisor */}
+      {isSupervisor && rejectedVouchers.length > 0 && (
+        <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/30 rounded-lg p-4 space-y-2">
+          <div className="flex items-center gap-2 mb-1">
+            <AlertTriangle size={15} className="text-[#E24B4A]" />
+            <span className="text-sm font-semibold text-[#E24B4A]">
+              {rejectedVouchers.length} Voucher{rejectedVouchers.length > 1 ? 's' : ''} Rejected by Manager
+            </span>
+          </div>
+          {rejectedVouchers.map(v => {
+            const vPo = (v as any).vendor_invoice?.purchase_order;
+            return (
+              <div key={v.id} className="bg-white rounded-md border border-[#E24B4A]/20 px-4 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    {vPo?.pss_po_no && (
+                      <button
+                        onClick={() => openPODrillDown(vPo.id)}
+                        className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block"
+                      >
+                        {vPo.pss_po_no}
+                      </button>
+                    )}
+                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
+                    <p className="text-xs text-gray-500">{formatTHB(v.net_paid)} · {formatDate(v.voucher_date)}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-medium text-[#E24B4A] mb-0.5">Manager's comment</p>
+                    <p className="text-xs text-gray-700 max-w-xs text-right">{(v as any).rejection_comment || '—'}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  The invoice has been returned to your queue. Correct and re-issue the voucher below.
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1095,6 +1179,60 @@ export default function PaymentQueue() {
           </div>
         );
       })()}
+
+      {/* Manager Reject Voucher Modal */}
+      {rejectingVoucher && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-[#E24B4A]" />
+                <h3 className="text-sm font-semibold text-gray-900">Reject Payment Voucher</h3>
+              </div>
+              <button onClick={() => setRejectingVoucher(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="bg-gray-50 rounded-lg px-4 py-3">
+                <p className="text-xs text-gray-500 mb-0.5">Voucher</p>
+                <p className="text-sm font-semibold text-gray-900">{rejectingVoucher.voucher_no}</p>
+                <p className="text-sm text-gray-700">{formatTHB(rejectingVoucher.net_paid)}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                  Reason for rejection <span className="text-[#E24B4A]">*</span>
+                </label>
+                <textarea
+                  value={rejectComment}
+                  onChange={e => setRejectComment(e.target.value)}
+                  placeholder="Explain what needs to be corrected before resubmission..."
+                  rows={4}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 focus:border-[#E24B4A] resize-none"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  The Accounts Supervisor will see this comment and can re-issue the voucher after corrections.
+                </p>
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setRejectingVoucher(null)}
+                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={rejectVoucher}
+                  disabled={rejecting || !rejectComment.trim()}
+                  className="flex-1 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c93f3e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {rejecting ? 'Rejecting...' : 'Reject Voucher'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* PO Drill-Down Modal */}
       {selectedPO && (
