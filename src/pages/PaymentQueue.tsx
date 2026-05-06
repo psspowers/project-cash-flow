@@ -398,37 +398,56 @@ export default function PaymentQueue() {
         <p className="text-sm text-gray-500 mt-0.5">EVP-approved invoices ready for payment</p>
       </div>
 
-      {/* Manager sign-off queue */}
-      {(isManager || isCEO) && pendingManagerVouchers.length > 0 && (
-        <div className="bg-[#EF9F27]/5 border border-[#EF9F27]/30 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={15} className="text-[#EF9F27]" />
-            <span className="text-sm font-semibold text-[#EF9F27]">Requires Manager Sign-Off</span>
+      {/* Manager sign-off queue — always visible to Manager/CEO */}
+      {(isManager || isCEO) && (
+        <div className={`border rounded-lg p-4 ${pendingManagerVouchers.length > 0 ? 'bg-[#EF9F27]/5 border-[#EF9F27]/30' : 'bg-gray-50 border-gray-200'}`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={15} className={pendingManagerVouchers.length > 0 ? 'text-[#EF9F27]' : 'text-gray-400'} />
+              <span className={`text-sm font-semibold ${pendingManagerVouchers.length > 0 ? 'text-[#EF9F27]' : 'text-gray-500'}`}>
+                Manager Co-Sign Queue
+              </span>
+            </div>
+            {pendingManagerVouchers.length > 0 && (
+              <span className="bg-[#EF9F27] text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                {pendingManagerVouchers.length}
+              </span>
+            )}
           </div>
-          <div className="space-y-2">
-            {pendingManagerVouchers.map(v => (
-              <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/20 p-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                  <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+
+          {pendingManagerVouchers.length === 0 ? (
+            <div className="text-center py-4">
+              <p className="text-sm text-gray-400">No vouchers awaiting your co-signature.</p>
+              <p className="text-xs text-gray-400 mt-1">
+                The Accounts Supervisor issues payment vouchers from this page — vouchers ≥ ฿1,000,000 will appear here for your co-signature before the Banking Officer can write the check.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {pendingManagerVouchers.map(v => (
+                <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/20 p-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
+                    <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
+                    {isManager ? (
+                      <button
+                        onClick={() => approveVoucher(v.id)}
+                        className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64]"
+                      >
+                        <CheckCircle size={12} />
+                        Co-sign
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                  {isManager ? (
-                    <button
-                      onClick={() => approveVoucher(v.id)}
-                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64]"
-                    >
-                      <CheckCircle size={12} />
-                      Co-sign
-                    </button>
-                  ) : (
-                    <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
