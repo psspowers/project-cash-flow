@@ -122,7 +122,7 @@ export default function Approvals() {
       supabase.from('projects').select('id, name, status, last_rejected_stage').order('name'),
       supabase.from('project_costings').select('*').in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
       supabase.from('user_profiles').select('*'),
-      supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').eq('status', 'pending_approval').order('created_at', { ascending: false }),
+      supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').eq('status', 'pending_cc').order('created_at', { ascending: false }),
       supabase.from('purchase_orders').select('*, project:projects(name), vendor:entities!vendor_id(name)').in('status', ['approved', 'partially_paid', 'fully_paid']).order('approved_at', { ascending: false }).limit(100),
     ]);
     setReports(reps || []);

@@ -5,7 +5,7 @@ import { fmtTHB, COSTING_CATEGORY_KEYS } from '../../../types';
 import { CATEGORY_KEY_LABELS, CATEGORY_MAP } from '../projectDetailConstants';
 
 const APPROVED_STATUSES = new Set(['approved', 'partially_paid', 'fully_paid']);
-const DRAFT_STATUSES = new Set(['draft', 'pending_approval']);
+const DRAFT_STATUSES = new Set(['draft', 'pending_cc']);
 
 export default function VarianceTab() {
   const { estimation, budget, orders, poMilestones, vos, totalReceived, totalPaid, voTotalCost } = useProjectDetail();

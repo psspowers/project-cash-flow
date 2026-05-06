@@ -1162,7 +1162,10 @@ function StatBox({
 
 const PO_STATUS_STYLES: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-500',
-  pending_approval: 'bg-amber-50 text-amber-700',
+  pending_cc: 'bg-amber-50 text-amber-700',
+  pending_cm: 'bg-amber-50 text-amber-700',
+  pending_evp: 'bg-amber-50 text-amber-700',
+  pending_ceo: 'bg-amber-50 text-amber-700',
   approved: 'bg-sky-50 text-sky-700',
   partially_paid: 'bg-blue-50 text-blue-700',
   fully_paid: 'bg-emerald-50 text-emerald-700',

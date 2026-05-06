@@ -108,7 +108,7 @@ export default function OrdersTab() {
       const { error } = await supabase
         .from('purchase_orders')
         .update({
-          status: 'pending_approval',
+          status: 'pending_cc',
           submitted_at: new Date().toISOString(),
           submitted_by: user?.id ?? null,
         })

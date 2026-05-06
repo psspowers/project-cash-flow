@@ -159,9 +159,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     setSaving(true);
     setError('');
 
-    // When editing a pending_approval PO, any save reverts it to draft for re-submission
-    const wasInApproval = isEdit && editPo?.status === 'pending_approval';
-    const status = wasInApproval ? 'draft' : (mode === 'draft' ? 'draft' : 'pending_approval');
+    // When editing a PO in the CC approval stage, any save reverts it to draft for re-submission
+    const wasInApproval = isEdit && editPo?.status === 'pending_cc';
+    const status = wasInApproval ? 'draft' : (mode === 'draft' ? 'draft' : 'pending_cc');
     const now = new Date().toISOString();
 
     if (isEdit && editPo) {
@@ -179,8 +179,8 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
           wht_3pct: whtNum,
           status,
           has_supplier_milestones: poType === 'milestone',
-          submitted_by: status === 'pending_approval' ? user.id : editPo.submitted_by ?? null,
-          submitted_at: status === 'pending_approval' ? now : editPo.submitted_at ?? null,
+          submitted_by: status === 'pending_cc' ? user.id : editPo.submitted_by ?? null,
+          submitted_at: status === 'pending_cc' ? now : editPo.submitted_at ?? null,
         })
         .eq('id', editPo.id);
 
@@ -218,7 +218,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
         if (paymentRows.length > 0) await supabase.from('po_simple_payments').insert(paymentRows);
       }
 
-      if (status === 'pending_approval') {
+      if (status === 'pending_cc') {
         const requiredRole = inclVatNum < PO_THRESHOLD_CM ? 'construction_manager'
           : inclVatNum < PO_THRESHOLD_EVP ? 'evp' : 'ceo';
         const { data: approverProfile } = await supabase
@@ -320,7 +320,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
 
   const selectedProject = [...activeProjects, ...projects].find(p => p.id === projectId);
   const stepLabels = ['Basic Details', 'Amount', poType === 'simple' ? 'Payment Plan' : 'Milestones', 'Review'];
-  const wasInApproval = isEdit && editPo?.status === 'pending_approval';
+  const wasInApproval = isEdit && editPo?.status === 'pending_cc';
 
   if (loadingEdit) {
     return (

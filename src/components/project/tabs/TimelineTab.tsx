@@ -47,7 +47,7 @@ function buildCashFlowData(
 
   // Planned future cost from PO milestones
   orders.forEach(o => {
-    const isDraftOrPending = o.status === 'draft' || o.status === 'pending_approval';
+    const isDraftOrPending = o.status === 'draft' || o.status === 'pending_cc';
     if (o.has_supplier_milestones) {
       poMilestones
         .filter(pm => pm.purchase_order_id === o.id && pm.planned_payment_date && pm.status !== 'paid')

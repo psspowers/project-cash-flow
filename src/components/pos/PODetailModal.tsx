@@ -44,7 +44,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
   const isIssued = ISSUED_STATUSES.has(po.status);
   const canEdit = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) &&
-    (po.status === 'draft' || po.status === 'pending_approval');
+    (po.status === 'draft' || po.status === 'pending_cc');
   const canAmend = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) && isIssued;
 
   useEffect(() => {
@@ -208,7 +208,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
     );
   }
 
-  // ── Standard edit wizard (draft / pending_approval) ──────────────────────────
+  // ── Standard edit wizard (draft / pending_cc) ──────────────────────────
   if (mode === 'edit') {
     return (
       <POCreationWizard
@@ -234,7 +234,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
                   {po.pss_po_no ?? <span className="italic text-gray-400 font-normal text-sm">No PSS No. yet</span>}
                 </h2>
                 <Badge label={po.status.replace(/_/g, ' ')} variant={statusVariant(po.status)} />
-                {po.status === 'pending_approval' && (
+                {po.status === 'pending_cc' && (
                   <span className="text-xs text-[#EF9F27] bg-[#EF9F27]/10 px-2 py-0.5 rounded-full font-medium">
                     Awaiting approval
                   </span>
@@ -289,8 +289,8 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
                 </div>
               )}
 
-              {/* Warning for pending_approval + can edit */}
-              {canEdit && po.status === 'pending_approval' && (
+              {/* Warning for pending_cc + can edit */}
+              {canEdit && po.status === 'pending_cc' && (
                 <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
                   <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
                   <p className="text-xs text-[#92650a]">
