@@ -358,6 +358,32 @@ export default function PaymentQueue() {
   const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
   const approvedVouchers = vouchers.filter(v => v.status === 'approved');
 
+  // Invoices ≥ ฿1M that have not yet had a voucher issued (no voucher references them)
+  const voucherInvoiceIds = new Set(vouchers.map(v => (v as any).vendor_invoice_id).filter(Boolean));
+  const pendingHighValueInvoices = invoices.filter(inv => {
+    const invPo = (inv as any).purchase_order;
+    const invGross = inv.invoice_amount_incl_vat || 0;
+    const invWhtRate = invPo?.wht_rate ?? 0;
+    const invNetPayable = +(invGross - +(( invGross / 1.07) * invWhtRate).toFixed(2)).toFixed(2);
+    return invNetPayable >= 1000000 && !voucherInvoiceIds.has(inv.id);
+  });
+
+  // Sort invoices: ≥฿1M first, then < ฿1M
+  const sortedInvoices = [...invoices].sort((a, b) => {
+    const netOf = (inv: VendorInvoice) => {
+      const po = (inv as any).purchase_order;
+      const gross = inv.invoice_amount_incl_vat || 0;
+      const wht = +(( gross / 1.07) * (po?.wht_rate ?? 0)).toFixed(2);
+      return +(gross - wht).toFixed(2);
+    };
+    const aNet = netOf(a);
+    const bNet = netOf(b);
+    const aHigh = aNet >= 1000000 ? 1 : 0;
+    const bHigh = bNet >= 1000000 ? 1 : 0;
+    if (aHigh !== bHigh) return bHigh - aHigh;
+    return bNet - aNet;
+  });
+
   // Live modal calculations
   const modalGross = selectedInvoice?.invoice_amount_incl_vat ?? 0;
   const modalExclVat = modalGross / 1.07;
@@ -415,17 +441,11 @@ export default function PaymentQueue() {
             )}
           </div>
 
-          {pendingManagerVouchers.length === 0 ? (
-            <div className="text-center py-4">
-              <p className="text-sm text-gray-400">No vouchers awaiting your co-signature.</p>
-              <p className="text-xs text-gray-400 mt-1">
-                The Accounts Supervisor issues payment vouchers from this page — vouchers ≥ ฿1,000,000 will appear here for your co-signature before the Banking Officer can write the check.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
+          {/* Active vouchers needing co-sign */}
+          {pendingManagerVouchers.length > 0 && (
+            <div className="space-y-2 mb-4">
               {pendingManagerVouchers.map(v => (
-                <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/20 p-3 flex items-center justify-between">
+                <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/30 p-3 flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
                     <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
@@ -446,6 +466,49 @@ export default function PaymentQueue() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Invoices ≥ ฿1M awaiting voucher issuance by Supervisor */}
+          {pendingHighValueInvoices.length > 0 && (
+            <div>
+              {pendingManagerVouchers.length > 0 && (
+                <div className="border-t border-[#EF9F27]/20 my-3" />
+              )}
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Awaiting Voucher Issuance — {pendingHighValueInvoices.length} invoice{pendingHighValueInvoices.length > 1 ? 's' : ''} ≥ ฿1,000,000
+              </p>
+              <div className="space-y-1.5">
+                {pendingHighValueInvoices.map(inv => {
+                  const po = (inv as any).purchase_order;
+                  const gross = inv.invoice_amount_incl_vat || 0;
+                  const whtRate = po?.wht_rate ?? 0;
+                  const net = +(gross - +(( gross / 1.07) * whtRate).toFixed(2)).toFixed(2);
+                  const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
+                  const projectShort = (inv as any).project?.name?.split('–')[0]?.trim() || '—';
+                  return (
+                    <div key={inv.id} className="bg-white rounded-md border border-gray-200 px-3 py-2.5 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{vendorName}</p>
+                        <p className="text-xs text-gray-400">{projectShort} · {inv.vendor_invoice_no || 'No invoice no.'}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-gray-700">{formatTHB(net)}</span>
+                        <span className="text-xs text-gray-400 italic">Awaiting Supervisor</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {pendingManagerVouchers.length === 0 && pendingHighValueInvoices.length === 0 && (
+            <div className="text-center py-4">
+              <p className="text-sm text-gray-400">No invoices requiring your co-signature.</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Vouchers ≥ ฿1,000,000 issued by the Accounts Supervisor will appear here for your co-signature.
+              </p>
             </div>
           )}
         </div>
@@ -506,7 +569,7 @@ export default function PaymentQueue() {
               <tr>
                 <td colSpan={9} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
               </tr>
-            ) : invoices.map(inv => {
+            ) : sortedInvoices.map(inv => {
               const invPo = (inv as any).purchase_order;
               const invGross = inv.invoice_amount_incl_vat || 0;
               const invWhtRate = invPo?.wht_rate ?? 0;
