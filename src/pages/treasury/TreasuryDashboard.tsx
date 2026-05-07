@@ -1148,6 +1148,3 @@ export default function TreasuryDashboard() {
     </div>
   );
 }
-
-
-export default TreasuryDashboard
