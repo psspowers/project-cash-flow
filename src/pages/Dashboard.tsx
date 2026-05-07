@@ -391,6 +391,7 @@ export default function Dashboard() {
   const [clientMilestonesAll, setClientMilestonesAll] = useState<
     { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[]
   >([]);
+  const [activePOsTotal, setActivePOsTotal] = useState(0);
 
   // Treasury Waterfall state
   const [sgaActuals, setSgaActuals] = useState<SgaActual[]>([]);
@@ -437,6 +438,7 @@ export default function Dashboard() {
         { data: chartReceivedRaw },
         { data: chartMilestonesRaw },
         { data: chartAllInvoicesRaw },
+        { data: activePORaw },
         { data: sgaActualsRaw },
         { data: treasuryAdjustmentsRaw },
         { data: loanTxRaw },
@@ -498,6 +500,11 @@ export default function Dashboard() {
         supabase
           .from('vendor_invoices')
           .select('po_id, invoice_amount_incl_vat'),
+        // CEO Metric: active purchase orders for lifetime commitment total
+        supabase
+          .from('purchase_orders')
+          .select('id, po_amount_incl_vat, status')
+          .not('status', 'in', '(cancelled,voided)'),
         // Treasury: SG&A actuals entered by finance team
         supabase
           .from('sga_actuals')
@@ -560,6 +567,10 @@ export default function Dashboard() {
       setPendingClientInvoices(ciPendingRows);
       setPendingReceivablesSum(ciPendingRows.reduce((s, r) => s + (r.pending_amount ?? 0), 0));
       setClientMilestonesAll((cmAll ?? []) as typeof clientMilestonesAll);
+      setActivePOsTotal(
+        ((activePORaw ?? []) as { po_amount_incl_vat: number }[])
+          .reduce((s, po) => s + Number(po.po_amount_incl_vat || 0), 0)
+      );
 
       // Chart data — normalize nested milestone arrays
       setChartPaidInvoices(
@@ -639,6 +650,10 @@ export default function Dashboard() {
     (s, p) => s + p.contract_incl_vat,
     0,
   );
+
+  // ── CEO Metric: Lifetime Project Margin ──────────────────────────────────
+  const totalCommitments = activePOsTotal;
+  const lifetimeMargin = totalContractValue - totalCommitments;
 
   const totalReceivedThisYear = clientInvoiceReceipts
     .filter((r) => r.receipt_date && r.receipt_date >= yearStart)
@@ -1401,55 +1416,60 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* CEO Metric: True Exposure */}
+      {/* CEO Metric: Lifetime Project Margin */}
       {!loading && profile?.role === 'ceo' && (
-        <div className={`rounded-lg border p-5 ${trueExposure >= 0 ? 'bg-[#1D9E75]/5 border-[#1D9E75]/25' : 'bg-[#E24B4A]/5 border-[#E24B4A]/25'}`}>
+        <div className={`rounded-lg border p-5 ${lifetimeMargin >= 0 ? 'bg-[#1D9E75]/5 border-[#1D9E75]/25' : 'bg-[#E24B4A]/5 border-[#E24B4A]/25'}`}>
           <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={14} className={trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'} />
-            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — Net Position</h2>
-            <span className="text-xs text-gray-400 ml-1">Outstanding Receivable minus Outstanding Payable — pivot-table verified</span>
+            <TrendingUp size={14} className={lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'} />
+            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — Lifetime Project Margin</h2>
+            <span className="text-xs text-gray-400 ml-1">Absolute contract economics — total signed revenue minus total committed costs</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Outstanding Receivable</p>
-              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
-              <p className="text-xs text-gray-400 mt-1">What clients still owe us</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Total Contract Value</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalContractValue)}</p>
+              <p className="text-xs text-gray-400 mt-1">Total expected cash in (all signed client contracts)</p>
               <div className="mt-2 space-y-0.5">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Invoiced, awaiting payment</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(pendingReceivables)}</span>
+                  <span className="text-gray-400">Collected to date</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span>
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Not yet invoiced (pipeline)</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(notYetInvoicedTotal)}</span>
+                  <span className="text-gray-400">Remaining to collect</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalOutstandingReceivable)}</span>
                 </div>
               </div>
             </div>
             <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Outstanding Payable</p>
-              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
-              <p className="text-xs text-gray-400 mt-1">What we still owe suppliers</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Total PO Commitments</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalCommitments)}</p>
+              <p className="text-xs text-gray-400 mt-1">Total expected cash out (all approved supplier POs)</p>
               <div className="mt-2 space-y-0.5">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Invoice Balance (Col O)</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(colO_Cost)}</span>
+                  <span className="text-gray-400">Paid to suppliers</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span>
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Yet to Invoice (Col P)</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(colP1_Cost)}</span>
+                  <span className="text-gray-400">Remaining to pay</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalOutstandingPayable)}</span>
                 </div>
               </div>
             </div>
-            <div className={`rounded-lg border p-4 ${trueExposure >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Net Position</p>
-              <p className={`text-xl font-bold tabular-nums ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                {trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
+            <div className={`rounded-lg border p-4 ${lifetimeMargin >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Lifetime Net Margin</p>
+              <p className={`text-xl font-bold tabular-nums ${lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                {lifetimeMargin >= 0 ? '+' : ''}{fmtTHBCompact(lifetimeMargin)}
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                {trueExposure >= 0
-                  ? 'Receivables exceed payables — net positive position'
-                  : 'Payables exceed receivables — cash shortfall risk'}
+                {lifetimeMargin >= 0
+                  ? 'Contracts exceed commitments — project portfolio is profitable'
+                  : 'Commitments exceed contracts — portfolio margin is negative'}
               </p>
+              {totalContractValue > 0 && (
+                <p className="text-[11px] font-semibold mt-2" style={{ color: lifetimeMargin >= 0 ? '#1D9E75' : '#E24B4A' }}>
+                  {((lifetimeMargin / totalContractValue) * 100).toFixed(1)}% margin
+                </p>
+              )}
             </div>
           </div>
         </div>
