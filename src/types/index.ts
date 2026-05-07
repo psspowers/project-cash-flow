@@ -408,31 +408,16 @@ export interface ProjectCashTransfer {
 
 export interface Loan {
   id: string;
-  loan_type: 'received' | 'given';
-  // New event-sourced ledger fields (facility_type replaces loan_type for new entries)
   facility_type?: FacilityType;
   name?: string;
   counterparty_id?: string;
   principal: number;
   currency: string;
-  fx_rate_if_usd?: number;
-  drawdown_date?: string;
   due_date?: string;
-  outstanding_balance: number; // deprecated — use calculateFacilityBalance() instead
   notes?: string;
   created_at: string;
   counterparty?: Entity;
   loan_transactions?: LoanTransaction[];
-}
-
-export interface LoanRepayment {
-  id: string;
-  loan_id: string;
-  payment_date?: string;
-  amount: number;
-  voucher_id?: string;
-  notes?: string;
-  created_at: string;
 }
 
 // ---------------------------------------------------------------------------

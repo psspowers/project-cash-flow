@@ -10,7 +10,6 @@ import Suppliers from './pages/Suppliers';
 import Approvals from './pages/Approvals';
 import PaymentQueue from './pages/PaymentQueue';
 import CashReceipts from './pages/CashReceipts';
-import LoanLedger from './pages/LoanLedger';
 import WHTReport from './pages/WHTReport';
 import VATReport from './pages/VATReport';
 import CEOAlerts from './pages/CEOAlerts';
@@ -33,7 +32,7 @@ function AppRoutes() {
       <Route path="/approvals" element={<AppLayout><Approvals /></AppLayout>} />
       <Route path="/payment-queue" element={<AppLayout><PaymentQueue /></AppLayout>} />
       <Route path="/cash-receipts" element={<AppLayout><CashReceipts /></AppLayout>} />
-      <Route path="/loan-ledger" element={<AppLayout><LoanLedger /></AppLayout>} />
+      <Route path="/loan-ledger" element={<Navigate to="/treasury" replace />} />
       <Route path="/treasury" element={<AppLayout><TreasuryDashboard /></AppLayout>} />
       <Route path="/wht-report" element={<AppLayout><WHTReport /></AppLayout>} />
       <Route path="/vat-report" element={<AppLayout><VATReport /></AppLayout>} />

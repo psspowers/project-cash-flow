@@ -110,7 +110,7 @@ function LoanRow({ loan, onLogTransaction }: LoanRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const balance = calculateFacilityBalance(loan.loan_transactions ?? []);
   const txCount = loan.loan_transactions?.length ?? 0;
-  const facilityType = loan.facility_type ?? (loan.loan_type === 'received' ? 'borrowing' : 'lending');
+  const facilityType = loan.facility_type ?? 'borrowing';
 
   return (
     <>
@@ -260,13 +260,11 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
     await supabase.from('loans').insert({
       name: fName.trim(),
       facility_type: fType,
-      loan_type: fType === 'borrowing' ? 'received' : 'given',
       counterparty_id: fCounterparty,
       principal: parseFloat(fPrincipal),
       currency: fCurrency,
       due_date: fDueDate || null,
       notes: fNotes || null,
-      outstanding_balance: 0,
     });
     setSaving(false);
     setShowFacilityModal(false);
@@ -277,7 +275,7 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
 
   async function saveTransaction() {
     if (!txLoan || !txDate || !txAmount) return;
-    const facilityType = txLoan.facility_type ?? (txLoan.loan_type === 'received' ? 'borrowing' : 'lending');
+    const facilityType = txLoan.facility_type ?? 'borrowing';
     const direction = getCashFlowDirection(facilityType as FacilityType, txEventType);
     setSaving(true);
     await supabase.from('loan_transactions').insert({
@@ -298,13 +296,13 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
     onRefresh();
   }
 
-  const borrowingFacilities = loans.filter(l => (l.facility_type ?? (l.loan_type === 'received' ? 'borrowing' : 'lending')) === 'borrowing');
-  const lendingFacilities = loans.filter(l => (l.facility_type ?? (l.loan_type === 'received' ? 'borrowing' : 'lending')) === 'lending');
+  const borrowingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'borrowing');
+  const lendingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'lending');
   const totalBorrowingBalance = borrowingFacilities.reduce((s, l) => s + calculateFacilityBalance(l.loan_transactions ?? []), 0);
   const totalLendingBalance = lendingFacilities.reduce((s, l) => s + calculateFacilityBalance(l.loan_transactions ?? []), 0);
 
   const previewDirection = txLoan
-    ? getCashFlowDirection(txLoan.facility_type ?? (txLoan.loan_type === 'received' ? 'borrowing' : 'lending') as FacilityType, txEventType)
+    ? getCashFlowDirection((txLoan.facility_type ?? 'borrowing') as FacilityType, txEventType)
     : null;
 
   return (
@@ -500,7 +498,7 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
                 <p className="text-[11px] text-gray-400 mt-0.5">
                   {txLoan.name || (txLoan as any).counterparty?.name || '—'}
                   <span className="mx-1.5">·</span>
-                  <FacilityTypeBadge type={txLoan.facility_type ?? (txLoan.loan_type === 'received' ? 'borrowing' : 'lending')} />
+                  <FacilityTypeBadge type={txLoan.facility_type ?? 'borrowing'} />
                 </p>
               </div>
               <button onClick={() => setTxLoan(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">

@@ -455,7 +455,7 @@ export default function Dashboard() {
           .order('created_at', { ascending: false }),
         supabase
           .from('loans')
-          .select('*, counterparty:entities!counterparty_id(*)')
+          .select('*, counterparty:entities!counterparty_id(*), loan_transactions(*)')
           .order('created_at'),
         supabase
           .from('progress_reports')
@@ -935,15 +935,23 @@ export default function Dashboard() {
   // Loan positions
   // ---------------------------------------------------------------------------
 
+  function calcBalance(loan: Loan): number {
+    return (loan.loan_transactions ?? []).reduce((acc, tx) => {
+      if (tx.event_type === 'drawdown') return acc + Number(tx.amount);
+      if (tx.event_type === 'repayment') return acc - Number(tx.amount);
+      return acc;
+    }, 0);
+  }
+
   const loansReceived = loans.filter(
-    (l) => l.loan_type === 'received' && l.outstanding_balance > 0,
+    (l) => (l.facility_type ?? 'borrowing') === 'borrowing' && calcBalance(l) > 0,
   );
-  const loansGiven = loans.filter((l) => l.loan_type === 'given');
+  const loansGiven = loans.filter((l) => (l.facility_type ?? 'borrowing') === 'lending');
   const overdueLoans = loansReceived.filter(
     (l) => l.due_date && new Date(l.due_date) < now,
   );
   const overdueLoanAmount = overdueLoans.reduce(
-    (s, l) => s + l.outstanding_balance,
+    (s, l) => s + calcBalance(l),
     0,
   );
 
@@ -978,10 +986,10 @@ export default function Dashboard() {
   // Future net = outstanding receivable minus outstanding payable
   const futureProjectNet = totalOutstandingReceivable - totalOutstandingPayable;
 
-  // Financing: loans received minus what's already been repaid (principal - outstanding = repaid)
-  const allLoansReceived = loans.filter(l => l.loan_type === 'received');
-  const netFinancingCash = allLoansReceived.reduce((s, l) => s + Number(l.principal) - Number(l.outstanding_balance), 0);
-  const totalLoanObligations = allLoansReceived.reduce((s, l) => s + Number(l.outstanding_balance), 0);
+  // Financing: net cash from borrowing facilities (drawdowns minus repayments)
+  const allLoansReceived = loans.filter(l => (l.facility_type ?? 'borrowing') === 'borrowing');
+  const netFinancingCash = allLoansReceived.reduce((s, l) => s + calcBalance(l), 0);
+  const totalLoanObligations = netFinancingCash;
 
   // SG&A hybrid: use actuals where entered, projection for the rest
   // Build a map of year-month -> actual for fast lookup
@@ -2149,10 +2157,10 @@ export default function Dashboard() {
             <Landmark size={28} className="text-gray-200" />
             <p className="text-[13px] text-gray-400">No active loan positions</p>
             <button
-              onClick={() => navigate('/loans')}
+              onClick={() => navigate('/treasury')}
               className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors"
             >
-              Go to Loan Ledger
+              Go to Treasury
             </button>
           </div>
         ) : (
@@ -2169,6 +2177,7 @@ export default function Dashboard() {
                   {loansReceived.map((loan) => {
                     const isOverdue =
                       !!loan.due_date && new Date(loan.due_date) < now;
+                    const balance = calcBalance(loan);
                     return (
                       <div
                         key={loan.id}
@@ -2180,8 +2189,7 @@ export default function Dashboard() {
                       >
                         <div className="min-w-0">
                           <p className="text-[13px] font-medium text-gray-700 truncate max-w-[140px]">
-                            {(loan as Loan & { counterparty?: { name: string } })
-                              .counterparty?.name ?? '—'}
+                            {loan.name ?? loan.counterparty?.name ?? '—'}
                           </p>
                           <p
                             className={`text-xs mt-0.5 ${
@@ -2197,7 +2205,7 @@ export default function Dashboard() {
                             isOverdue ? 'text-[#E24B4A]' : 'text-gray-700'
                           }`}
                         >
-                          {fmtTHBCompact(loan.outstanding_balance)}
+                          {fmtTHBCompact(balance)}
                         </span>
                       </div>
                     );
@@ -2215,33 +2223,33 @@ export default function Dashboard() {
                 <p className="text-xs text-gray-300 py-4 text-center">None</p>
               ) : (
                 <div className="space-y-2">
-                  {loansGiven.map((loan) => (
-                    <div
-                      key={loan.id}
-                      className="flex items-center justify-between p-2.5 border border-gray-100 rounded-lg"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-medium text-gray-700 truncate max-w-[140px]">
-                          {(loan as Loan & { counterparty?: { name: string } })
-                            .counterparty?.name ?? '—'}
-                        </p>
-                        {loan.due_date && (
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            Due {formatDate(loan.due_date)}
-                          </p>
-                        )}
-                      </div>
-                      <span
-                        className={`text-[13px] font-semibold ${
-                          loan.outstanding_balance > 0
-                            ? 'text-[#1D9E75]'
-                            : 'text-gray-400'
-                        }`}
+                  {loansGiven.map((loan) => {
+                    const balance = calcBalance(loan);
+                    return (
+                      <div
+                        key={loan.id}
+                        className="flex items-center justify-between p-2.5 border border-gray-100 rounded-lg"
                       >
-                        {fmtTHBCompact(loan.outstanding_balance)}
-                      </span>
-                    </div>
-                  ))}
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-medium text-gray-700 truncate max-w-[140px]">
+                            {loan.name ?? loan.counterparty?.name ?? '—'}
+                          </p>
+                          {loan.due_date && (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              Due {formatDate(loan.due_date)}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={`text-[13px] font-semibold ${
+                            balance > 0 ? 'text-[#1D9E75]' : 'text-gray-400'
+                          }`}
+                        >
+                          {fmtTHBCompact(balance)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

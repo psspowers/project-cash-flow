@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban, ShoppingCart, CheckCircle,
-  CreditCard, Receipt, BookOpen, FileText, Bell, CalendarRange,
+  CreditCard, Receipt, FileText, Bell, CalendarRange,
   BarChart3, Zap, ChevronDown, ChevronRight,
   CheckCircle2, Clock, CalendarClock, TrendingUp, Building2, GitPullRequest,
   Landmark,
@@ -260,9 +260,6 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         )}
         {role === 'accounts_supervisor' && (
           <NavItem to="/cash-receipts" label="Cash Receipts" icon={<Receipt size={16} />} />
-        )}
-        {['accounts_supervisor', 'accounts_manager', 'ceo', 'evp'].includes(role) && (
-          <NavItem to="/loan-ledger" label="Loan Ledger" icon={<BookOpen size={16} />} />
         )}
         {['accounts_supervisor', 'accounts_manager', 'ceo', 'evp'].includes(role) && (
           <NavItem to="/treasury" label="Treasury" icon={<Landmark size={16} />} />
