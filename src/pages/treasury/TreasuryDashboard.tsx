@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Landmark, Plus, ChevronDown, ChevronRight, X, AlertTriangle,
   ArrowDownLeft, ArrowUpRight, TrendingDown, TrendingUp, Save,
-  Trash2, Check, Building2,
+  Trash2, Check, Building2, UserPlus,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -234,6 +234,18 @@ interface LoansTabProps {
   userId: string | undefined;
 }
 
+const FINANCIAL_ENTITY_TYPES = [
+  { value: 'lender', label: 'Lender' },
+  { value: 'bank', label: 'Bank' },
+  { value: 'director', label: 'Director' },
+  { value: 'related_company', label: 'Related Company' },
+  { value: 'financial_institution', label: 'Financial Institution' },
+  { value: 'subsidiary', label: 'Subsidiary' },
+  { value: 'internal', label: 'Internal Entity' },
+] as const;
+
+type FinancialEntityType = typeof FINANCIAL_ENTITY_TYPES[number]['value'];
+
 function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
   const [showFacilityModal, setShowFacilityModal] = useState(false);
   const [txLoan, setTxLoan] = useState<Loan | null>(null);
@@ -248,11 +260,40 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
   const [fDueDate, setFDueDate] = useState('');
   const [fNotes, setFNotes] = useState('');
 
+  // Inline new-counterparty form state
+  const [localEntities, setLocalEntities] = useState<Entity[]>(entities);
+  const [showNewCp, setShowNewCp] = useState(false);
+  const [cpName, setCpName] = useState('');
+  const [cpType, setCpType] = useState<FinancialEntityType>('lender');
+  const [cpIsRelated, setCpIsRelated] = useState(false);
+  const [cpSaving, setCpSaving] = useState(false);
+  const [cpError, setCpError] = useState('');
+
+  // Sync localEntities when parent entities prop changes (e.g. after full refresh)
+  useEffect(() => { setLocalEntities(entities); }, [entities]);
+
+  // Auto-set is_related_party based on type
+  useEffect(() => {
+    if (cpType === 'director' || cpType === 'related_company') {
+      setCpIsRelated(true);
+    } else {
+      setCpIsRelated(false);
+    }
+  }, [cpType]);
+
   // Transaction form state
   const [txDate, setTxDate] = useState(new Date().toISOString().slice(0, 10));
   const [txEventType, setTxEventType] = useState<LoanEventType>('drawdown');
   const [txAmount, setTxAmount] = useState('');
   const [txNotes, setTxNotes] = useState('');
+
+  function closeFacilityModal() {
+    setShowFacilityModal(false);
+    setFName(''); setFCounterparty(''); setFPrincipal('');
+    setFCurrency('THB'); setFDueDate(''); setFNotes('');
+    setShowNewCp(false); setCpName(''); setCpType('lender');
+    setCpIsRelated(false); setCpError('');
+  }
 
   async function saveFacility() {
     if (!fName.trim() || !fCounterparty || !fPrincipal) return;
@@ -267,10 +308,37 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
       notes: fNotes || null,
     });
     setSaving(false);
-    setShowFacilityModal(false);
-    setFName(''); setFCounterparty(''); setFPrincipal('');
-    setFCurrency('THB'); setFDueDate(''); setFNotes('');
+    closeFacilityModal();
     onRefresh();
+  }
+
+  async function saveCounterparty() {
+    if (!cpName.trim()) return;
+    setCpError('');
+    setCpSaving(true);
+    const { data, error } = await supabase
+      .from('entities')
+      .insert({
+        name: cpName.trim(),
+        type: cpType,
+        is_related_party: cpIsRelated,
+        is_active: true,
+      })
+      .select()
+      .single();
+    setCpSaving(false);
+    if (error || !data) {
+      setCpError(error?.message ?? 'Failed to save counterparty.');
+      return;
+    }
+    // Optimistic update: append to local list and auto-select
+    setLocalEntities(prev => [...prev, data as Entity].sort((a, b) => a.name.localeCompare(b.name)));
+    setFCounterparty((data as Entity).id);
+    // Reset and collapse the inline form
+    setCpName('');
+    setCpType('lender');
+    setCpIsRelated(false);
+    setShowNewCp(false);
   }
 
   async function saveTransaction() {
@@ -389,7 +457,7 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
           <div className="bg-white rounded-2xl w-full max-w-md border border-gray-200 shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h3 className="text-[15px] font-bold text-gray-900">Add Loan Facility</h3>
-              <button onClick={() => setShowFacilityModal(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+              <button onClick={closeFacilityModal} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
                 <X size={16} />
               </button>
             </div>
@@ -404,15 +472,94 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
                 />
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-gray-600 mb-1.5">Counterparty</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[12px] font-medium text-gray-600">Counterparty</label>
+                  <button
+                    type="button"
+                    onClick={() => { setShowNewCp(v => !v); setCpError(''); }}
+                    className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${
+                      showNewCp
+                        ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        : 'bg-[#0f1923] text-white hover:bg-[#1a2b3c]'
+                    }`}
+                  >
+                    {showNewCp ? (
+                      <><X size={11} /> Cancel</>
+                    ) : (
+                      <><UserPlus size={11} /> New</>
+                    )}
+                  </button>
+                </div>
                 <select
                   value={fCounterparty}
                   onChange={e => setFCounterparty(e.target.value)}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
                 >
                   <option value="">Select entity...</option>
-                  {entities.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                  {localEntities.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select>
+
+                {/* Inline create counterparty sub-form */}
+                {showNewCp && (
+                  <div className="mt-2 rounded-xl border border-[#1D9E75]/30 bg-[#f0fdf8] p-4 space-y-3">
+                    <p className="text-[11px] font-semibold text-[#1D9E75] uppercase tracking-wide flex items-center gap-1.5">
+                      <UserPlus size={11} /> Create New Counterparty
+                    </p>
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-600 mb-1">Name</label>
+                      <input
+                        value={cpName}
+                        onChange={e => setCpName(e.target.value)}
+                        placeholder="e.g., Kasikorn Bank PCL"
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-600 mb-1">Type</label>
+                      <select
+                        value={cpType}
+                        onChange={e => setCpType(e.target.value as FinancialEntityType)}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                      >
+                        {FINANCIAL_ENTITY_TYPES.map(t => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={cpIsRelated}
+                        onChange={e => setCpIsRelated(e.target.checked)}
+                        className="accent-[#1D9E75] w-3.5 h-3.5"
+                      />
+                      <span className="text-[12px] text-gray-600">
+                        Is Related Party
+                        {(cpType === 'director' || cpType === 'related_company') && (
+                          <span className="ml-1.5 text-[10px] text-[#1D9E75] font-medium">(auto-set)</span>
+                        )}
+                      </span>
+                    </label>
+                    {cpError && (
+                      <p className="text-[11px] text-[#E24B4A] flex items-center gap-1">
+                        <AlertTriangle size={11} /> {cpError}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={saveCounterparty}
+                      disabled={cpSaving || !cpName.trim()}
+                      className="w-full flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-[12px] font-semibold hover:bg-[#178a64] transition-colors disabled:opacity-50"
+                    >
+                      {cpSaving ? (
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Check size={12} />
+                      )}
+                      {cpSaving ? 'Saving...' : 'Save Counterparty'}
+                    </button>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-[12px] font-medium text-gray-600 mb-1.5">Facility Type</label>
@@ -471,7 +618,7 @@ function LoansTab({ loans, entities, onRefresh, userId }: LoansTabProps) {
             </div>
             <div className="flex gap-3 px-6 pb-6">
               <button
-                onClick={() => setShowFacilityModal(false)}
+                onClick={closeFacilityModal}
                 className="flex-1 border border-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
               >
                 Cancel
@@ -914,7 +1061,11 @@ export default function TreasuryDashboard() {
         .from('loans')
         .select('*, counterparty:entities!counterparty_id(*), loan_transactions(*)')
         .order('created_at', { ascending: false }),
-      supabase.from('entities').select('id, name, type').order('name'),
+      supabase
+        .from('entities')
+        .select('id, name, type, is_related_party')
+        .in('type', ['lender', 'bank', 'director', 'related_company', 'financial_institution', 'subsidiary', 'internal'])
+        .order('name'),
       supabase.from('sga_actuals').select('*').order('year').order('month'),
       supabase.from('treasury_adjustments').select('*').order('fiscal_year').order('created_at', { ascending: false }),
     ]);
@@ -997,3 +1148,6 @@ export default function TreasuryDashboard() {
     </div>
   );
 }
+
+
+export default TreasuryDashboard
