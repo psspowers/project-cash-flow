@@ -932,26 +932,40 @@ export default function Dashboard() {
     .slice(0, 6);
 
   // ---------------------------------------------------------------------------
-  // Loan positions
+  // Loan positions — event-sourced via loan_transactions.cash_flow_direction
   // ---------------------------------------------------------------------------
 
-  function calcBalance(loan: Loan): number {
+  // Net Liability for a borrowing facility:
+  //   cash IN (drawdowns received) minus cash OUT (repayments made)
+  function calcNetLiability(loan: Loan): number {
     return (loan.loan_transactions ?? []).reduce((acc, tx) => {
-      if (tx.event_type === 'drawdown') return acc + Number(tx.amount);
-      if (tx.event_type === 'repayment') return acc - Number(tx.amount);
+      if (tx.cash_flow_direction === 'in') return acc + Number(tx.amount);
+      if (tx.cash_flow_direction === 'out') return acc - Number(tx.amount);
       return acc;
     }, 0);
   }
 
-  const loansReceived = loans.filter(
-    (l) => (l.facility_type ?? 'borrowing') === 'borrowing' && calcBalance(l) > 0,
-  );
-  const loansGiven = loans.filter((l) => (l.facility_type ?? 'borrowing') === 'lending');
+  // Net Asset for a lending facility:
+  //   cash OUT (loans disbursed) minus cash IN (repayments received back)
+  function calcNetAsset(loan: Loan): number {
+    return (loan.loan_transactions ?? []).reduce((acc, tx) => {
+      if (tx.cash_flow_direction === 'out') return acc + Number(tx.amount);
+      if (tx.cash_flow_direction === 'in') return acc - Number(tx.amount);
+      return acc;
+    }, 0);
+  }
+
+  const borrowingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'borrowing');
+  const lendingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'lending');
+
+  const loansReceived = borrowingFacilities.filter(l => calcNetLiability(l) > 0);
+  const loansGiven = lendingFacilities;
+
   const overdueLoans = loansReceived.filter(
     (l) => l.due_date && new Date(l.due_date) < now,
   );
   const overdueLoanAmount = overdueLoans.reduce(
-    (s, l) => s + calcBalance(l),
+    (s, l) => s + calcNetLiability(l),
     0,
   );
 
@@ -986,10 +1000,12 @@ export default function Dashboard() {
   // Future net = outstanding receivable minus outstanding payable
   const futureProjectNet = totalOutstandingReceivable - totalOutstandingPayable;
 
-  // Financing: net cash from borrowing facilities (drawdowns minus repayments)
-  const allLoansReceived = loans.filter(l => (l.facility_type ?? 'borrowing') === 'borrowing');
-  const netFinancingCash = allLoansReceived.reduce((s, l) => s + calcBalance(l), 0);
-  const totalLoanObligations = netFinancingCash;
+  // Net Liability = total outstanding debt across all borrowing facilities
+  const totalNetLiability = borrowingFacilities.reduce((s, l) => s + calcNetLiability(l), 0);
+  // Net Asset = total outstanding receivable across all lending facilities
+  const totalNetAsset = lendingFacilities.reduce((s, l) => s + calcNetAsset(l), 0);
+  // Net financing cash = assets minus liabilities (positive = net lender, negative = net borrower)
+  const netFinancingCash = totalNetAsset - totalNetLiability;
 
   // SG&A hybrid: use actuals where entered, projection for the rest
   // Build a map of year-month -> actual for fast lookup
@@ -1454,23 +1470,33 @@ export default function Dashboard() {
 
             {/* Column 1 — Financing */}
             <div className="p-5 space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Financing Cash</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Financing Position</p>
+              {/* Net position headline */}
               <div>
-                <p className="text-xs text-gray-400 mb-0.5">Net cash from loans received</p>
+                <p className="text-xs text-gray-400 mb-0.5">Net financing cash</p>
                 <p className={`text-xl font-bold tabular-nums ${netFinancingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
                   {netFinancingCash >= 0 ? '+' : ''}{fmtTHBCompact(netFinancingCash)}
                 </p>
-                <p className="text-[10px] text-gray-400 mt-0.5">Principal received minus repayments made</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Lending assets minus borrowing liabilities</p>
               </div>
-              {totalLoanObligations > 0 && (
+              {/* Net Liability — borrowings */}
+              {totalNetLiability > 0 && (
                 <div className="bg-amber-50 border border-amber-100 rounded-md p-2.5">
-                  <p className="text-[11px] text-amber-700 font-medium">Still owed to lenders</p>
-                  <p className="text-sm font-bold text-amber-800 tabular-nums">{fmtTHBCompact(totalLoanObligations)}</p>
-                  <p className="text-[10px] text-amber-600 mt-0.5">Outstanding balance — must be repaid</p>
+                  <p className="text-[11px] text-amber-700 font-medium">Net Liability (Borrowings)</p>
+                  <p className="text-sm font-bold text-amber-800 tabular-nums">{fmtTHBCompact(totalNetLiability)}</p>
+                  <p className="text-[10px] text-amber-600 mt-0.5">Outstanding debt — must be repaid</p>
                 </div>
               )}
-              {allLoansReceived.length === 0 && (
-                <p className="text-xs text-gray-300 text-center py-3">No loans recorded</p>
+              {/* Net Asset — lending */}
+              {totalNetAsset > 0 && (
+                <div className="bg-emerald-50 border border-emerald-100 rounded-md p-2.5">
+                  <p className="text-[11px] text-emerald-700 font-medium">Net Asset (Lending)</p>
+                  <p className="text-sm font-bold text-emerald-800 tabular-nums">{fmtTHBCompact(totalNetAsset)}</p>
+                  <p className="text-[10px] text-emerald-600 mt-0.5">Outstanding receivable from borrowers</p>
+                </div>
+              )}
+              {borrowingFacilities.length === 0 && lendingFacilities.length === 0 && (
+                <p className="text-xs text-gray-300 text-center py-3">No facilities recorded</p>
               )}
             </div>
 
@@ -2177,7 +2203,7 @@ export default function Dashboard() {
                   {loansReceived.map((loan) => {
                     const isOverdue =
                       !!loan.due_date && new Date(loan.due_date) < now;
-                    const balance = calcBalance(loan);
+                    const balance = calcNetLiability(loan);
                     return (
                       <div
                         key={loan.id}
@@ -2224,7 +2250,7 @@ export default function Dashboard() {
               ) : (
                 <div className="space-y-2">
                   {loansGiven.map((loan) => {
-                    const balance = calcBalance(loan);
+                    const balance = calcNetAsset(loan);
                     return (
                       <div
                         key={loan.id}
