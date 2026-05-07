@@ -46,6 +46,7 @@ import MetricCard from '../components/ui/MetricCard';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatDate } from '../utils/formatters';
 import { FINANCE_ROLES, hasRole } from '../config/roles';
+import { UninvoicedPipelineModal } from '../components/dashboard/UninvoicedPipelineModal';
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -407,6 +408,9 @@ export default function Dashboard() {
   const [chartPaidInvoices, setChartPaidInvoices] = useState<ChartPaidInvoice[]>([]);
   const [chartReceivedInvoices, setChartReceivedInvoices] = useState<ChartReceivedInvoice[]>([]);
   const [chartUninvoicedMilestones, setChartUninvoicedMilestones] = useState<ChartUninvoicedMilestone[]>([]);
+
+  // Pipeline modal state
+  const [isPipelineModalOpen, setIsPipelineModalOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -1337,14 +1341,18 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
-            {/* Col 3: Yet to Invoice (Column P) */}
-            <div className="md:pl-6 pt-4 md:pt-0">
+            {/* Col 3: Yet to Invoice (Column P) — clickable to open pipeline modal */}
+            <div
+              className="md:pl-6 pt-4 md:pt-0 cursor-pointer rounded-lg p-3 -m-3 hover:bg-amber-50 transition-colors group"
+              onClick={() => setIsPipelineModalOpen(true)}
+              title="Click to view Yet to Invoice pipeline breakdown"
+            >
               <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Yet to Invoice (Col P)</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colP1_Cost)}</p>
+              <p className="text-2xl font-bold text-gray-900 tabular-nums group-hover:text-amber-700 transition-colors">{fmtTHBCompact(colP1_Cost)}</p>
               <p className="text-xs text-gray-400 mt-1">PO milestones not yet invoiced — 1:1 matched</p>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
                 <Clock size={11} />
-                Uninvoiced supplier pipeline
+                Click to view full pipeline
               </div>
             </div>
           </div>
@@ -2094,6 +2102,13 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Yet to Invoice pipeline modal */}
+      <UninvoicedPipelineModal
+        isOpen={isPipelineModalOpen}
+        onClose={() => setIsPipelineModalOpen(false)}
+        projectId="ALL"
+      />
 
       {/* Loan summary */}
       <div className="bg-white rounded-lg border border-black/[0.08] p-5">
