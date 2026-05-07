@@ -439,6 +439,7 @@ export default function Dashboard() {
         { data: chartAllInvoicesRaw },
         { data: sgaActualsRaw },
         { data: treasuryAdjustmentsRaw },
+        { data: loanTxRaw },
       ] = await Promise.all([
         supabase
           .from('projects')
@@ -455,7 +456,7 @@ export default function Dashboard() {
           .order('created_at', { ascending: false }),
         supabase
           .from('loans')
-          .select('*, counterparty:entities!counterparty_id(*), loan_transactions(*)')
+          .select('*, counterparty:entities!counterparty_id(*)')
           .order('created_at'),
         supabase
           .from('progress_reports')
@@ -508,6 +509,10 @@ export default function Dashboard() {
           .from('treasury_adjustments')
           .select('id, label, amount, fiscal_year, created_by, created_at')
           .order('created_at', { ascending: false }),
+        // Flat fetch bypasses nested-join RLS; stitched into loans in JS below
+        supabase
+          .from('loan_transactions')
+          .select('loan_id, cash_flow_direction, amount'),
       ]);
 
       const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7;
@@ -531,10 +536,23 @@ export default function Dashboard() {
         .map(v => ({ project_id: v.project_id ?? '', net_paid: v.net_paid, voucher_date: v.voucher_date }))
         .filter(v => v.project_id !== '');
 
+      // Stitch flat loan_transactions into their parent loans by loan_id
+      type LoanTxRow = { loan_id: string; cash_flow_direction: string; amount: number };
+      const txByLoanId = new Map<string, LoanTxRow[]>();
+      (loanTxRaw ?? []).forEach((tx: LoanTxRow) => {
+        const bucket = txByLoanId.get(tx.loan_id) ?? [];
+        bucket.push(tx);
+        txByLoanId.set(tx.loan_id, bucket);
+      });
+      const loansWithTx = (lns ?? []).map((l: Loan) => ({
+        ...l,
+        loan_transactions: txByLoanId.get(l.id) ?? [],
+      }));
+
       setProjects(proj ?? []);
       setClientInvoiceReceipts(ciReceiptRows);
       setVouchers(voucherRows);
-      setLoans(lns ?? []);
+      setLoans(loansWithTx);
       setPendingReports(reports ?? []);
       setPendingCostings((costings as unknown as ProjectCosting[]) ?? []);
       setProjectViewCounts(viewMap);
@@ -1004,7 +1022,7 @@ export default function Dashboard() {
   const totalNetLiability = borrowingFacilities.reduce((s, l) => s + calcNetLiability(l), 0);
   // Net Asset = total outstanding receivable across all lending facilities
   const totalNetAsset = lendingFacilities.reduce((s, l) => s + calcNetAsset(l), 0);
-  // Net financing cash = assets minus liabilities (positive = net lender, negative = net borrower)
+  // Net financing cash = liabilities minus assets (positive = net cash received from borrowing, negative = net cash deployed as lender)
   const netFinancingCash = totalNetLiability - totalNetAsset;
 
   // SG&A hybrid: use actuals where entered, projection for the rest
