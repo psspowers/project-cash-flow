@@ -955,8 +955,8 @@ export default function Dashboard() {
     }, 0);
   }
 
-  const borrowingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'borrowing');
-  const lendingFacilities = loans.filter(l => (l.facility_type ?? 'borrowing') === 'lending');
+  const borrowingFacilities = loans.filter(l => l.facility_type === 'borrowing');
+  const lendingFacilities = loans.filter(l => l.facility_type === 'lending');
 
   const loansReceived = borrowingFacilities.filter(l => calcNetLiability(l) > 0);
   const loansGiven = lendingFacilities;
@@ -1005,7 +1005,7 @@ export default function Dashboard() {
   // Net Asset = total outstanding receivable across all lending facilities
   const totalNetAsset = lendingFacilities.reduce((s, l) => s + calcNetAsset(l), 0);
   // Net financing cash = assets minus liabilities (positive = net lender, negative = net borrower)
-  const netFinancingCash = totalNetAsset - totalNetLiability;
+  const netFinancingCash = totalNetLiability - totalNetAsset;
 
   // SG&A hybrid: use actuals where entered, projection for the rest
   // Build a map of year-month -> actual for fast lookup
