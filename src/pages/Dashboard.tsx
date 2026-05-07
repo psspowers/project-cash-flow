@@ -1472,6 +1472,54 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+
+          {/* Forward Margin banner — remaining cash flow from today onwards */}
+          <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-5 py-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              {/* Label */}
+              <div className="flex items-center gap-2 min-w-0">
+                <ArrowRight size={13} className="text-gray-400 shrink-0" />
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Forward Margin — Remaining Cash Flow</p>
+                  <p className="text-xs text-gray-400 mt-0.5">All uninvoiced receivables and unpaid payables still ahead of today</p>
+                </div>
+              </div>
+
+              {/* Equation row */}
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Remaining In */}
+                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-0.5">Remaining to Collect</p>
+                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Client invoices + milestones</p>
+                </div>
+
+                <span className="text-lg font-light text-gray-300">−</span>
+
+                {/* Remaining Out */}
+                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-0.5">Remaining to Pay</p>
+                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Vendor invoices + PO milestones</p>
+                </div>
+
+                <span className="text-lg font-light text-gray-300">=</span>
+
+                {/* Forward Margin result */}
+                <div className={`rounded border px-3 py-2 text-center min-w-[130px] ${trueExposure >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">Forward Margin</p>
+                  <p className={`text-[15px] font-bold tabular-nums ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                    {trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
+                  </p>
+                  {totalOutstandingReceivable > 0 && (
+                    <p className={`text-[10px] font-semibold mt-0.5 ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                      {((trueExposure / totalOutstandingReceivable) * 100).toFixed(1)}% of remaining revenue
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
