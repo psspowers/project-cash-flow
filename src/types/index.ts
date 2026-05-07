@@ -409,16 +409,20 @@ export interface ProjectCashTransfer {
 export interface Loan {
   id: string;
   loan_type: 'received' | 'given';
+  // New event-sourced ledger fields (facility_type replaces loan_type for new entries)
+  facility_type?: FacilityType;
+  name?: string;
   counterparty_id?: string;
   principal: number;
   currency: string;
   fx_rate_if_usd?: number;
   drawdown_date?: string;
   due_date?: string;
-  outstanding_balance: number;
+  outstanding_balance: number; // deprecated — use calculateFacilityBalance() instead
   notes?: string;
   created_at: string;
   counterparty?: Entity;
+  loan_transactions?: LoanTransaction[];
 }
 
 export interface LoanRepayment {
@@ -429,6 +433,44 @@ export interface LoanRepayment {
   voucher_id?: string;
   notes?: string;
   created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Treasury / Event-sourced loan ledger
+// ---------------------------------------------------------------------------
+
+export type FacilityType = 'borrowing' | 'lending';
+export type LoanEventType = 'drawdown' | 'repayment' | 'interest' | 'fee';
+export type CashFlowDirection = 'in' | 'out';
+
+export interface LoanTransaction {
+  id: string;
+  loan_id: string;
+  transaction_date: string;
+  event_type: LoanEventType;
+  cash_flow_direction: CashFlowDirection;
+  amount: number;
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+}
+
+export interface SgaActual {
+  id: string;
+  year: number;
+  month: number;
+  amount: number;
+  entered_by?: string;
+  entered_at?: string;
+}
+
+export interface TreasuryAdjustment {
+  id: string;
+  label: string;
+  amount: number;
+  fiscal_year: number;
+  created_by?: string;
+  created_at?: string;
 }
 
 export interface Notification {

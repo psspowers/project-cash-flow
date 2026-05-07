@@ -19,6 +19,7 @@ import CostVariance from './pages/CostVariance';
 import MonthlyAnalyzer from './pages/MonthlyAnalyzer';
 import CheckManagement from './pages/CheckManagement';
 import WorkflowEfficiency from './pages/WorkflowEfficiency';
+import TreasuryDashboard from './pages/treasury/TreasuryDashboard';
 
 function AppRoutes() {
   return (
@@ -33,6 +34,7 @@ function AppRoutes() {
       <Route path="/payment-queue" element={<AppLayout><PaymentQueue /></AppLayout>} />
       <Route path="/cash-receipts" element={<AppLayout><CashReceipts /></AppLayout>} />
       <Route path="/loan-ledger" element={<AppLayout><LoanLedger /></AppLayout>} />
+      <Route path="/treasury" element={<AppLayout><TreasuryDashboard /></AppLayout>} />
       <Route path="/wht-report" element={<AppLayout><WHTReport /></AppLayout>} />
       <Route path="/vat-report" element={<AppLayout><VATReport /></AppLayout>} />
       <Route path="/ceo-alerts" element={<AppLayout><CEOAlerts /></AppLayout>} />

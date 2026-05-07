@@ -5,6 +5,7 @@ import {
   CreditCard, Receipt, BookOpen, FileText, Bell, CalendarRange,
   BarChart3, Zap, ChevronDown, ChevronRight,
   CheckCircle2, Clock, CalendarClock, TrendingUp, Building2, GitPullRequest,
+  Landmark,
 } from 'lucide-react';
 import { UserRole } from '../../types';
 import { ANALYZER_ROLES, PROCUREMENT_READ_ROLES } from '../../config/roles';
@@ -262,6 +263,9 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         )}
         {['accounts_supervisor', 'accounts_manager', 'ceo', 'evp'].includes(role) && (
           <NavItem to="/loan-ledger" label="Loan Ledger" icon={<BookOpen size={16} />} />
+        )}
+        {['accounts_supervisor', 'accounts_manager', 'ceo', 'evp'].includes(role) && (
+          <NavItem to="/treasury" label="Treasury" icon={<Landmark size={16} />} />
         )}
         {['accounts_supervisor', 'accounts_manager'].includes(role) && (
           <>
