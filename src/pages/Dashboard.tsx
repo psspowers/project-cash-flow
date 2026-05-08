@@ -1017,15 +1017,12 @@ export default function Dashboard() {
   // Treasury Waterfall calculations
   // ---------------------------------------------------------------------------
 
-  // Historical cash from Jan 2025 — total actually received from clients
-  const TREASURY_START = '2025-01-01';
+  // Historical cash — all-time total actually received from clients
   const historicalCashIn = clientInvoiceReceipts
-    .filter(r => r.receipt_date && r.receipt_date >= TREASURY_START)
     .reduce((s, r) => s + Number(r.received_amount), 0);
 
-  // Historical cash out — issued payment vouchers from Jan 2025
+  // Historical cash out — all-time issued payment vouchers
   const historicalCashOut = vendorInvoicePaid
-    .filter(v => v.voucher_date && v.voucher_date >= TREASURY_START)
     .reduce((s, v) => s + Number(v.net_paid), 0);
 
   const historicalProjectNet = historicalCashIn - historicalCashOut;
@@ -1436,7 +1433,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-gray-400">Remaining to collect</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalOutstandingReceivable)}</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalContractValue - clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span>
                 </div>
               </div>
             </div>
@@ -1451,7 +1448,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-gray-400">Remaining to pay</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalOutstandingPayable)}</span>
+                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalCommitments - vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span>
                 </div>
               </div>
             </div>
@@ -1563,7 +1560,7 @@ export default function Dashboard() {
                 <p className={`text-xl font-bold tabular-nums ${netFinancingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
                   {netFinancingCash >= 0 ? '+' : ''}{fmtTHBCompact(netFinancingCash)}
                 </p>
-                <p className="text-[10px] text-gray-400 mt-0.5">Lending assets minus borrowing liabilities</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Borrowing liabilities minus lending assets</p>
               </div>
               {/* Net Liability — borrowings */}
               {totalNetLiability > 0 && (
@@ -1671,7 +1668,7 @@ export default function Dashboard() {
               <div className="space-y-2">
                 {/* Historical */}
                 <div className="bg-gray-50 rounded-md p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Historical (Jan 2025 – Today)</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Historical (All Time)</p>
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs">
                       <span className="text-gray-500">Cash in from clients</span>
@@ -1753,7 +1750,7 @@ export default function Dashboard() {
                   <span className="font-medium text-gray-700 tabular-nums">{fmtTHBCompact(sgaActualTotal)}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months</span>
+                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months (incl. past unrecorded)</span>
                   <span className="font-medium text-gray-500 tabular-nums">{fmtTHBCompact(sgaProjectedTotal)}</span>
                 </div>
                 <div className="flex justify-between text-xs border-t border-gray-200 pt-1">
