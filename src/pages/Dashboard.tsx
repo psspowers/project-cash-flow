@@ -197,6 +197,187 @@ interface QueueItem {
   href: string;
 }
 
+// ---------------------------------------------------------------------------
+// Cash Exposure Bar — horizontal split bar showing receivables vs payables
+// ---------------------------------------------------------------------------
+
+interface CashExposureBarProps {
+  totalOutstandingReceivable: number;
+  totalOutstandingPayable: number;
+  trueExposure: number;
+}
+
+function CashExposureBar({ totalOutstandingReceivable, totalOutstandingPayable, trueExposure }: CashExposureBarProps) {
+  const total = totalOutstandingReceivable + totalOutstandingPayable;
+  if (total === 0) return null;
+  const recvPct = Math.round((totalOutstandingReceivable / total) * 100);
+  const payPct = 100 - recvPct;
+
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <TrendingUp size={14} className="text-gray-400" />
+        <h2 className="text-[13px] font-semibold text-gray-800">Cash Exposure</h2>
+        <span className="text-xs text-gray-400 ml-1">— outstanding receivables vs payables balance</span>
+      </div>
+
+      {/* Bar */}
+      <div className="relative h-7 rounded-full overflow-hidden flex mb-3">
+        <div
+          className="h-full bg-[#1D9E75] flex items-center justify-end pr-2 transition-all duration-500"
+          style={{ width: `${recvPct}%`, minWidth: recvPct > 5 ? undefined : '2px' }}
+        >
+          {recvPct > 12 && (
+            <span className="text-[10px] font-bold text-white tabular-nums">{recvPct}%</span>
+          )}
+        </div>
+        <div
+          className="h-full bg-[#E24B4A] flex items-center justify-start pl-2 transition-all duration-500"
+          style={{ width: `${payPct}%`, minWidth: payPct > 5 ? undefined : '2px' }}
+        >
+          {payPct > 12 && (
+            <span className="text-[10px] font-bold text-white tabular-nums">{payPct}%</span>
+          )}
+        </div>
+      </div>
+
+      {/* Legend row */}
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#1D9E75] shrink-0" />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#1D9E75]">To Collect</span>
+          </div>
+          <p className="text-base font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
+          <p className="text-[10px] text-gray-400">Client invoices + milestones</p>
+        </div>
+        <div className="text-center">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">Net Exposure</p>
+          <p className={`text-base font-bold tabular-nums ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+            {trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
+          </p>
+          <p className="text-[10px] text-gray-400">{trueExposure >= 0 ? 'Receivables ahead' : 'Payables exceed'}</p>
+        </div>
+        <div className="text-right">
+          <div className="flex items-center gap-1.5 mb-0.5 justify-end">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#E24B4A]">To Pay</span>
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#E24B4A] shrink-0" />
+          </div>
+          <p className="text-base font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
+          <p className="text-[10px] text-gray-400">Vendor invoices + PO milestones</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared props interface for all role views
+// ---------------------------------------------------------------------------
+
+interface DashboardViewProps {
+  // Core identifiers
+  profile: { role: string } | null;
+  loading: boolean;
+  navigate: (path: string) => void;
+
+  // KPI metrics
+  activeProjects: Project[];
+  totalContractValue: number;
+  totalCommitments: number;
+  lifetimeMargin: number;
+  totalReceivedThisYear: number;
+  pendingCount: number;
+  netPosition90: number;
+  projectsAtRisk: number;
+
+  // Receivables
+  totalOutstandingReceivable: number;
+  pendingReceivables: number;
+  notYetInvoicedTotal: number;
+
+  // Payables
+  totalOutstandingPayable: number;
+  colO_Cost: number;
+  colP1_Cost: number;
+  trueExposure: number;
+
+  // Historical
+  historicalCashIn: number;
+  historicalCashOut: number;
+  historicalProjectNet: number;
+  futureProjectNet: number;
+
+  // Treasury
+  netFinancingCash: number;
+  totalNetLiability: number;
+  totalNetAsset: number;
+  borrowingFacilities: { id: string; name?: string | null; due_date?: string | null; loan_transactions?: { cash_flow_direction: string; amount: number }[] }[];
+  lendingFacilities: { id: string; name?: string | null; due_date?: string | null; loan_transactions?: { cash_flow_direction: string; amount: number }[] }[];
+  loansReceived: { id: string; name?: string | null; due_date?: string | null; loan_transactions?: { cash_flow_direction: string; amount: number }[] }[];
+  loansGiven: { id: string; name?: string | null; due_date?: string | null; loan_transactions?: { cash_flow_direction: string; amount: number }[] }[];
+  overdueLoans: { id: string }[];
+  overdueLoanAmount: number;
+  calcNetLiability: (loan: { loan_transactions?: { cash_flow_direction: string; amount: number }[] }) => number;
+  calcNetAsset: (loan: { loan_transactions?: { cash_flow_direction: string; amount: number }[] }) => number;
+
+  // SG&A
+  sgaActuals: SgaActual[];
+  sgaActualTotal: number;
+  sgaProjectedTotal: number;
+  sgaActualMonthCount: number;
+  sgaProjectedMonthCount: number;
+  sgaMonthly: number;
+  sgaMonths: number;
+  setSgaMonthly: (v: number) => void;
+  setSgaMonths: (v: number) => void;
+  sgaMonthlyUserOverride: boolean;
+  setSgaMonthlyUserOverride: (v: boolean) => void;
+  sgaActualMap: Map<string, number>;
+  sgaEditValues: Record<string, string>;
+  setSgaEditValues: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  sgaSaving: Record<string, boolean>;
+  saveSgaActual: (year: number, month: number) => void;
+  totalSgaBurn: number;
+
+  // Treasury adjustments
+  adjustmentsTotal: number;
+  selectedYearAdjustments: TreasuryAdjustment[];
+  selectedFiscalYear: number;
+  setSelectedFiscalYear: (v: number) => void;
+  adjLabel: string;
+  setAdjLabel: (v: string) => void;
+  adjAmount: string;
+  setAdjAmount: (v: string) => void;
+  adjSaving: boolean;
+  addAdjustment: () => void;
+  deleteAdjustment: (id: string) => void;
+  treasuryAdjustments: TreasuryAdjustment[];
+  projectedEndingCash: number;
+
+  // Project positions
+  projectCashPositions: ProjectCashPosition[];
+  pendingClientInvoices: { project_id: string; pending_amount: number; invoice_date: string | null }[];
+  chartReceivedInvoices: ChartReceivedInvoice[];
+  chartUninvoicedMilestones: ChartUninvoicedMilestone[];
+  clientMilestonesAll: { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[];
+  clientInvoiceReceipts: { project_id: string; received_amount: number; receipt_date: string | null; client_milestone_id: string | null }[];
+  vendorInvoicePaid: { project_id: string; net_paid: number; voucher_date: string | null }[];
+  thirtyDayKey: string;
+
+  // Queue
+  queueItems: QueueItem[];
+  pendingCostings: ProjectCosting[];
+  vouchers: Pick<PaymentVoucher, 'id' | 'project_id' | 'net_paid' | 'status' | 'ceo_notified' | 'voucher_no' | 'voucher_date'>[];
+  ceoAlerts: Pick<PaymentVoucher, 'id' | 'voucher_no' | 'net_paid' | 'status' | 'voucher_date'>[];
+
+  // Pipeline modal
+  setIsPipelineModalOpen: (v: boolean) => void;
+
+  // Misc
+  now: Date;
+}
+
 function getApprovalQueueItems(
   role: string | undefined,
   reports: ProgressReport[],
@@ -325,6 +506,902 @@ function getApprovalQueueItems(
     return [...pending, ...recentDone].slice(0, 5);
   }
   return [];
+}
+
+// ---------------------------------------------------------------------------
+// Shared sub-blocks (used across multiple views)
+// ---------------------------------------------------------------------------
+
+function ReceivablesPipelinePanel({ totalOutstandingReceivable, pendingReceivables, notYetInvoicedTotal }: {
+  totalOutstandingReceivable: number;
+  pendingReceivables: number;
+  notYetInvoicedTotal: number;
+}) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Clock size={14} className="text-gray-400" />
+        <h2 className="text-[13px] font-semibold text-gray-800">Receivables Pipeline</h2>
+        <span className="text-xs text-gray-400 ml-1">— what we are still owed across active projects</span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-0 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+        <div className="md:pr-6 pb-4 md:pb-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Total Outstanding Receivable</p>
+          <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
+          <p className="text-xs text-gray-400 mt-1">Column O + Column P combined</p>
+          {totalOutstandingReceivable > 0 && (
+            <div className="mt-3">
+              <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
+                <div className="h-full bg-amber-400 rounded-l-full transition-all" style={{ width: `${Math.round((pendingReceivables / totalOutstandingReceivable) * 100)}%` }} />
+                <div className="h-full bg-[#1D9E75]/30 rounded-r-full transition-all" style={{ width: `${Math.round((notYetInvoicedTotal / totalOutstandingReceivable) * 100)}%` }} />
+              </div>
+              <div className="flex items-center gap-3 mt-1.5">
+                <span className="flex items-center gap-1 text-[10px] text-gray-400">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />
+                  Invoiced {Math.round((pendingReceivables / totalOutstandingReceivable) * 100)}%
+                </span>
+                <span className="flex items-center gap-1 text-[10px] text-gray-400">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-[#1D9E75]/40" />
+                  Pipeline {Math.round((notYetInvoicedTotal / totalOutstandingReceivable) * 100)}%
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="md:px-6 py-4 md:py-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Invoiced — Awaiting Payment</p>
+          <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(pendingReceivables)}</p>
+          <p className="text-xs text-gray-400 mt-1">Column O — billed, payment not yet received</p>
+          <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
+            <Clock size={11} />
+            Awaiting client payment
+          </div>
+        </div>
+        <div className="md:pl-6 pt-4 md:pt-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Uninvoiced Pipeline</p>
+          <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(notYetInvoicedTotal)}</p>
+          <p className="text-xs text-gray-400 mt-1">Column P — milestones not yet billed</p>
+          <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#1D9E75] font-medium">
+            <TrendingUp size={11} />
+            Future revenue to invoice
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PayablesPipelinePanel({ totalOutstandingPayable, colO_Cost, colP1_Cost, setIsPipelineModalOpen }: {
+  totalOutstandingPayable: number;
+  colO_Cost: number;
+  colP1_Cost: number;
+  setIsPipelineModalOpen: (v: boolean) => void;
+}) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Clock size={14} className="text-gray-400" />
+        <h2 className="text-[13px] font-semibold text-gray-800">Payables Pipeline</h2>
+        <span className="text-xs text-gray-400 ml-1">— what we still owe across active projects</span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-0 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+        <div className="md:pr-6 pb-4 md:pb-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Total Outstanding Payable</p>
+          <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
+          <p className="text-xs text-gray-400 mt-1">Col O + Col P — ties to Monthly Analyzer pivot tables</p>
+          {totalOutstandingPayable > 0 && (
+            <div className="mt-3">
+              <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
+                <div className="h-full bg-[#E24B4A] rounded-l-full transition-all" style={{ width: `${Math.round((colO_Cost / totalOutstandingPayable) * 100)}%` }} />
+                <div className="h-full bg-amber-400 rounded-r-full transition-all" style={{ width: `${Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%` }} />
+              </div>
+              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                <span className="flex items-center gap-1 text-[10px] text-gray-400">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-[#E24B4A]" />
+                  Invoice Balance {Math.round((colO_Cost / totalOutstandingPayable) * 100)}%
+                </span>
+                <span className="flex items-center gap-1 text-[10px] text-gray-400">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />
+                  Yet to Invoice {Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="md:px-6 py-4 md:py-0">
+          {colO_Cost > 0 ? (
+            <div className="relative p-4 -mx-4 rounded-xl overflow-hidden shadow-sm">
+              <div className="absolute -inset-[150%] bg-[conic-gradient(from_0deg,transparent_0_340deg,#E24B4A_360deg)]" style={{ animation: 'spin 1.5s linear 3 forwards' }} />
+              <div className="absolute inset-[2px] bg-white rounded-xl border border-[#E24B4A]/20" />
+              <div className="relative z-10">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Supplier Invoiced — Unpaid</p>
+                <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(colO_Cost)}</p>
+                <p className="text-xs text-gray-400 mt-1">Column O — invoiced by supplier, unpaid</p>
+                <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#E24B4A] font-medium">
+                  <Clock size={11} className="animate-pulse" />
+                  Awaiting payment processing
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 -mx-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Supplier Invoiced — Unpaid</p>
+              <p className="text-2xl font-bold text-gray-900 tabular-nums">฿0</p>
+              <p className="text-xs text-gray-400 mt-1">Column O — invoiced by supplier, unpaid</p>
+            </div>
+          )}
+        </div>
+        <div className="md:pl-6 pt-4 md:pt-0 cursor-pointer rounded-lg p-3 -m-3 hover:bg-amber-50 transition-colors group" onClick={() => setIsPipelineModalOpen(true)} title="Click to view Yet to Invoice pipeline breakdown">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Yet to Invoice (Col P)</p>
+          <p className="text-2xl font-bold text-gray-900 tabular-nums group-hover:text-amber-700 transition-colors">{fmtTHBCompact(colP1_Cost)}</p>
+          <p className="text-xs text-gray-400 mt-1">PO milestones not yet invoiced — 1:1 matched</p>
+          <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
+            <Clock size={11} />
+            Click to view full pipeline
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalQueuePanel({ queueItems, pendingCount, profile, navigate, loading }: {
+  queueItems: QueueItem[];
+  pendingCount: number;
+  profile: { role: string } | null;
+  navigate: (path: string) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-[13px] font-semibold text-gray-800">Approval Queue</h2>
+        {['construction_manager', 'evp', 'cost_controller', 'accounts_supervisor', 'accounts_manager'].includes(profile?.role ?? '') && (
+          <button onClick={() => navigate('/approvals')} className="text-xs text-[#378ADD] hover:underline flex items-center gap-1">
+            View all <ArrowRight size={12} />
+          </button>
+        )}
+      </div>
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg gap-2">
+              <div className="flex-1 space-y-1.5">
+                <SkeletonLine w="w-2/3" />
+                <SkeletonLine w="w-1/3" h="h-2" />
+              </div>
+              <SkeletonLine w="w-16" h="h-5" />
+            </div>
+          ))}
+        </div>
+      ) : queueItems.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 space-y-3">
+          <CheckSquare size={28} className="text-gray-300" />
+          <p className="text-[13px] text-gray-400">All clear — no pending items</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {queueItems.map((item) => (
+            <div
+              key={item.id}
+              onClick={() => navigate(item.href)}
+              className={`relative flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors overflow-hidden ${
+                item.done ? 'bg-[#1D9E75]/5 border border-[#1D9E75]/20 hover:bg-[#1D9E75]/10'
+                  : item.urgent ? 'bg-amber-50 border border-amber-200 hover:bg-amber-100'
+                  : 'bg-[#F8F8F7] hover:bg-gray-100'
+              }`}
+            >
+              {item.done && (
+                <div className="absolute -right-3 top-2 rotate-[32deg] bg-[#1D9E75] text-white text-[9px] font-bold px-5 py-0.5 tracking-widest shadow-sm">DONE</div>
+              )}
+              <div className="min-w-0 flex items-start gap-2 flex-1">
+                {item.done ? <CheckSquare size={13} className="text-[#1D9E75] shrink-0 mt-0.5" />
+                  : item.urgent ? <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
+                  : null}
+                <div className="min-w-0 flex-1">
+                  <p className={`text-[13px] font-medium truncate ${item.done ? 'text-gray-500 line-through decoration-[#1D9E75]/50' : 'text-gray-800'}`}>
+                    {item.label.split('–')[0].trim()}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5 truncate">{item.sub}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 mr-5">
+                <Badge label={item.done ? 'approved' : item.status.replace(/_/g, ' ')} variant={item.done ? 'green' : item.urgent ? 'amber' : statusVariant(item.status)} />
+              </div>
+            </div>
+          ))}
+          {pendingCount > 4 && (
+            <button onClick={() => navigate('/approvals')} className="w-full text-xs text-[#378ADD] hover:underline text-center pt-1">
+              + {pendingCount - 4} more item{pendingCount - 4 !== 1 ? 's' : ''} — view all
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectCashTable({ projectCashPositions, pendingClientInvoices, chartReceivedInvoices, chartUninvoicedMilestones, clientMilestonesAll, thirtyDayKey, loading, navigate }: {
+  projectCashPositions: ProjectCashPosition[];
+  pendingClientInvoices: { project_id: string; pending_amount: number; invoice_date: string | null }[];
+  chartReceivedInvoices: ChartReceivedInvoice[];
+  chartUninvoicedMilestones: ChartUninvoicedMilestone[];
+  clientMilestonesAll: { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[];
+  thirtyDayKey: string;
+  loading: boolean;
+  navigate: (path: string) => void;
+}) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-[13px] font-semibold text-gray-800">Project Cash Positions</h2>
+        <button onClick={() => navigate('/projects')} className="text-xs text-[#378ADD] hover:underline flex items-center gap-1">
+          View all <ArrowRight size={12} />
+        </button>
+      </div>
+      {loading ? (
+        <table className="w-full"><tbody>{Array.from({ length: 4 }).map((_, i) => <TableRowSkeleton key={i} cols={6} />)}</tbody></table>
+      ) : projectCashPositions.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 space-y-3">
+          <ArrowUpRight size={28} className="text-gray-300" />
+          <p className="text-[13px] text-gray-400">No project cash activity yet</p>
+          <button onClick={() => navigate('/projects')} className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors">Go to Projects</button>
+        </div>
+      ) : (
+        <table className="w-full">
+          <thead>
+            <tr className="text-xs text-gray-400 border-b border-gray-100">
+              <th className="text-left pb-2 font-medium">Project</th>
+              <th className="text-right pb-2 font-medium">Received</th>
+              <th className="text-right pb-2 font-medium">Cost Paid</th>
+              <th className="text-right pb-2 font-medium">30-Day In</th>
+              <th className="text-right pb-2 font-medium">30-Day Out</th>
+              <th className="text-right pb-2 font-medium">30-Day Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {projectCashPositions.map(({ project, totalReceived, totalCostPaid }) => {
+              const projPendingInvsTotal = pendingClientInvoices.filter(i => i.project_id === project.id).reduce((s, i) => s + i.pending_amount, 0);
+              const projReceivedInvoices = chartReceivedInvoices.filter(inv => inv.project_id === project.id);
+              const projBalanceInvoicesTotal = projReceivedInvoices.reduce((s, inv) => s + Math.max(0, Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0)), 0);
+              const projUninvoiced = chartUninvoicedMilestones.filter(m => m.project_id === project.id);
+              const net30In = clientMilestonesAll.filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey).reduce((s, m) => s + m.payment_plan_amount, 0) + projPendingInvsTotal;
+              const net30Out = projUninvoiced.filter(m => m.planned_payment_date && m.planned_payment_date <= thirtyDayKey).reduce((s, m) => s + Number(m.amount_due), 0) + projBalanceInvoicesTotal;
+              const net30 = net30In - net30Out;
+              const isAtRisk = net30 < 0;
+              return (
+                <tr key={project.id} className={`border-b border-gray-50 last:border-0 cursor-pointer transition-colors ${isAtRisk ? 'bg-[#E24B4A]/5 hover:bg-[#E24B4A]/10' : 'hover:bg-[#F8F8F7]'}`} onClick={() => navigate(`/projects/${project.id}`)}>
+                  <td className="py-2.5 pr-3">
+                    <p className="text-[13px] font-medium text-gray-800 truncate max-w-[120px]">{project.name.split('–')[0].trim()}</p>
+                    <div className="mt-0.5"><Badge label={PROJECT_STATUS_LABELS[project.status]} variant={statusVariant(project.status)} /></div>
+                  </td>
+                  <td className="py-2.5 text-right text-[13px] text-[#1D9E75] font-medium">{fmtTHBCompact(totalReceived)}</td>
+                  <td className="py-2.5 text-right text-[13px] text-gray-500">{fmtTHBCompact(totalCostPaid)}</td>
+                  <td className="py-2.5 text-right">
+                    {net30In > 0 ? <div><p className="text-[13px] font-medium text-[#1D9E75]">{fmtTHBCompact(net30In)}</p>{projPendingInvsTotal > 0 && <p className="text-[10px] text-amber-600/70">incl. awaiting pmt</p>}</div> : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td className="py-2.5 text-right">
+                    {net30Out > 0 ? <div><p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(net30Out)}</p>{projBalanceInvoicesTotal > 0 && <p className="text-[10px] text-[#E24B4A]/70">incl. supplier inv.</p>}</div> : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td className="py-2.5 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {isAtRisk && <AlertTriangle size={11} className="text-[#E24B4A]" />}
+                      <span className={`text-[13px] font-semibold ${net30 >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{net30 >= 0 ? '+' : ''}{fmtTHBCompact(net30)}</span>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function TreasuryWaterfallPanel(p: Pick<DashboardViewProps,
+  'netFinancingCash' | 'totalNetLiability' | 'totalNetAsset' | 'borrowingFacilities' | 'lendingFacilities' |
+  'adjustmentsTotal' | 'selectedYearAdjustments' | 'selectedFiscalYear' | 'setSelectedFiscalYear' |
+  'adjLabel' | 'setAdjLabel' | 'adjAmount' | 'setAdjAmount' | 'adjSaving' | 'addAdjustment' | 'deleteAdjustment' | 'treasuryAdjustments' |
+  'historicalCashIn' | 'historicalCashOut' | 'historicalProjectNet' | 'futureProjectNet' |
+  'totalOutstandingReceivable' | 'totalOutstandingPayable' |
+  'sgaActualTotal' | 'sgaProjectedTotal' | 'sgaActualMonthCount' | 'sgaProjectedMonthCount' |
+  'sgaMonthly' | 'sgaMonths' | 'setSgaMonthly' | 'setSgaMonths' | 'sgaMonthlyUserOverride' | 'setSgaMonthlyUserOverride' |
+  'sgaActuals' | 'sgaActualMap' | 'sgaEditValues' | 'setSgaEditValues' | 'sgaSaving' | 'saveSgaActual' | 'totalSgaBurn' |
+  'projectedEndingCash' | 'profile' | 'now'
+>) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-[#0f1923]">
+        <div className="flex items-center gap-2.5">
+          <Building2 size={15} className="text-white/60" />
+          <h2 className="text-[13px] font-semibold text-white">Treasury Cash Waterfall</h2>
+          <span className="text-xs text-white/40 ml-1">— projected bank balance when all active projects complete</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-white/50">Adjustments Year:</span>
+          <div className="relative">
+            <select value={p.selectedFiscalYear} onChange={e => p.setSelectedFiscalYear(Number(e.target.value))} className="appearance-none text-xs bg-white/10 text-white border border-white/20 rounded-md px-2.5 py-1 pr-6 cursor-pointer focus:outline-none">
+              {[2024, 2025, 2026, 2027, 2028].map(y => <option key={y} value={y} className="text-gray-900 bg-white">{y}</option>)}
+            </select>
+            <ChevronDown size={11} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+        {/* Column 1 — Financing */}
+        <div className="p-5 space-y-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Financing Position</p>
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">Net financing cash</p>
+            <p className={`text-xl font-bold tabular-nums ${p.netFinancingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.netFinancingCash >= 0 ? '+' : ''}{fmtTHBCompact(p.netFinancingCash)}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Borrowing liabilities minus lending assets</p>
+          </div>
+          {p.totalNetLiability > 0 && (
+            <div className="bg-amber-50 border border-amber-100 rounded-md p-2.5">
+              <p className="text-[11px] text-amber-700 font-medium">Net Liability (Borrowings)</p>
+              <p className="text-sm font-bold text-amber-800 tabular-nums">{fmtTHBCompact(p.totalNetLiability)}</p>
+              <p className="text-[10px] text-amber-600 mt-0.5">Outstanding debt — must be repaid</p>
+            </div>
+          )}
+          {p.totalNetAsset > 0 && (
+            <div className="bg-emerald-50 border border-emerald-100 rounded-md p-2.5">
+              <p className="text-[11px] text-emerald-700 font-medium">Net Asset (Lending)</p>
+              <p className="text-sm font-bold text-emerald-800 tabular-nums">{fmtTHBCompact(p.totalNetAsset)}</p>
+              <p className="text-[10px] text-emerald-600 mt-0.5">Outstanding receivable from borrowers</p>
+            </div>
+          )}
+          {p.borrowingFacilities.length === 0 && p.lendingFacilities.length === 0 && (
+            <p className="text-xs text-gray-300 text-center py-3">No facilities recorded</p>
+          )}
+        </div>
+
+        {/* Column 2 — Adjustments */}
+        <div className="p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">One-Time Adjustments</p>
+            <span className="text-[10px] text-gray-400">{p.selectedFiscalYear}</span>
+          </div>
+          <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            {p.selectedYearAdjustments.length === 0 ? (
+              <p className="text-xs text-gray-300 text-center py-3">No adjustments for {p.selectedFiscalYear}</p>
+            ) : (
+              p.selectedYearAdjustments.map(adj => (
+                <div key={adj.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-gray-50 group">
+                  <span className="text-xs text-gray-700 truncate flex-1">{adj.label}</span>
+                  <span className={`text-xs font-semibold tabular-nums shrink-0 ${Number(adj.amount) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{Number(adj.amount) >= 0 ? '+' : ''}{fmtTHBCompact(Number(adj.amount))}</span>
+                  <button onClick={() => p.deleteAdjustment(adj.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-[#E24B4A] shrink-0"><X size={12} /></button>
+                </div>
+              ))
+            )}
+          </div>
+          {p.selectedYearAdjustments.length > 0 && (
+            <div className="flex items-center justify-between pt-1 border-t border-gray-100">
+              <span className="text-[10px] text-gray-400">{p.selectedFiscalYear} subtotal</span>
+              <span className={`text-xs font-bold tabular-nums ${p.selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                {p.selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? '+' : ''}{fmtTHBCompact(p.selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0))}
+              </span>
+            </div>
+          )}
+          <div className="space-y-1.5 pt-1 border-t border-gray-100">
+            <input type="text" placeholder="Label (e.g. Old Project Debt)" value={p.adjLabel} onChange={e => p.setAdjLabel(e.target.value)} className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300" />
+            <div className="flex gap-1.5">
+              <input type="number" placeholder="Amount (negative = deduction)" value={p.adjAmount} onChange={e => p.setAdjAmount(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300" />
+              <button onClick={p.addAdjustment} disabled={p.adjSaving || !p.adjLabel.trim() || !p.adjAmount} className="shrink-0 flex items-center gap-1 text-xs bg-[#0f1923] text-white px-2.5 py-1.5 rounded-md hover:bg-gray-800 disabled:opacity-40 transition-colors"><Plus size={11} />Add</button>
+            </div>
+          </div>
+          {p.treasuryAdjustments.length > 0 && (
+            <p className="text-[10px] text-gray-400">All-years net: <span className={`font-semibold ${p.adjustmentsTotal >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.adjustmentsTotal >= 0 ? '+' : ''}{fmtTHBCompact(p.adjustmentsTotal)}</span></p>
+          )}
+        </div>
+
+        {/* Column 3 — Project Operations */}
+        <div className="p-5 space-y-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Project Operations</p>
+          <div className="space-y-2">
+            <div className="bg-gray-50 rounded-md p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Historical (All Time)</p>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs"><span className="text-gray-500">Cash in from clients</span><span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(p.historicalCashIn)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-gray-500">Cash out to suppliers</span><span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(p.historicalCashOut)})</span></div>
+                <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+                  <span className="font-semibold text-gray-700">Historical Net</span>
+                  <span className={`font-bold tabular-nums ${p.historicalProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.historicalProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(p.historicalProjectNet)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-md p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Projected (Remaining Work)</p>
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs"><span className="text-gray-500">Outstanding receivable</span><span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(p.totalOutstandingReceivable)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-gray-500">Outstanding payable</span><span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(p.totalOutstandingPayable)})</span></div>
+                <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+                  <span className="font-semibold text-gray-700">Future Net</span>
+                  <span className={`font-bold tabular-nums ${p.futureProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.futureProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(p.futureProjectNet)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-between items-center pt-1 border-t border-gray-100">
+            <span className="text-xs font-semibold text-gray-700">Total Project Contribution</span>
+            <span className={`text-sm font-bold tabular-nums ${(p.historicalProjectNet + p.futureProjectNet) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{(p.historicalProjectNet + p.futureProjectNet) >= 0 ? '+' : ''}{fmtTHBCompact(p.historicalProjectNet + p.futureProjectNet)}</span>
+          </div>
+        </div>
+
+        {/* Column 4 — SG&A */}
+        <div className="p-5 space-y-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Corporate SG&A</p>
+          <div className="space-y-2">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] text-gray-400 uppercase tracking-wide">Monthly Estimate (฿)</label>
+                {!p.sgaMonthlyUserOverride && p.sgaActuals.length > 0 && <span className="text-[9px] font-medium text-[#1D9E75] bg-[#1D9E75]/10 px-1.5 py-0.5 rounded">Auto · avg of {p.sgaActuals.length} actuals</span>}
+                {p.sgaMonthlyUserOverride && <button onClick={() => p.setSgaMonthlyUserOverride(false)} className="text-[9px] text-gray-400 hover:text-[#1D9E75] underline transition-colors">Reset to auto</button>}
+              </div>
+              <input type="number" value={p.sgaMonthly} onChange={e => { p.setSgaMonthly(Number(e.target.value)); p.setSgaMonthlyUserOverride(true); }} className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-400 uppercase tracking-wide">Estimated Months Remaining</label>
+              <input type="number" value={p.sgaMonths} onChange={e => p.setSgaMonths(Number(e.target.value))} className="mt-1 w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums" />
+            </div>
+          </div>
+          <div className="bg-gray-50 rounded-md p-3 space-y-1">
+            <div className="flex justify-between text-xs"><span className="text-gray-500">{p.sgaActualMonthCount} actual months</span><span className="font-medium text-gray-700 tabular-nums">{fmtTHBCompact(p.sgaActualTotal)}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-gray-500">{p.sgaProjectedMonthCount} estimated months</span><span className="font-medium text-gray-500 tabular-nums">{fmtTHBCompact(p.sgaProjectedTotal)}</span></div>
+            <div className="flex justify-between text-xs border-t border-gray-200 pt-1"><span className="font-semibold text-gray-700">Total SG&A Burn</span><span className="font-bold text-[#E24B4A] tabular-nums">({fmtTHBCompact(p.totalSgaBurn)})</span></div>
+          </div>
+          {hasRole(p.profile?.role, FINANCE_ROLES) && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Enter Monthly Actuals</p>
+              <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
+                {(() => {
+                  const rows = [];
+                  const d = new Date(2025, 0, 1);
+                  const end = new Date(p.now.getFullYear(), p.now.getMonth() + 1, 1);
+                  while (d < end) {
+                    const y = d.getFullYear();
+                    const m = d.getMonth() + 1;
+                    const key = `${y}-${m}`;
+                    const hasActual = p.sgaActualMap.has(key);
+                    const monthLabel = format(new Date(y, m - 1, 1), 'MMM yy');
+                    const isSaving = !!p.sgaSaving[key];
+                    const isDirty = p.sgaEditValues[key] !== undefined && p.sgaEditValues[key] !== '';
+                    rows.push(
+                      <div key={key} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md transition-colors ${hasActual ? 'bg-[#1D9E75]/5' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                        <span className="text-[11px] font-medium text-gray-500 w-[46px] shrink-0 tabular-nums">{monthLabel}</span>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded w-[26px] text-center shrink-0 ${hasActual ? 'bg-[#1D9E75]/15 text-[#1D9E75]' : 'bg-gray-200 text-gray-400'}`}>{hasActual ? 'ACT' : 'EST'}</span>
+                        <input type="number" value={p.sgaEditValues[key] ?? ''} onChange={e => p.setSgaEditValues(prev => ({ ...prev, [key]: e.target.value }))} placeholder={hasActual ? String(p.sgaActualMap.get(key)) : String(p.sgaMonthly)} className={`flex-1 min-w-0 text-[11px] border rounded-md px-2 py-1 focus:outline-none focus:ring-1 tabular-nums bg-white ${hasActual ? 'border-[#1D9E75]/30 focus:ring-[#1D9E75]/30' : 'border-gray-200 focus:ring-gray-300 text-gray-400'}`} />
+                        <button onClick={() => p.saveSgaActual(y, m)} disabled={isSaving || !isDirty} title="Save" className={`shrink-0 w-6 h-6 flex items-center justify-center rounded transition-colors ${isDirty && !isSaving ? 'text-white bg-[#1D9E75] hover:bg-[#178a64]' : 'text-gray-300 bg-transparent cursor-default'}`}>
+                          {isSaving ? <span className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" /> : <Save size={10} />}
+                        </button>
+                      </div>
+                    );
+                    d.setMonth(d.getMonth() + 1);
+                  }
+                  return rows;
+                })()}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom line */}
+      <div className={`px-6 py-5 border-t-2 ${p.projectedEndingCash >= 0 ? 'border-[#1D9E75]/30 bg-[#1D9E75]/5' : 'border-[#E24B4A]/30 bg-[#E24B4A]/5'}`}>
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Projected Ending Cash Position</p>
+            <p className="text-[10px] text-gray-400">Net Financing + Adjustments + Project Cash − SG&A</p>
+          </div>
+          <div className="text-right">
+            <p className={`text-3xl font-bold tabular-nums ${p.projectedEndingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.projectedEndingCash >= 0 ? '+' : ''}{fmtTHB(p.projectedEndingCash)}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">{p.projectedEndingCash >= 0 ? 'Positive balance when all active projects complete' : 'Cash shortfall — review SG&A or adjust timeline'}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-4">
+          {[
+            { label: 'Financing', value: p.netFinancingCash },
+            { label: 'Adjustments', value: p.adjustmentsTotal },
+            { label: 'Historical Project', value: p.historicalProjectNet },
+            { label: 'Future Project', value: p.futureProjectNet },
+            { label: 'SG&A Burn', value: -p.totalSgaBurn },
+          ].map(item => (
+            <div key={item.label} className="flex items-center gap-1.5 bg-white/70 border border-gray-100 rounded-full px-3 py-1">
+              <span className="text-[10px] text-gray-500">{item.label}:</span>
+              <span className={`text-[10px] font-semibold tabular-nums ${item.value >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{item.value >= 0 ? '+' : ''}{fmtTHBCompact(item.value)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoanPositionsPanel({ loansReceived, loansGiven, overdueLoans, overdueLoanAmount, calcNetLiability, calcNetAsset, loading, navigate, now }: {
+  loansReceived: DashboardViewProps['loansReceived'];
+  loansGiven: DashboardViewProps['loansGiven'];
+  overdueLoans: DashboardViewProps['overdueLoans'];
+  overdueLoanAmount: number;
+  calcNetLiability: DashboardViewProps['calcNetLiability'];
+  calcNetAsset: DashboardViewProps['calcNetAsset'];
+  loading: boolean;
+  navigate: (path: string) => void;
+  now: Date;
+}) {
+  return (
+    <div className="bg-white rounded-lg border border-black/[0.08] p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Landmark size={15} className="text-gray-400" />
+          <h2 className="text-[13px] font-semibold text-gray-800">Loan Positions</h2>
+        </div>
+        {overdueLoanAmount > 0 && (
+          <div className="flex items-center gap-1.5 text-xs text-[#E24B4A] font-medium">
+            <AlertTriangle size={12} />
+            {fmtTHB(overdueLoanAmount)} overdue
+          </div>
+        )}
+      </div>
+      {loading ? (
+        <div className="grid grid-cols-2 gap-4">
+          {[0, 1].map(i => (
+            <div key={i} className="space-y-2">
+              <SkeletonLine w="w-1/2" h="h-2.5" />
+              {[0, 1].map(j => (
+                <div key={j} className="flex items-center justify-between p-2.5 border border-gray-100 rounded gap-2">
+                  <SkeletonLine w="w-1/2" />
+                  <SkeletonLine w="w-1/4" />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : loansReceived.length === 0 && loansGiven.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-10 space-y-2">
+          <Landmark size={28} className="text-gray-200" />
+          <p className="text-[13px] text-gray-400">No active loan positions</p>
+          <button onClick={() => navigate('/treasury')} className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors">Go to Treasury</button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <p className="text-xs text-gray-400 mb-2.5 font-medium uppercase tracking-wide">Loans Received</p>
+            {loansReceived.length === 0 ? <p className="text-xs text-gray-300 py-4 text-center">None</p> : (
+              <div className="space-y-1.5">
+                {loansReceived.map(loan => {
+                  const isOverdue = !!loan.due_date && new Date(loan.due_date) < now;
+                  const balance = calcNetLiability(loan);
+                  const displayName = (loan as any).name ?? (loan as any).counterparty?.name ?? '—';
+                  return (
+                    <div key={loan.id} className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border ${isOverdue ? 'border-[#E24B4A]/30 bg-[#E24B4A]/5' : 'border-gray-100 hover:bg-gray-50'} transition-colors`}>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-gray-700 truncate" title={displayName}>{displayName}</p>
+                        <p className={`text-[11px] mt-0.5 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-400'}`}>{loan.due_date ? formatDate(loan.due_date) : 'No due date'}{isOverdue && ' · Overdue'}</p>
+                      </div>
+                      <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-700'}`}>{fmtTHBCompact(balance)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-gray-400 mb-2.5 font-medium uppercase tracking-wide">Loans Given</p>
+            {loansGiven.length === 0 ? <p className="text-xs text-gray-300 py-4 text-center">None</p> : (
+              <div className="space-y-1.5">
+                {loansGiven.map(loan => {
+                  const balance = calcNetAsset(loan);
+                  const displayName = (loan as any).name ?? (loan as any).counterparty?.name ?? '—';
+                  const amountColor = balance > 0 ? 'text-[#1D9E75]' : balance < 0 ? 'text-[#E24B4A]' : 'text-gray-400';
+                  return (
+                    <div key={loan.id} className="flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-100 rounded-lg hover:bg-gray-50 transition-colors">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-gray-700 truncate" title={displayName}>{displayName}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{loan.due_date ? `Due ${formatDate(loan.due_date)}` : 'No due date'}</p>
+                      </div>
+                      <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${amountColor}`}>{fmtTHBCompact(balance)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CEO View
+// ---------------------------------------------------------------------------
+
+function CeoView(p: DashboardViewProps) {
+  return (
+    <div className="space-y-6">
+      {/* Large payment alerts */}
+      {p.ceoAlerts.length > 0 && (
+        <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={15} className="text-[#E24B4A] shrink-0" />
+            <span className="text-[13px] font-semibold text-[#E24B4A]">
+              Large Payment Alerts — {p.ceoAlerts.length} voucher{p.ceoAlerts.length !== 1 ? 's' : ''} ≥ ฿3M pending action
+            </span>
+          </div>
+          <div className="space-y-2">
+            {p.ceoAlerts.map(v => (
+              <div key={v.id} className="flex items-center justify-between bg-white rounded-md px-3 py-2.5 border border-[#E24B4A]/10">
+                <div>
+                  <span className="text-[13px] font-medium text-gray-800">Voucher {v.voucher_no}</span>
+                  <span className="text-xs text-gray-400 ml-2">{formatDate(v.voucher_date)}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[13px] font-semibold text-[#E24B4A]">{fmtTHB(v.net_paid)}</span>
+                  <Badge label={v.status.replace(/_/g, ' ')} variant={statusVariant(v.status)} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {p.loading ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />) : (
+          <>
+            <MetricCard title="Total Contract Value" value={fmtTHBCompact(p.totalContractValue)} sub={`${p.activeProjects.length} active project${p.activeProjects.length !== 1 ? 's' : ''}`} icon={<DollarSign size={18} />} accent="blue" />
+            <MetricCard title="Projected Ending Cash" value={fmtTHBCompact(Math.abs(p.projectedEndingCash))} sub={p.projectedEndingCash >= 0 ? 'Positive when all projects complete' : 'Cash shortfall projected'} icon={<TrendingUp size={18} />} accent={p.projectedEndingCash >= 0 ? 'green' : 'red'} />
+            <div onClick={() => p.pendingCount > 0 && p.navigate('/approvals')} className={p.pendingCount > 0 ? 'cursor-pointer' : ''}>
+              <MetricCard title="Awaiting My Action" value={String(p.pendingCount)} sub={getPendingLabel(p.profile?.role)} icon={p.pendingCount > 0 ? <AlertTriangle size={18} /> : <CheckSquare size={18} />} accent={p.pendingCount > 0 ? 'amber' : 'default'} />
+              {p.pendingCount > 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 font-medium px-1"><AlertTriangle size={11} />Urgent — tap to review</div>}
+            </div>
+            <div onClick={() => p.navigate('/cash-flow-planner')} className="cursor-pointer">
+              <MetricCard title="Net 90-Day Position" value={fmtTHBCompact(Math.abs(p.netPosition90))} sub={p.netPosition90 >= 0 ? 'Inflows ahead of outflows' : `Outflows exceed inflows — ${p.projectsAtRisk} project${p.projectsAtRisk !== 1 ? 's' : ''} at risk`} icon={<TrendingUp size={18} />} accent={p.netPosition90 >= 0 ? 'green' : 'red'} />
+              {p.netPosition90 < 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-[#E24B4A] font-medium px-1"><AlertTriangle size={11} />Tap to see forecast</div>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Cash Exposure Bar */}
+      {!p.loading && <CashExposureBar totalOutstandingReceivable={p.totalOutstandingReceivable} totalOutstandingPayable={p.totalOutstandingPayable} trueExposure={p.trueExposure} />}
+
+      {/* Lifetime Margin + Forward Margin */}
+      {!p.loading && (
+        <div className={`rounded-lg border p-5 ${p.lifetimeMargin >= 0 ? 'bg-[#1D9E75]/5 border-[#1D9E75]/25' : 'bg-[#E24B4A]/5 border-[#E24B4A]/25'}`}>
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp size={14} className={p.lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'} />
+            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — Lifetime Project Margin</h2>
+            <span className="text-xs text-gray-400 ml-1">Absolute contract economics — total signed revenue minus total committed costs</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white rounded-lg border border-black/[0.06] p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Total Contract Value</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(p.totalContractValue)}</p>
+              <p className="text-xs text-gray-400 mt-1">Total expected cash in (all signed client contracts)</p>
+              <div className="mt-2 space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]"><span className="text-gray-400">Collected to date</span><span className="font-medium text-gray-700">{fmtTHBCompact(p.clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span></div>
+                <div className="flex items-center justify-between text-[11px]"><span className="text-gray-400">Remaining to collect</span><span className="font-medium text-gray-700">{fmtTHBCompact(p.totalContractValue - p.clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span></div>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg border border-black/[0.06] p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Total PO Commitments</p>
+              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(p.totalCommitments)}</p>
+              <p className="text-xs text-gray-400 mt-1">Total expected cash out (all approved supplier POs)</p>
+              <div className="mt-2 space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]"><span className="text-gray-400">Paid to suppliers</span><span className="font-medium text-gray-700">{fmtTHBCompact(p.vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span></div>
+                <div className="flex items-center justify-between text-[11px]"><span className="text-gray-400">Remaining to pay</span><span className="font-medium text-gray-700">{fmtTHBCompact(p.totalCommitments - p.vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span></div>
+              </div>
+            </div>
+            <div className={`rounded-lg border p-4 ${p.lifetimeMargin >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Lifetime Net Margin</p>
+              <p className={`text-xl font-bold tabular-nums ${p.lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.lifetimeMargin >= 0 ? '+' : ''}{fmtTHBCompact(p.lifetimeMargin)}</p>
+              <p className="text-xs text-gray-400 mt-1">{p.lifetimeMargin >= 0 ? 'Contracts exceed commitments — project portfolio is profitable' : 'Commitments exceed contracts — portfolio margin is negative'}</p>
+              {p.totalContractValue > 0 && <p className="text-[11px] font-semibold mt-2" style={{ color: p.lifetimeMargin >= 0 ? '#1D9E75' : '#E24B4A' }}>{((p.lifetimeMargin / p.totalContractValue) * 100).toFixed(1)}% margin</p>}
+            </div>
+          </div>
+          {/* Forward Margin Banner */}
+          <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-5 py-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div className="flex items-center gap-2 min-w-0">
+                <ArrowRight size={13} className="text-gray-400 shrink-0" />
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Forward Margin — Remaining Cash Flow</p>
+                  <p className="text-xs text-gray-400 mt-0.5">All uninvoiced receivables and unpaid payables still ahead of today</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-0.5">Remaining to Collect</p>
+                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(p.totalOutstandingReceivable)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Client invoices + milestones</p>
+                </div>
+                <span className="text-lg font-light text-gray-300">−</span>
+                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-0.5">Remaining to Pay</p>
+                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(p.totalOutstandingPayable)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Vendor invoices + PO milestones</p>
+                </div>
+                <span className="text-lg font-light text-gray-300">=</span>
+                <div className={`rounded border px-3 py-2 text-center min-w-[130px] ${p.trueExposure >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">Forward Margin</p>
+                  <p className={`text-[15px] font-bold tabular-nums ${p.trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{p.trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(p.trueExposure)}</p>
+                  {p.totalOutstandingReceivable > 0 && <p className={`text-[10px] font-semibold mt-0.5 ${p.trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{((p.trueExposure / p.totalOutstandingReceivable) * 100).toFixed(1)}% of remaining revenue</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Treasury Waterfall */}
+      {!p.loading && <TreasuryWaterfallPanel {...p} />}
+
+      {/* Project cash positions + Approval Queue */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2">
+          <ProjectCashTable projectCashPositions={p.projectCashPositions} pendingClientInvoices={p.pendingClientInvoices} chartReceivedInvoices={p.chartReceivedInvoices} chartUninvoicedMilestones={p.chartUninvoicedMilestones} clientMilestonesAll={p.clientMilestonesAll} thirtyDayKey={p.thirtyDayKey} loading={p.loading} navigate={p.navigate} />
+        </div>
+        <div className="xl:col-span-1">
+          <ApprovalQueuePanel queueItems={p.queueItems} pendingCount={p.pendingCount} profile={p.profile} navigate={p.navigate} loading={p.loading} />
+        </div>
+      </div>
+
+      {/* Loan Positions */}
+      <LoanPositionsPanel loansReceived={p.loansReceived} loansGiven={p.loansGiven} overdueLoans={p.overdueLoans} overdueLoanAmount={p.overdueLoanAmount} calcNetLiability={p.calcNetLiability} calcNetAsset={p.calcNetAsset} loading={p.loading} navigate={p.navigate} now={p.now} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Accounts Manager View
+// ---------------------------------------------------------------------------
+
+function AccountsView(p: DashboardViewProps) {
+  return (
+    <div className="space-y-6">
+      {/* KPI row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {p.loading ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />) : (
+          <>
+            <MetricCard title="Received This Year" value={fmtTHBCompact(p.totalReceivedThisYear)} sub={`${new Date().getFullYear()} YTD, net of WHT`} icon={<TrendingUp size={18} />} accent="green" />
+            <MetricCard title="Projected Ending Cash" value={fmtTHBCompact(Math.abs(p.projectedEndingCash))} sub={p.projectedEndingCash >= 0 ? 'Positive when all projects complete' : 'Cash shortfall projected'} icon={<TrendingUp size={18} />} accent={p.projectedEndingCash >= 0 ? 'green' : 'red'} />
+            <div onClick={() => p.pendingCount > 0 && p.navigate('/approvals')} className={p.pendingCount > 0 ? 'cursor-pointer' : ''}>
+              <MetricCard title="Awaiting My Action" value={String(p.pendingCount)} sub={getPendingLabel(p.profile?.role)} icon={p.pendingCount > 0 ? <AlertTriangle size={18} /> : <CheckSquare size={18} />} accent={p.pendingCount > 0 ? 'amber' : 'default'} />
+              {p.pendingCount > 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 font-medium px-1"><AlertTriangle size={11} />Urgent — tap to review</div>}
+            </div>
+            <div onClick={() => p.navigate('/cash-flow-planner')} className="cursor-pointer">
+              <MetricCard title="Net 90-Day Position" value={fmtTHBCompact(Math.abs(p.netPosition90))} sub={p.netPosition90 >= 0 ? 'Inflows ahead of outflows' : `Outflows exceed inflows — ${p.projectsAtRisk} project${p.projectsAtRisk !== 1 ? 's' : ''} at risk`} icon={<TrendingUp size={18} />} accent={p.netPosition90 >= 0 ? 'green' : 'red'} />
+              {p.netPosition90 < 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-[#E24B4A] font-medium px-1"><AlertTriangle size={11} />Tap to see forecast</div>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Cash Exposure Bar */}
+      {!p.loading && <CashExposureBar totalOutstandingReceivable={p.totalOutstandingReceivable} totalOutstandingPayable={p.totalOutstandingPayable} trueExposure={p.trueExposure} />}
+
+      {/* Receivables + Payables pipelines */}
+      {p.loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}</div>
+      ) : (
+        <ReceivablesPipelinePanel totalOutstandingReceivable={p.totalOutstandingReceivable} pendingReceivables={p.pendingReceivables} notYetInvoicedTotal={p.notYetInvoicedTotal} />
+      )}
+      {p.loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}</div>
+      ) : (
+        <PayablesPipelinePanel totalOutstandingPayable={p.totalOutstandingPayable} colO_Cost={p.colO_Cost} colP1_Cost={p.colP1_Cost} setIsPipelineModalOpen={p.setIsPipelineModalOpen} />
+      )}
+
+      {/* Treasury Waterfall */}
+      {!p.loading && <TreasuryWaterfallPanel {...p} />}
+
+      {/* Approval Queue + Project Cash */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-1">
+          <ApprovalQueuePanel queueItems={p.queueItems} pendingCount={p.pendingCount} profile={p.profile} navigate={p.navigate} loading={p.loading} />
+        </div>
+        <div className="xl:col-span-2">
+          <ProjectCashTable projectCashPositions={p.projectCashPositions} pendingClientInvoices={p.pendingClientInvoices} chartReceivedInvoices={p.chartReceivedInvoices} chartUninvoicedMilestones={p.chartUninvoicedMilestones} clientMilestonesAll={p.clientMilestonesAll} thirtyDayKey={p.thirtyDayKey} loading={p.loading} navigate={p.navigate} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cost Controller View
+// ---------------------------------------------------------------------------
+
+function CostControllerView(p: DashboardViewProps) {
+  return (
+    <div className="space-y-6">
+      {/* KPI row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {p.loading ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />) : (
+          <>
+            <MetricCard title="Total Contract Value" value={fmtTHBCompact(p.totalContractValue)} sub={`${p.activeProjects.length} active project${p.activeProjects.length !== 1 ? 's' : ''}`} icon={<DollarSign size={18} />} accent="blue" />
+            <MetricCard title="Outstanding Payable" value={fmtTHBCompact(p.totalOutstandingPayable)} sub="Vendor invoices + PO milestones" icon={<Clock size={18} />} accent={p.totalOutstandingPayable > 0 ? 'red' : 'default'} />
+            <div onClick={() => p.navigate('/cash-flow-planner')} className="cursor-pointer">
+              <MetricCard title="Net 90-Day Position" value={fmtTHBCompact(Math.abs(p.netPosition90))} sub={p.netPosition90 >= 0 ? 'Inflows ahead of outflows' : `Outflows exceed inflows — ${p.projectsAtRisk} project${p.projectsAtRisk !== 1 ? 's' : ''} at risk`} icon={<TrendingUp size={18} />} accent={p.netPosition90 >= 0 ? 'green' : 'red'} />
+            </div>
+            <div onClick={() => p.pendingCount > 0 && p.navigate('/approvals')} className={p.pendingCount > 0 ? 'cursor-pointer' : ''}>
+              <MetricCard title="Awaiting My Action" value={String(p.pendingCount)} sub={getPendingLabel(p.profile?.role)} icon={p.pendingCount > 0 ? <AlertTriangle size={18} /> : <CheckSquare size={18} />} accent={p.pendingCount > 0 ? 'amber' : 'default'} />
+              {p.pendingCount > 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 font-medium px-1"><AlertTriangle size={11} />Urgent — tap to review</div>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Payables focus — the Cost Controller's primary financial concern */}
+      {p.loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}</div>
+      ) : (
+        <PayablesPipelinePanel totalOutstandingPayable={p.totalOutstandingPayable} colO_Cost={p.colO_Cost} colP1_Cost={p.colP1_Cost} setIsPipelineModalOpen={p.setIsPipelineModalOpen} />
+      )}
+
+      {/* Project cash + Approval Queue */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2">
+          <ProjectCashTable projectCashPositions={p.projectCashPositions} pendingClientInvoices={p.pendingClientInvoices} chartReceivedInvoices={p.chartReceivedInvoices} chartUninvoicedMilestones={p.chartUninvoicedMilestones} clientMilestonesAll={p.clientMilestonesAll} thirtyDayKey={p.thirtyDayKey} loading={p.loading} navigate={p.navigate} />
+        </div>
+        <div className="xl:col-span-1">
+          <ApprovalQueuePanel queueItems={p.queueItems} pendingCount={p.pendingCount} profile={p.profile} navigate={p.navigate} loading={p.loading} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Generic View (EVP, Construction Manager, Accounts Supervisor, Procurement, etc.)
+// ---------------------------------------------------------------------------
+
+function GenericView(p: DashboardViewProps) {
+  return (
+    <div className="space-y-6">
+      {/* KPI row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {p.loading ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />) : (
+          <>
+            <MetricCard title="Total Contract Value" value={fmtTHBCompact(p.totalContractValue)} sub={`${p.activeProjects.length} active project${p.activeProjects.length !== 1 ? 's' : ''}`} icon={<DollarSign size={18} />} accent="blue" />
+            <MetricCard title="Received This Year" value={fmtTHBCompact(p.totalReceivedThisYear)} sub={`${new Date().getFullYear()} YTD, net of WHT`} icon={<TrendingUp size={18} />} accent="green" />
+            <div onClick={() => p.pendingCount > 0 && p.navigate('/approvals')} className={p.pendingCount > 0 ? 'cursor-pointer' : ''}>
+              <MetricCard title="Awaiting My Action" value={String(p.pendingCount)} sub={getPendingLabel(p.profile?.role)} icon={p.pendingCount > 0 ? <AlertTriangle size={18} /> : <CheckSquare size={18} />} accent={p.pendingCount > 0 ? 'amber' : 'default'} />
+              {p.pendingCount > 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 font-medium px-1"><AlertTriangle size={11} />Urgent — tap to review</div>}
+            </div>
+            <div onClick={() => p.navigate('/cash-flow-planner')} className="cursor-pointer">
+              <MetricCard title="Net 90-Day Position" value={fmtTHBCompact(Math.abs(p.netPosition90))} sub={p.netPosition90 >= 0 ? 'Inflows ahead of outflows' : `Outflows exceed inflows — ${p.projectsAtRisk} project${p.projectsAtRisk !== 1 ? 's' : ''} at risk`} icon={<TrendingUp size={18} />} accent={p.netPosition90 >= 0 ? 'green' : 'red'} />
+              {p.netPosition90 < 0 && <div className="mt-1 flex items-center gap-1 text-[11px] text-[#E24B4A] font-medium px-1"><AlertTriangle size={11} />Tap to see forecast</div>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Receivables + Payables */}
+      {p.loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}</div>
+      ) : (
+        <ReceivablesPipelinePanel totalOutstandingReceivable={p.totalOutstandingReceivable} pendingReceivables={p.pendingReceivables} notYetInvoicedTotal={p.notYetInvoicedTotal} />
+      )}
+      {p.loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}</div>
+      ) : (
+        <PayablesPipelinePanel totalOutstandingPayable={p.totalOutstandingPayable} colO_Cost={p.colO_Cost} colP1_Cost={p.colP1_Cost} setIsPipelineModalOpen={p.setIsPipelineModalOpen} />
+      )}
+
+      {/* Project cash + Approval Queue */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div className="xl:col-span-2">
+          <ProjectCashTable projectCashPositions={p.projectCashPositions} pendingClientInvoices={p.pendingClientInvoices} chartReceivedInvoices={p.chartReceivedInvoices} chartUninvoicedMilestones={p.chartUninvoicedMilestones} clientMilestonesAll={p.clientMilestonesAll} thirtyDayKey={p.thirtyDayKey} loading={p.loading} navigate={p.navigate} />
+        </div>
+        <div className="xl:col-span-1">
+          <ApprovalQueuePanel queueItems={p.queueItems} pendingCount={p.pendingCount} profile={p.profile} navigate={p.navigate} loading={p.loading} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -968,14 +2045,105 @@ export default function Dashboard() {
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <AlertTriangle size={32} className="text-[#E24B4A]" />
         <p className="text-sm text-gray-600">{error}</p>
-        <button
-          onClick={loadData}
-          className="text-sm px-4 py-2 bg-[#0f1923] text-white rounded-lg hover:bg-gray-800 transition-colors"
-        >
-          Retry
-        </button>
+        <button onClick={loadData} className="text-sm px-4 py-2 bg-[#0f1923] text-white rounded-lg hover:bg-gray-800 transition-colors">Retry</button>
       </div>
     );
+  }
+
+  // Build the shared props bag passed into every view component
+  const viewProps: DashboardViewProps = {
+    profile,
+    loading,
+    navigate,
+    activeProjects,
+    totalContractValue,
+    totalCommitments,
+    lifetimeMargin,
+    totalReceivedThisYear,
+    pendingCount,
+    netPosition90,
+    projectsAtRisk,
+    totalOutstandingReceivable,
+    pendingReceivables,
+    notYetInvoicedTotal,
+    totalOutstandingPayable,
+    colO_Cost,
+    colP1_Cost,
+    trueExposure,
+    historicalCashIn,
+    historicalCashOut,
+    historicalProjectNet,
+    futureProjectNet,
+    netFinancingCash,
+    totalNetLiability,
+    totalNetAsset,
+    borrowingFacilities,
+    lendingFacilities,
+    loansReceived,
+    loansGiven,
+    overdueLoans,
+    overdueLoanAmount,
+    calcNetLiability,
+    calcNetAsset,
+    sgaActuals,
+    sgaActualTotal,
+    sgaProjectedTotal,
+    sgaActualMonthCount,
+    sgaProjectedMonthCount,
+    sgaMonthly,
+    sgaMonths,
+    setSgaMonthly,
+    setSgaMonths,
+    sgaMonthlyUserOverride,
+    setSgaMonthlyUserOverride,
+    sgaActualMap,
+    sgaEditValues,
+    setSgaEditValues,
+    sgaSaving,
+    saveSgaActual,
+    totalSgaBurn,
+    adjustmentsTotal,
+    selectedYearAdjustments,
+    selectedFiscalYear,
+    setSelectedFiscalYear,
+    adjLabel,
+    setAdjLabel,
+    adjAmount,
+    setAdjAmount,
+    adjSaving,
+    addAdjustment,
+    deleteAdjustment,
+    treasuryAdjustments,
+    projectedEndingCash,
+    projectCashPositions,
+    pendingClientInvoices,
+    chartReceivedInvoices,
+    chartUninvoicedMilestones,
+    clientMilestonesAll,
+    clientInvoiceReceipts,
+    vendorInvoicePaid,
+    thirtyDayKey,
+    queueItems,
+    pendingCostings,
+    vouchers,
+    ceoAlerts,
+    setIsPipelineModalOpen,
+    now,
+  };
+
+  // Select the appropriate view based on role
+  function renderRoleView() {
+    switch (profile?.role) {
+      case 'ceo':
+        return <CeoView {...viewProps} />;
+      case 'accounts_manager':
+      case 'accounts_supervisor':
+        return <AccountsView {...viewProps} />;
+      case 'cost_controller':
+        return <CostControllerView {...viewProps} />;
+      default:
+        return <GenericView {...viewProps} />;
+    }
   }
 
   return (
@@ -988,1103 +2156,15 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* CEO: large payment alert panel */}
-      {profile?.role === 'ceo' && ceoAlerts.length > 0 && (
-        <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertTriangle size={15} className="text-[#E24B4A] shrink-0" />
-            <span className="text-[13px] font-semibold text-[#E24B4A]">
-              Large Payment Alerts — {ceoAlerts.length} voucher
-              {ceoAlerts.length !== 1 ? 's' : ''} ≥ ฿3M pending action
-            </span>
-          </div>
-          <div className="space-y-2">
-            {ceoAlerts.map((v) => (
-              <div
-                key={v.id}
-                className="flex items-center justify-between bg-white rounded-md px-3 py-2.5 border border-[#E24B4A]/10"
-              >
-                <div>
-                  <span className="text-[13px] font-medium text-gray-800">
-                    Voucher {v.voucher_no}
-                  </span>
-                  <span className="text-xs text-gray-400 ml-2">
-                    {formatDate(v.voucher_date)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-[13px] font-semibold text-[#E24B4A]">
-                    {fmtTHB(v.net_paid)}
-                  </span>
-                  <Badge
-                    label={v.status.replace(/_/g, ' ')}
-                    variant={statusVariant(v.status)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Role-specific view */}
+      {renderRoleView()}
 
-      {/* Row 1 — four primary KPI cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {loading ? (
-          Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />)
-        ) : (
-          <>
-            <MetricCard
-              title="Total Contract Value"
-              value={fmtTHBCompact(totalContractValue)}
-              sub={`${activeProjects.length} active project${activeProjects.length !== 1 ? 's' : ''}`}
-              icon={<DollarSign size={18} />}
-              accent="blue"
-            />
-            <MetricCard
-              title="Received This Year"
-              value={fmtTHBCompact(totalReceivedThisYear)}
-              sub={`${new Date().getFullYear()} YTD, net of WHT`}
-              icon={<TrendingUp size={18} />}
-              accent="green"
-            />
-            <div
-              onClick={() => pendingCount > 0 && navigate('/approvals')}
-              className={pendingCount > 0 ? 'cursor-pointer' : ''}
-            >
-              <MetricCard
-                title="Awaiting My Action"
-                value={String(pendingCount)}
-                sub={getPendingLabel(profile?.role)}
-                icon={pendingCount > 0 ? <AlertTriangle size={18} /> : <CheckSquare size={18} />}
-                accent={pendingCount > 0 ? 'amber' : 'default'}
-              />
-              {pendingCount > 0 && (
-                <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-600 font-medium px-1">
-                  <AlertTriangle size={11} />
-                  Urgent — tap to review
-                </div>
-              )}
-            </div>
-            <div
-              onClick={() => setChartMode('forecast')}
-              className="cursor-pointer"
-            >
-              <MetricCard
-                title="Net 90-Day Position"
-                value={fmtTHBCompact(Math.abs(netPosition90))}
-                sub={
-                  netPosition90 >= 0
-                    ? 'Inflows ahead of outflows'
-                    : `Outflows exceed inflows — ${projectsAtRisk} project${projectsAtRisk !== 1 ? 's' : ''} at risk`
-                }
-                icon={<TrendingUp size={18} />}
-                accent={netPosition90 >= 0 ? 'green' : 'red'}
-              />
-              {netPosition90 < 0 && (
-                <div className="mt-1 flex items-center gap-1 text-[11px] text-[#E24B4A] font-medium px-1">
-                  <AlertTriangle size={11} />
-                  Tap to see forecast
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Row 2 — Receivables panel */}
-      {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Clock size={14} className="text-gray-400" />
-            <h2 className="text-[13px] font-semibold text-gray-800">Receivables Pipeline</h2>
-            <span className="text-xs text-gray-400 ml-1">— what we are still owed across active projects</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-0 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-            {/* Col 1: Total outstanding */}
-            <div className="md:pr-6 pb-4 md:pb-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Total Outstanding Receivable</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
-              <p className="text-xs text-gray-400 mt-1">Column O + Column P combined</p>
-              {/* Progress bar: invoiced vs uninvoiced */}
-              {totalOutstandingReceivable > 0 && (
-                <div className="mt-3">
-                  <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
-                    <div
-                      className="h-full bg-amber-400 rounded-l-full transition-all"
-                      style={{ width: `${Math.round((pendingReceivables / totalOutstandingReceivable) * 100)}%` }}
-                    />
-                    <div
-                      className="h-full bg-[#1D9E75]/30 rounded-r-full transition-all"
-                      style={{ width: `${Math.round((notYetInvoicedTotal / totalOutstandingReceivable) * 100)}%` }}
-                    />
-                  </div>
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />
-                      Invoiced {Math.round((pendingReceivables / totalOutstandingReceivable) * 100)}%
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-[#1D9E75]/40" />
-                      Pipeline {Math.round((notYetInvoicedTotal / totalOutstandingReceivable) * 100)}%
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-            {/* Col 2: Invoiced awaiting payment (Column O) */}
-            <div className="md:px-6 py-4 md:py-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Invoiced — Awaiting Payment</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(pendingReceivables)}</p>
-              <p className="text-xs text-gray-400 mt-1">Column O — billed, payment not yet received</p>
-              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
-                <Clock size={11} />
-                Awaiting client payment
-              </div>
-            </div>
-            {/* Col 3: Not yet invoiced (Column P) */}
-            <div className="md:pl-6 pt-4 md:pt-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Uninvoiced Pipeline</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(notYetInvoicedTotal)}</p>
-              <p className="text-xs text-gray-400 mt-1">Column P — milestones not yet billed</p>
-              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#1D9E75] font-medium">
-                <TrendingUp size={11} />
-                Future revenue to invoice
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Row 3 — Payables Pipeline */}
-      {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => <MetricCardSkeleton key={i} />)}
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Clock size={14} className="text-gray-400" />
-            <h2 className="text-[13px] font-semibold text-gray-800">Payables Pipeline</h2>
-            <span className="text-xs text-gray-400 ml-1">— what we still owe across active projects</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-0 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-            {/* Col 1: Total outstanding payable */}
-            <div className="md:pr-6 pb-4 md:pb-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Total Outstanding Payable</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
-              <p className="text-xs text-gray-400 mt-1">Col O + Col P — ties to Monthly Analyzer pivot tables</p>
-              {totalOutstandingPayable > 0 && (
-                <div className="mt-3">
-                  <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
-                    <div
-                      className="h-full bg-[#E24B4A] rounded-l-full transition-all"
-                      style={{ width: `${Math.round((colO_Cost / totalOutstandingPayable) * 100)}%` }}
-                    />
-                    <div
-                      className="h-full bg-amber-400 rounded-r-full transition-all"
-                      style={{ width: `${Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%` }}
-                    />
-                  </div>
-                  <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                    <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-[#E24B4A]" />
-                      Invoice Balance {Math.round((colO_Cost / totalOutstandingPayable) * 100)}%
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-gray-400">
-                      <span className="inline-block w-2 h-2 rounded-sm bg-amber-400" />
-                      Yet to Invoice {Math.round((colP1_Cost / totalOutstandingPayable) * 100)}%
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-            {/* Col 2: Invoiced — awaiting payment (Column O) */}
-            <div className="md:px-6 py-4 md:py-0">
-              {colO_Cost > 0 ? (
-                <div className="relative p-4 -mx-4 rounded-xl overflow-hidden shadow-sm">
-                  {/* Spinning comet-tail border */}
-                  <div
-                    className="absolute -inset-[150%] bg-[conic-gradient(from_0deg,transparent_0_340deg,#E24B4A_360deg)]"
-                    style={{ animation: 'spin 1.5s linear 3 forwards' }}
-                  />
-                  {/* Inner white mask */}
-                  <div className="absolute inset-[2px] bg-white rounded-xl border border-[#E24B4A]/20" />
-                  {/* Content */}
-                  <div className="relative z-10">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">
-                      Supplier Invoiced — Unpaid
-                    </p>
-                    <p className="text-2xl font-bold text-gray-900 tabular-nums">
-                      {fmtTHBCompact(colO_Cost)}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Column O — invoiced by supplier, unpaid
-                    </p>
-                    <div className="mt-3 flex items-center gap-1.5 text-[11px] text-[#E24B4A] font-medium">
-                      <Clock size={11} className="animate-pulse" />
-                      Awaiting payment processing
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 -mx-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
-                    Supplier Invoiced — Unpaid
-                  </p>
-                  <p className="text-2xl font-bold text-gray-900 tabular-nums">฿0</p>
-                  <p className="text-xs text-gray-400 mt-1">Column O — invoiced by supplier, unpaid</p>
-                </div>
-              )}
-            </div>
-            {/* Col 3: Yet to Invoice (Column P) — clickable to open pipeline modal */}
-            <div
-              className="md:pl-6 pt-4 md:pt-0 cursor-pointer rounded-lg p-3 -m-3 hover:bg-amber-50 transition-colors group"
-              onClick={() => setIsPipelineModalOpen(true)}
-              title="Click to view Yet to Invoice pipeline breakdown"
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 mb-1">Yet to Invoice (Col P)</p>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums group-hover:text-amber-700 transition-colors">{fmtTHBCompact(colP1_Cost)}</p>
-              <p className="text-xs text-gray-400 mt-1">PO milestones not yet invoiced — 1:1 matched</p>
-              <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-600 font-medium">
-                <Clock size={11} />
-                Click to view full pipeline
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CEO Metric: Lifetime Project Margin */}
-      {!loading && profile?.role === 'ceo' && (
-        <div className={`rounded-lg border p-5 ${lifetimeMargin >= 0 ? 'bg-[#1D9E75]/5 border-[#1D9E75]/25' : 'bg-[#E24B4A]/5 border-[#E24B4A]/25'}`}>
-          <div className="flex items-center gap-2 mb-3">
-            <TrendingUp size={14} className={lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'} />
-            <h2 className="text-[13px] font-semibold text-gray-800">CEO Metric — Lifetime Project Margin</h2>
-            <span className="text-xs text-gray-400 ml-1">Absolute contract economics — total signed revenue minus total committed costs</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-1">Total Contract Value</p>
-              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalContractValue)}</p>
-              <p className="text-xs text-gray-400 mt-1">Total expected cash in (all signed client contracts)</p>
-              <div className="mt-2 space-y-0.5">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Collected to date</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Remaining to collect</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalContractValue - clientInvoiceReceipts.reduce((s, r) => s + r.received_amount, 0))}</span>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg border border-black/[0.06] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-1">Total PO Commitments</p>
-              <p className="text-xl font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalCommitments)}</p>
-              <p className="text-xs text-gray-400 mt-1">Total expected cash out (all approved supplier POs)</p>
-              <div className="mt-2 space-y-0.5">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Paid to suppliers</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-gray-400">Remaining to pay</span>
-                  <span className="font-medium text-gray-700">{fmtTHBCompact(totalCommitments - vendorInvoicePaid.reduce((s, v) => s + v.net_paid, 0))}</span>
-                </div>
-              </div>
-            </div>
-            <div className={`rounded-lg border p-4 ${lifetimeMargin >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Lifetime Net Margin</p>
-              <p className={`text-xl font-bold tabular-nums ${lifetimeMargin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                {lifetimeMargin >= 0 ? '+' : ''}{fmtTHBCompact(lifetimeMargin)}
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {lifetimeMargin >= 0
-                  ? 'Contracts exceed commitments — project portfolio is profitable'
-                  : 'Commitments exceed contracts — portfolio margin is negative'}
-              </p>
-              {totalContractValue > 0 && (
-                <p className="text-[11px] font-semibold mt-2" style={{ color: lifetimeMargin >= 0 ? '#1D9E75' : '#E24B4A' }}>
-                  {((lifetimeMargin / totalContractValue) * 100).toFixed(1)}% margin
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Forward Margin banner — remaining cash flow from today onwards */}
-          <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-5 py-4">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-              {/* Label */}
-              <div className="flex items-center gap-2 min-w-0">
-                <ArrowRight size={13} className="text-gray-400 shrink-0" />
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Forward Margin — Remaining Cash Flow</p>
-                  <p className="text-xs text-gray-400 mt-0.5">All uninvoiced receivables and unpaid payables still ahead of today</p>
-                </div>
-              </div>
-
-              {/* Equation row */}
-              <div className="flex items-center gap-3 flex-wrap">
-                {/* Remaining In */}
-                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#1D9E75] mb-0.5">Remaining to Collect</p>
-                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Client invoices + milestones</p>
-                </div>
-
-                <span className="text-lg font-light text-gray-300">−</span>
-
-                {/* Remaining Out */}
-                <div className="bg-white rounded border border-black/[0.06] px-3 py-2 text-center min-w-[130px]">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[#E24B4A] mb-0.5">Remaining to Pay</p>
-                  <p className="text-[15px] font-bold text-gray-900 tabular-nums">{fmtTHBCompact(totalOutstandingPayable)}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Vendor invoices + PO milestones</p>
-                </div>
-
-                <span className="text-lg font-light text-gray-300">=</span>
-
-                {/* Forward Margin result */}
-                <div className={`rounded border px-3 py-2 text-center min-w-[130px] ${trueExposure >= 0 ? 'bg-[#1D9E75]/8 border-[#1D9E75]/30' : 'bg-[#E24B4A]/8 border-[#E24B4A]/30'}`}>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">Forward Margin</p>
-                  <p className={`text-[15px] font-bold tabular-nums ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                    {trueExposure >= 0 ? '+' : ''}{fmtTHBCompact(trueExposure)}
-                  </p>
-                  {totalOutstandingReceivable > 0 && (
-                    <p className={`text-[10px] font-semibold mt-0.5 ${trueExposure >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                      {((trueExposure / totalOutstandingReceivable) * 100).toFixed(1)}% of remaining revenue
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Treasury Cash Waterfall — CEO and Accounts Manager */}
-      {!loading && (profile?.role === 'ceo' || profile?.role === 'accounts_manager') && (
-        <div className="bg-white rounded-lg border border-black/[0.08] overflow-hidden">
-          {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-[#0f1923]">
-            <div className="flex items-center gap-2.5">
-              <Building2 size={15} className="text-white/60" />
-              <h2 className="text-[13px] font-semibold text-white">Treasury Cash Waterfall</h2>
-              <span className="text-xs text-white/40 ml-1">— projected bank balance when all active projects complete</span>
-            </div>
-            {/* Fiscal year selector for adjustments */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-white/50">Adjustments Year:</span>
-              <div className="relative">
-                <select
-                  value={selectedFiscalYear}
-                  onChange={e => setSelectedFiscalYear(Number(e.target.value))}
-                  className="appearance-none text-xs bg-white/10 text-white border border-white/20 rounded-md px-2.5 py-1 pr-6 cursor-pointer focus:outline-none"
-                >
-                  {[2024, 2025, 2026, 2027, 2028].map(y => (
-                    <option key={y} value={y} className="text-gray-900 bg-white">{y}</option>
-                  ))}
-                </select>
-                <ChevronDown size={11} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-white/50 pointer-events-none" />
-              </div>
-            </div>
-          </div>
-
-          {/* Four-column grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
-
-            {/* Column 1 — Financing */}
-            <div className="p-5 space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Financing Position</p>
-              {/* Net position headline */}
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Net financing cash</p>
-                <p className={`text-xl font-bold tabular-nums ${netFinancingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                  {netFinancingCash >= 0 ? '+' : ''}{fmtTHBCompact(netFinancingCash)}
-                </p>
-                <p className="text-[10px] text-gray-400 mt-0.5">Borrowing liabilities minus lending assets</p>
-              </div>
-              {/* Net Liability — borrowings */}
-              {totalNetLiability > 0 && (
-                <div className="bg-amber-50 border border-amber-100 rounded-md p-2.5">
-                  <p className="text-[11px] text-amber-700 font-medium">Net Liability (Borrowings)</p>
-                  <p className="text-sm font-bold text-amber-800 tabular-nums">{fmtTHBCompact(totalNetLiability)}</p>
-                  <p className="text-[10px] text-amber-600 mt-0.5">Outstanding debt — must be repaid</p>
-                </div>
-              )}
-              {/* Net Asset — lending */}
-              {totalNetAsset > 0 && (
-                <div className="bg-emerald-50 border border-emerald-100 rounded-md p-2.5">
-                  <p className="text-[11px] text-emerald-700 font-medium">Net Asset (Lending)</p>
-                  <p className="text-sm font-bold text-emerald-800 tabular-nums">{fmtTHBCompact(totalNetAsset)}</p>
-                  <p className="text-[10px] text-emerald-600 mt-0.5">Outstanding receivable from borrowers</p>
-                </div>
-              )}
-              {borrowingFacilities.length === 0 && lendingFacilities.length === 0 && (
-                <p className="text-xs text-gray-300 text-center py-3">No facilities recorded</p>
-              )}
-            </div>
-
-            {/* Column 2 — One-Time Adjustments */}
-            <div className="p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">One-Time Adjustments</p>
-                <span className="text-[10px] text-gray-400">{selectedFiscalYear}</span>
-              </div>
-
-              {/* List of adjustments for selected year */}
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {selectedYearAdjustments.length === 0 ? (
-                  <p className="text-xs text-gray-300 text-center py-3">No adjustments for {selectedFiscalYear}</p>
-                ) : (
-                  selectedYearAdjustments.map(adj => (
-                    <div key={adj.id} className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-gray-50 group">
-                      <span className="text-xs text-gray-700 truncate flex-1">{adj.label}</span>
-                      <span className={`text-xs font-semibold tabular-nums shrink-0 ${Number(adj.amount) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                        {Number(adj.amount) >= 0 ? '+' : ''}{fmtTHBCompact(Number(adj.amount))}
-                      </span>
-                      <button
-                        onClick={() => deleteAdjustment(adj.id)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-300 hover:text-[#E24B4A] shrink-0"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Subtotal for selected year */}
-              {selectedYearAdjustments.length > 0 && (
-                <div className="flex items-center justify-between pt-1 border-t border-gray-100">
-                  <span className="text-[10px] text-gray-400">{selectedFiscalYear} subtotal</span>
-                  <span className={`text-xs font-bold tabular-nums ${selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                    {selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0) >= 0 ? '+' : ''}
-                    {fmtTHBCompact(selectedYearAdjustments.reduce((s, a) => s + Number(a.amount), 0))}
-                  </span>
-                </div>
-              )}
-
-              {/* Add adjustment form */}
-              <div className="space-y-1.5 pt-1 border-t border-gray-100">
-                <input
-                  type="text"
-                  placeholder="Label (e.g. Old Project Debt)"
-                  value={adjLabel}
-                  onChange={e => setAdjLabel(e.target.value)}
-                  className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300"
-                />
-                <div className="flex gap-1.5">
-                  <input
-                    type="number"
-                    placeholder="Amount (negative = deduction)"
-                    value={adjAmount}
-                    onChange={e => setAdjAmount(e.target.value)}
-                    className="flex-1 text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 placeholder-gray-300"
-                  />
-                  <button
-                    onClick={addAdjustment}
-                    disabled={adjSaving || !adjLabel.trim() || !adjAmount}
-                    className="shrink-0 flex items-center gap-1 text-xs bg-[#0f1923] text-white px-2.5 py-1.5 rounded-md hover:bg-gray-800 disabled:opacity-40 transition-colors"
-                  >
-                    <Plus size={11} />
-                    Add
-                  </button>
-                </div>
-              </div>
-
-              {/* All-years total note */}
-              {treasuryAdjustments.length > 0 && (
-                <p className="text-[10px] text-gray-400">
-                  All-years net: <span className={`font-semibold ${adjustmentsTotal >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                    {adjustmentsTotal >= 0 ? '+' : ''}{fmtTHBCompact(adjustmentsTotal)}
-                  </span>
-                </p>
-              )}
-            </div>
-
-            {/* Column 3 — Project Operations */}
-            <div className="p-5 space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Project Operations</p>
-
-              <div className="space-y-2">
-                {/* Historical */}
-                <div className="bg-gray-50 rounded-md p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Historical (All Time)</p>
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Cash in from clients</span>
-                      <span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(historicalCashIn)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Cash out to suppliers</span>
-                      <span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(historicalCashOut)})</span>
-                    </div>
-                    <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
-                      <span className="font-semibold text-gray-700">Historical Net</span>
-                      <span className={`font-bold tabular-nums ${historicalProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                        {historicalProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(historicalProjectNet)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Future */}
-                <div className="bg-gray-50 rounded-md p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Projected (Remaining Work)</p>
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Outstanding receivable</span>
-                      <span className="font-medium text-[#1D9E75] tabular-nums">{fmtTHBCompact(totalOutstandingReceivable)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">Outstanding payable</span>
-                      <span className="font-medium text-[#E24B4A] tabular-nums">({fmtTHBCompact(totalOutstandingPayable)})</span>
-                    </div>
-                    <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
-                      <span className="font-semibold text-gray-700">Future Net</span>
-                      <span className={`font-bold tabular-nums ${futureProjectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                        {futureProjectNet >= 0 ? '+' : ''}{fmtTHBCompact(futureProjectNet)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center pt-1 border-t border-gray-100">
-                <span className="text-xs font-semibold text-gray-700">Total Project Contribution</span>
-                <span className={`text-sm font-bold tabular-nums ${(historicalProjectNet + futureProjectNet) >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                  {(historicalProjectNet + futureProjectNet) >= 0 ? '+' : ''}{fmtTHBCompact(historicalProjectNet + futureProjectNet)}
-                </span>
-              </div>
-            </div>
-
-            {/* Column 4 — SG&A Overhead */}
-            <div className="p-5 space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Corporate SG&A</p>
-
-              {/* CEO projection inputs */}
-              <div className="space-y-2">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-[10px] text-gray-400 uppercase tracking-wide">Monthly Estimate (฿)</label>
-                    {!sgaMonthlyUserOverride && sgaActuals.length > 0 && (
-                      <span className="text-[9px] font-medium text-[#1D9E75] bg-[#1D9E75]/10 px-1.5 py-0.5 rounded">
-                        Auto · avg of {sgaActuals.length} actuals
-                      </span>
-                    )}
-                    {sgaMonthlyUserOverride && (
-                      <button
-                        onClick={() => setSgaMonthlyUserOverride(false)}
-                        className="text-[9px] text-gray-400 hover:text-[#1D9E75] underline transition-colors"
-                      >
-                        Reset to auto
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="number"
-                    value={sgaMonthly}
-                    onChange={e => { setSgaMonthly(Number(e.target.value)); setSgaMonthlyUserOverride(true); }}
-                    className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-gray-400 uppercase tracking-wide">Estimated Months Remaining</label>
-                  <input
-                    type="number"
-                    value={sgaMonths}
-                    onChange={e => setSgaMonths(Number(e.target.value))}
-                    className="mt-1 w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
-                  />
-                </div>
-              </div>
-
-              {/* Summary */}
-              <div className="bg-gray-50 rounded-md p-3 space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">{sgaActualMonthCount} actual months</span>
-                  <span className="font-medium text-gray-700 tabular-nums">{fmtTHBCompact(sgaActualTotal)}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months</span>
-                  <span className="font-medium text-gray-500 tabular-nums">{fmtTHBCompact(sgaProjectedTotal)}</span>
-                </div>
-                <div className="flex justify-between text-xs border-t border-gray-200 pt-1">
-                  <span className="font-semibold text-gray-700">Total SG&A Burn</span>
-                  <span className="font-bold text-[#E24B4A] tabular-nums">({fmtTHBCompact(totalSgaBurn)})</span>
-                </div>
-              </div>
-
-              {/* Monthly actuals entry — Finance roles only */}
-              {hasRole(profile?.role, FINANCE_ROLES) && (
-                <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Enter Monthly Actuals</p>
-                  <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
-                    {(() => {
-                      const rows = [];
-                      const d = new Date(2025, 0, 1);
-                      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-                      while (d < end) {
-                        const y = d.getFullYear();
-                        const m = d.getMonth() + 1;
-                        const key = `${y}-${m}`;
-                        const hasActual = sgaActualMap.has(key);
-                        const monthLabel = format(new Date(y, m - 1, 1), 'MMM yy');
-                        const isSaving = !!sgaSaving[key];
-                        const isDirty = sgaEditValues[key] !== undefined && sgaEditValues[key] !== '';
-                        rows.push(
-                          <div key={key} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md transition-colors ${hasActual ? 'bg-[#1D9E75]/5' : 'bg-gray-50 hover:bg-gray-100'}`}>
-                            {/* Month label */}
-                            <span className="text-[11px] font-medium text-gray-500 w-[46px] shrink-0 tabular-nums">{monthLabel}</span>
-
-                            {/* Status badge */}
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded w-[26px] text-center shrink-0 ${hasActual ? 'bg-[#1D9E75]/15 text-[#1D9E75]' : 'bg-gray-200 text-gray-400'}`}>
-                              {hasActual ? 'ACT' : 'EST'}
-                            </span>
-
-                            {/* Amount input */}
-                            <input
-                              type="number"
-                              value={sgaEditValues[key] ?? ''}
-                              onChange={e => setSgaEditValues(prev => ({ ...prev, [key]: e.target.value }))}
-                              placeholder={hasActual ? String(sgaActualMap.get(key)) : String(sgaMonthly)}
-                              className={`flex-1 min-w-0 text-[11px] border rounded-md px-2 py-1 focus:outline-none focus:ring-1 tabular-nums bg-white ${
-                                hasActual
-                                  ? 'border-[#1D9E75]/30 focus:ring-[#1D9E75]/30'
-                                  : 'border-gray-200 focus:ring-gray-300 text-gray-400'
-                              }`}
-                            />
-
-                            {/* Save button */}
-                            <button
-                              onClick={() => saveSgaActual(y, m)}
-                              disabled={isSaving || !isDirty}
-                              title="Save"
-                              className={`shrink-0 w-6 h-6 flex items-center justify-center rounded transition-colors ${
-                                isDirty && !isSaving
-                                  ? 'text-white bg-[#1D9E75] hover:bg-[#178a64]'
-                                  : 'text-gray-300 bg-transparent cursor-default'
-                              }`}
-                            >
-                              {isSaving
-                                ? <span className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
-                                : <Save size={10} />
-                              }
-                            </button>
-                          </div>
-                        );
-                        d.setMonth(d.getMonth() + 1);
-                      }
-                      return rows;
-                    })()}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Full-width bottom line */}
-          <div className={`px-6 py-5 border-t-2 ${projectedEndingCash >= 0 ? 'border-[#1D9E75]/30 bg-[#1D9E75]/5' : 'border-[#E24B4A]/30 bg-[#E24B4A]/5'}`}>
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Projected Ending Cash Position</p>
-                <p className="text-[10px] text-gray-400">Net Financing + Adjustments + Project Cash − SG&A</p>
-              </div>
-              <div className="text-right">
-                <p className={`text-3xl font-bold tabular-nums ${projectedEndingCash >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                  {projectedEndingCash >= 0 ? '+' : ''}{fmtTHB(projectedEndingCash)}
-                </p>
-                <p className="text-[10px] text-gray-400 mt-0.5">
-                  {projectedEndingCash >= 0 ? 'Positive balance when all active projects complete' : 'Cash shortfall — review SG&A or adjust timeline'}
-                </p>
-              </div>
-            </div>
-            {/* Breakdown pills */}
-            <div className="flex flex-wrap gap-2 mt-4">
-              {[
-                { label: 'Financing', value: netFinancingCash },
-                { label: 'Adjustments', value: adjustmentsTotal },
-                { label: 'Historical Project', value: historicalProjectNet },
-                { label: 'Future Project', value: futureProjectNet },
-                { label: 'SG&A Burn', value: -totalSgaBurn },
-              ].map(item => (
-                <div key={item.label} className="flex items-center gap-1.5 bg-white/70 border border-gray-100 rounded-full px-3 py-1">
-                  <span className="text-[10px] text-gray-500">{item.label}:</span>
-                  <span className={`text-[10px] font-semibold tabular-nums ${item.value >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                    {item.value >= 0 ? '+' : ''}{fmtTHBCompact(item.value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Project cash positions + Approval queue */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-        {/* Project cash positions table */}
-        <div className="xl:col-span-2 bg-white rounded-lg border border-black/[0.08] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[13px] font-semibold text-gray-800">
-              Project Cash Positions
-            </h2>
-            <button
-              onClick={() => navigate('/projects')}
-              className="text-xs text-[#378ADD] hover:underline flex items-center gap-1"
-            >
-              View all <ArrowRight size={12} />
-            </button>
-          </div>
-
-          {loading ? (
-            <table className="w-full">
-              <tbody>
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <TableRowSkeleton key={i} cols={6} />
-                ))}
-              </tbody>
-            </table>
-          ) : projectCashPositions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 space-y-3">
-              <ArrowUpRight size={28} className="text-gray-300" />
-              <p className="text-[13px] text-gray-400">No project cash activity yet</p>
-              <button
-                onClick={() => navigate('/projects')}
-                className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors"
-              >
-                Go to Projects
-              </button>
-            </div>
-          ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="text-xs text-gray-400 border-b border-gray-100">
-                  <th className="text-left pb-2 font-medium">Project</th>
-                  <th className="text-right pb-2 font-medium">Received</th>
-                  <th className="text-right pb-2 font-medium">Cost Paid</th>
-                  <th className="text-right pb-2 font-medium">30-Day In</th>
-                  <th className="text-right pb-2 font-medium">30-Day Out</th>
-                  <th className="text-right pb-2 font-medium">30-Day Net</th>
-                </tr>
-              </thead>
-              <tbody>
-                {projectCashPositions.map(({ project, totalReceived, totalCostPaid }) => {
-                  const projPendingInvsTotal = pendingClientInvoices
-                    .filter(i => i.project_id === project.id)
-                    .reduce((s, i) => s + i.pending_amount, 0);
-                  // Col O balance: received-but-unpaid invoices for this project
-                  const projReceivedInvoices = chartReceivedInvoices.filter(inv => inv.project_id === project.id);
-                  const projBalanceInvoicesTotal = projReceivedInvoices
-                    .reduce((s, inv) => s + Math.max(0, Number(inv.invoice_amount_incl_vat) - Number(inv.received_amount ?? 0)), 0);
-                  // Uninvoiced milestones for this project
-                  const projUninvoiced = chartUninvoicedMilestones.filter(m => m.project_id === project.id);
-                  const net30In =
-                    clientMilestonesAll
-                      .filter(m => m.project_id === project.id && m.planned_receive_date && m.planned_receive_date <= thirtyDayKey)
-                      .reduce((s, m) => s + m.payment_plan_amount, 0)
-                    + projPendingInvsTotal;
-                  const net30Out =
-                    projUninvoiced
-                      .filter(m => m.planned_payment_date && m.planned_payment_date <= thirtyDayKey)
-                      .reduce((s, m) => s + Number(m.amount_due), 0)
-                    + projBalanceInvoicesTotal;
-                  const net30 = net30In - net30Out;
-                  const isAtRisk = net30 < 0;
-
-                  return (
-                    <tr
-                      key={project.id}
-                      className={`border-b border-gray-50 last:border-0 cursor-pointer transition-colors ${isAtRisk ? 'bg-[#E24B4A]/5 hover:bg-[#E24B4A]/10' : 'hover:bg-[#F8F8F7]'}`}
-                      onClick={() => navigate(`/projects/${project.id}`)}
-                    >
-                      <td className="py-2.5 pr-3">
-                        <p className="text-[13px] font-medium text-gray-800 truncate max-w-[120px]">
-                          {project.name.split('–')[0].trim()}
-                        </p>
-                        <div className="mt-0.5">
-                          <Badge label={PROJECT_STATUS_LABELS[project.status]} variant={statusVariant(project.status)} />
-                        </div>
-                      </td>
-                      <td className="py-2.5 text-right text-[13px] text-[#1D9E75] font-medium">
-                        {fmtTHBCompact(totalReceived)}
-                      </td>
-                      <td className="py-2.5 text-right text-[13px] text-gray-500">
-                        {fmtTHBCompact(totalCostPaid)}
-                      </td>
-                      <td className="py-2.5 text-right">
-                        {net30In > 0 ? (
-                          <div>
-                            <p className="text-[13px] font-medium text-[#1D9E75]">{fmtTHBCompact(net30In)}</p>
-                            {projPendingInvsTotal > 0 && (
-                              <p className="text-[10px] text-amber-600/70">incl. awaiting pmt</p>
-                            )}
-                          </div>
-                        ) : <span className="text-gray-300 text-xs">—</span>}
-                      </td>
-                      <td className="py-2.5 text-right">
-                        {net30Out > 0 ? (
-                          <div>
-                            <p className="text-[13px] font-medium text-[#E24B4A]">{fmtTHBCompact(net30Out)}</p>
-                            {projBalanceInvoicesTotal > 0 && (
-                              <p className="text-[10px] text-[#E24B4A]/70">incl. supplier inv.</p>
-                            )}
-                          </div>
-                        ) : <span className="text-gray-300 text-xs">—</span>}
-                      </td>
-                      <td className="py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {isAtRisk && <AlertTriangle size={11} className="text-[#E24B4A]" />}
-                          <span className={`text-[13px] font-semibold ${net30 >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                            {net30 >= 0 ? '+' : ''}{fmtTHBCompact(net30)}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Approval queue preview */}
-        <div className="xl:col-span-1 bg-white rounded-lg border border-black/[0.08] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[13px] font-semibold text-gray-800">
-              Approval Queue
-            </h2>
-            {[
-              'construction_manager',
-              'evp',
-              'cost_controller',
-              'accounts_supervisor',
-              'accounts_manager',
-            ].includes(profile?.role ?? '') && (
-              <button
-                onClick={() => navigate('/approvals')}
-                className="text-xs text-[#378ADD] hover:underline flex items-center gap-1"
-              >
-                View all <ArrowRight size={12} />
-              </button>
-            )}
-          </div>
-
-          {loading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg gap-2"
-                >
-                  <div className="flex-1 space-y-1.5">
-                    <SkeletonLine w="w-2/3" />
-                    <SkeletonLine w="w-1/3" h="h-2" />
-                  </div>
-                  <SkeletonLine w="w-16" h="h-5" />
-                </div>
-              ))}
-            </div>
-          ) : queueItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 space-y-3">
-              <CheckSquare size={28} className="text-gray-300" />
-              <p className="text-[13px] text-gray-400">All clear — no pending items</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {queueItems.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => navigate(item.href)}
-                  className={`relative flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors overflow-hidden ${
-                    item.done
-                      ? 'bg-[#1D9E75]/5 border border-[#1D9E75]/20 hover:bg-[#1D9E75]/10'
-                      : item.urgent
-                      ? 'bg-amber-50 border border-amber-200 hover:bg-amber-100'
-                      : 'bg-[#F8F8F7] hover:bg-gray-100'
-                  }`}
-                >
-                  {/* Done diagonal stamp */}
-                  {item.done && (
-                    <div className="absolute -right-3 top-2 rotate-[32deg] bg-[#1D9E75] text-white text-[9px] font-bold px-5 py-0.5 tracking-widest shadow-sm">
-                      DONE
-                    </div>
-                  )}
-                  <div className="min-w-0 flex items-start gap-2 flex-1">
-                    {item.done ? (
-                      <CheckSquare size={13} className="text-[#1D9E75] shrink-0 mt-0.5" />
-                    ) : item.urgent ? (
-                      <AlertTriangle size={13} className="text-amber-500 shrink-0 mt-0.5" />
-                    ) : null}
-                    <div className="min-w-0 flex-1">
-                      <p className={`text-[13px] font-medium truncate ${item.done ? 'text-gray-500 line-through decoration-[#1D9E75]/50' : 'text-gray-800'}`}>
-                        {item.label.split('–')[0].trim()}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5 truncate">{item.sub}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0 mr-5">
-                    <Badge
-                      label={item.done ? 'approved' : item.status.replace(/_/g, ' ')}
-                      variant={item.done ? 'green' : item.urgent ? 'amber' : statusVariant(item.status)}
-                    />
-                  </div>
-                </div>
-              ))}
-              {pendingCount > 4 && (
-                <button
-                  onClick={() => navigate('/approvals')}
-                  className="w-full text-xs text-[#378ADD] hover:underline text-center pt-1"
-                >
-                  + {pendingCount - 4} more item{pendingCount - 4 !== 1 ? 's' : ''} — view all
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Yet to Invoice pipeline modal */}
+      {/* Yet to Invoice pipeline modal — rendered at top level so all views can trigger it */}
       <UninvoicedPipelineModal
         isOpen={isPipelineModalOpen}
         onClose={() => setIsPipelineModalOpen(false)}
         projectId="ALL"
       />
-
-      {/* Loan summary */}
-      <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Landmark size={15} className="text-gray-400" />
-            <h2 className="text-[13px] font-semibold text-gray-800">
-              Loan Positions
-            </h2>
-          </div>
-          {overdueLoanAmount > 0 && (
-            <div className="flex items-center gap-1.5 text-xs text-[#E24B4A] font-medium">
-              <AlertTriangle size={12} />
-              {fmtTHB(overdueLoanAmount)} overdue
-            </div>
-          )}
-        </div>
-
-        {loading ? (
-          <div className="grid grid-cols-2 gap-4">
-            {[0, 1].map((i) => (
-              <div key={i} className="space-y-2">
-                <SkeletonLine w="w-1/2" h="h-2.5" />
-                {Array.from({ length: 2 }).map((_, j) => (
-                  <div
-                    key={j}
-                    className="flex items-center justify-between p-2.5 border border-gray-100 rounded gap-2"
-                  >
-                    <SkeletonLine w="w-1/2" />
-                    <SkeletonLine w="w-1/4" />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        ) : loansReceived.length === 0 && loansGiven.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 space-y-2">
-            <Landmark size={28} className="text-gray-200" />
-            <p className="text-[13px] text-gray-400">No active loan positions</p>
-            <button
-              onClick={() => navigate('/treasury')}
-              className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors"
-            >
-              Go to Treasury
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Loans received */}
-            <div>
-              <p className="text-xs text-gray-400 mb-2.5 font-medium uppercase tracking-wide">
-                Loans Received
-              </p>
-              {loansReceived.length === 0 ? (
-                <p className="text-xs text-gray-300 py-4 text-center">None</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {loansReceived.map((loan) => {
-                    const isOverdue = !!loan.due_date && new Date(loan.due_date) < now;
-                    const balance = calcNetLiability(loan);
-                    const displayName = loan.name ?? loan.counterparty?.name ?? '—';
-                    return (
-                      <div
-                        key={loan.id}
-                        className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border ${
-                          isOverdue ? 'border-[#E24B4A]/30 bg-[#E24B4A]/5' : 'border-gray-100 hover:bg-gray-50'
-                        } transition-colors`}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className="text-[13px] font-medium text-gray-700 truncate"
-                            title={displayName}
-                          >
-                            {displayName}
-                          </p>
-                          <p className={`text-[11px] mt-0.5 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-400'}`}>
-                            {loan.due_date ? formatDate(loan.due_date) : 'No due date'}
-                            {isOverdue && ' · Overdue'}
-                          </p>
-                        </div>
-                        <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-700'}`}>
-                          {fmtTHBCompact(balance)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Loans given */}
-            <div>
-              <p className="text-xs text-gray-400 mb-2.5 font-medium uppercase tracking-wide">
-                Loans Given
-              </p>
-              {loansGiven.length === 0 ? (
-                <p className="text-xs text-gray-300 py-4 text-center">None</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {loansGiven.map((loan) => {
-                    const balance = calcNetAsset(loan);
-                    const displayName = loan.name ?? loan.counterparty?.name ?? '—';
-                    const amountColor = balance > 0 ? 'text-[#1D9E75]' : balance < 0 ? 'text-[#E24B4A]' : 'text-gray-400';
-                    return (
-                      <div
-                        key={loan.id}
-                        className="flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-100 rounded-lg hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className="text-[13px] font-medium text-gray-700 truncate"
-                            title={displayName}
-                          >
-                            {displayName}
-                          </p>
-                          <p className="text-[11px] text-gray-400 mt-0.5">
-                            {loan.due_date ? `Due ${formatDate(loan.due_date)}` : 'No due date'}
-                          </p>
-                        </div>
-                        <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${amountColor}`}>
-                          {fmtTHBCompact(balance)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
