@@ -29,6 +29,21 @@ interface PaymentVoucherRow {
   net_paid: number;
 }
 
+interface LoanTxRow {
+  cash_flow_direction: string;
+  amount: number;
+}
+
+interface TreasuryAdjRow {
+  amount: number;
+}
+
+interface SgaActualRow {
+  year: number;
+  month: number;
+  amount: number;
+}
+
 // ---------------------------------------------------------------------------
 // Tab config
 // ---------------------------------------------------------------------------
@@ -107,6 +122,10 @@ export default function Projects() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [clients, setClients] = useState<Entity[]>([]);
 
+  const [loanTxData, setLoanTxData] = useState<LoanTxRow[]>([]);
+  const [adjustmentsData, setAdjustmentsData] = useState<TreasuryAdjRow[]>([]);
+  const [sgaActualsData, setSgaActualsData] = useState<SgaActualRow[]>([]);
+
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -127,6 +146,9 @@ export default function Projects() {
         { data: pvRaw, error: e3 },
         { data: clientList, error: e4 },
         { data: viewRows },
+        { data: loanTxRaw },
+        { data: adjRaw },
+        { data: sgaRaw },
       ] = await Promise.all([
         supabase
           .from('projects')
@@ -138,6 +160,9 @@ export default function Projects() {
         userId
           ? supabase.from('project_views').select('project_id, view_count').eq('user_id', userId)
           : Promise.resolve({ data: [], error: null }),
+        supabase.from('loan_transactions').select('cash_flow_direction, amount'),
+        supabase.from('treasury_adjustments').select('amount'),
+        supabase.from('sga_actuals').select('year, month, amount'),
       ]);
 
       const firstError = e1 || e2 || e3 || e4;
@@ -153,6 +178,9 @@ export default function Projects() {
       setPaymentVouchers(pvRaw ?? []);
       setClients(clientList ?? []);
       setViewCounts(viewMap);
+      setLoanTxData((loanTxRaw ?? []) as LoanTxRow[]);
+      setAdjustmentsData((adjRaw ?? []) as TreasuryAdjRow[]);
+      setSgaActualsData((sgaRaw ?? []) as SgaActualRow[]);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load projects');
     } finally {
@@ -207,8 +235,27 @@ export default function Projects() {
     const contract = list.reduce((s, p) => s + (p.contract_incl_vat ?? 0), 0);
     const received = list.reduce((s, p) => s + getMetrics(p.id).received, 0);
     const paid = list.reduce((s, p) => s + getMetrics(p.id).paid, 0);
-    return { contract, received, paid, margin: received - paid };
-  }, [filteredProjects, clientInvoices, paymentVouchers, tab]);
+    const historicalProjectNet = received - paid;
+
+    const netFinancing = loanTxData.reduce((acc, tx) => {
+      if (tx.cash_flow_direction === 'in') return acc + Number(tx.amount);
+      if (tx.cash_flow_direction === 'out') return acc - Number(tx.amount);
+      return acc;
+    }, 0);
+
+    const totalAdjustments = adjustmentsData.reduce((s, a) => s + Number(a.amount), 0);
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const historicalSga = sgaActualsData
+      .filter(a => a.year < currentYear || (a.year === currentYear && a.month <= currentMonth))
+      .reduce((s, a) => s + Number(a.amount), 0);
+
+    const trueCashToday = historicalProjectNet + netFinancing + totalAdjustments - historicalSga;
+
+    return { contract, received, paid, margin: received - paid, trueCashToday };
+  }, [filteredProjects, clientInvoices, paymentVouchers, loanTxData, adjustmentsData, sgaActualsData, tab]);
 
   if (error) {
     return (
@@ -246,7 +293,7 @@ export default function Projects() {
             { label: 'Portfolio Contract', value: portfolioTotals.contract, color: 'text-gray-900' },
             { label: 'Total Received', value: portfolioTotals.received, color: 'text-[#1D9E75]' },
             { label: 'Cost Paid', value: portfolioTotals.paid, color: 'text-gray-600' },
-            { label: 'Net Cash Balance', value: portfolioTotals.margin, color: portfolioTotals.margin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]' },
+            { label: 'Corporate Bank Balance (Est.)', value: portfolioTotals.trueCashToday, color: portfolioTotals.trueCashToday >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]' },
           ].map(m => (
             <div key={m.label} className="bg-white rounded-xl border border-black/[0.07] px-4 py-3">
               <p className="text-xs text-gray-400 mb-1">{m.label}</p>

@@ -704,10 +704,18 @@ function UnscheduledPanel({
 function OpeningBalancePopover({
   totalReceipts,
   totalVouchersPaid,
+  netFinancing,
+  totalAdjustments,
+  historicalSga,
+  trueCashRaw,
   projectRows,
 }: {
   totalReceipts: number;
   totalVouchersPaid: number;
+  netFinancing: number;
+  totalAdjustments: number;
+  historicalSga: number;
+  trueCashRaw: number;
   projectRows: ProjectBalanceRow[];
 }) {
   const [open, setOpen] = useState(false);
@@ -721,7 +729,7 @@ function OpeningBalancePopover({
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  const net = totalReceipts - totalVouchersPaid;
+  const projectNet = totalReceipts - totalVouchersPaid;
 
   return (
     <div className="relative inline-block" ref={ref}>
@@ -731,18 +739,18 @@ function OpeningBalancePopover({
       >
         <TrendingUp size={12} className="text-[#1D9E75]" />
         <span className="text-xs text-gray-600">
-          Net Project Cash Position: <strong className="text-[#0f1923]">{fmtTHB(net)}</strong>
+          Corporate Bank Balance (Est.): <strong className={trueCashRaw >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}>{fmtTHB(trueCashRaw)}</strong>
         </span>
         <Info size={11} className="text-gray-400" />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-10 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[480px] p-4">
+        <div className="absolute left-0 top-10 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[520px] p-4">
           <div className="flex items-start justify-between mb-3">
             <div>
-              <h3 className="text-sm font-bold text-[#0f1923]">Net Project Cash Position Breakdown</h3>
+              <h3 className="text-sm font-bold text-[#0f1923]">Corporate Bank Balance Breakdown</h3>
               <p className="text-xs text-gray-500 mt-0.5">
-                Total client receipts minus payment vouchers issued — not a bank balance
+                Project cash + financing + adjustments − SG&A actuals to date
               </p>
             </div>
             <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 ml-2">
@@ -750,26 +758,49 @@ function OpeningBalancePopover({
             </button>
           </div>
 
-          {/* Summary row */}
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            <div className="rounded-lg bg-green-50 border border-green-100 p-2.5 text-center">
-              <p className="text-[10px] text-green-700 font-medium uppercase tracking-wide">Client Receipts</p>
-              <p className="text-sm font-bold text-[#1D9E75] mt-0.5">{fmtTHBCompact(totalReceipts)}</p>
+          {/* Bridge calculation */}
+          <div className="mb-4 border border-gray-100 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-100">
+              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">How We Arrive at This Number</p>
             </div>
-            <div className="rounded-lg bg-red-50 border border-red-100 p-2.5 text-center">
-              <p className="text-[10px] text-red-700 font-medium uppercase tracking-wide">Vendor Payments</p>
-              <p className="text-sm font-bold text-[#E24B4A] mt-0.5">-{fmtTHBCompact(totalVouchersPaid)}</p>
-            </div>
-            <div className={`rounded-lg border p-2.5 text-center ${net >= 0 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
-              <p className={`text-[10px] font-medium uppercase tracking-wide ${net >= 0 ? 'text-green-700' : 'text-red-700'}`}>Net Position</p>
-              <p className={`text-sm font-bold mt-0.5 ${net >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{fmtTHBCompact(net)}</p>
+            <div className="divide-y divide-gray-50">
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs text-gray-600">Net Project Cash (Received − Paid to Vendors)</span>
+                <span className={`text-xs font-semibold tabular-nums ${projectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {projectNet >= 0 ? '+' : ''}{fmtTHBCompact(projectNet)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs text-gray-600">Net Financing (Loans Drawn − Repaid)</span>
+                <span className={`text-xs font-semibold tabular-nums ${netFinancing >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {netFinancing >= 0 ? '+' : ''}{fmtTHBCompact(netFinancing)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs text-gray-600">Corporate Adjustments (All-Time)</span>
+                <span className={`text-xs font-semibold tabular-nums ${totalAdjustments >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {totalAdjustments >= 0 ? '+' : ''}{fmtTHBCompact(totalAdjustments)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between px-3 py-2">
+                <span className="text-xs text-gray-600">SG&A Actuals (Historical — to this month)</span>
+                <span className="text-xs font-semibold tabular-nums text-[#E24B4A]">
+                  -{fmtTHBCompact(historicalSga)}
+                </span>
+              </div>
+              <div className={`flex items-center justify-between px-3 py-2.5 font-bold ${trueCashRaw >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+                <span className="text-xs text-[#0f1923]">= Corporate Bank Balance (Est.)</span>
+                <span className={`text-sm tabular-nums ${trueCashRaw >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                  {trueCashRaw >= 0 ? '+' : ''}{fmtTHBCompact(trueCashRaw)}
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Per-project table */}
+          {/* Project-level breakdown */}
           {projectRows.length > 0 && (
             <>
-              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">By Project</p>
+              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">Project Cash By Project</p>
               <div className="border border-gray-100 rounded-lg overflow-hidden">
                 <table className="w-full text-xs">
                   <thead>
@@ -803,7 +834,7 @@ function OpeningBalancePopover({
                       <td className="px-2.5 py-1.5 text-[10px] text-gray-500 font-bold">TOTAL</td>
                       <td className="px-2.5 py-1.5 text-right text-[10px] font-bold text-[#1D9E75]">{fmtTHBCompact(totalReceipts)}</td>
                       <td className="px-2.5 py-1.5 text-right text-[10px] font-bold text-[#E24B4A]">-{fmtTHBCompact(totalVouchersPaid)}</td>
-                      <td className={`px-2.5 py-1.5 text-right text-[10px] font-bold ${net >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{fmtTHBCompact(net)}</td>
+                      <td className={`px-2.5 py-1.5 text-right text-[10px] font-bold ${projectNet >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{fmtTHBCompact(projectNet)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -812,7 +843,7 @@ function OpeningBalancePopover({
           )}
 
           <p className="text-[10px] text-gray-400 mt-2 leading-relaxed">
-            Receipts: <code className="bg-gray-100 px-1 rounded">client_invoice_payments</code> · Paid out: <code className="bg-gray-100 px-1 rounded">payment_vouchers (status=issued)</code>
+            Receipts: <code className="bg-gray-100 px-1 rounded">client_invoice_payments</code> · Paid: <code className="bg-gray-100 px-1 rounded">payment_vouchers</code> · Financing: <code className="bg-gray-100 px-1 rounded">loan_transactions</code> · Adj: <code className="bg-gray-100 px-1 rounded">treasury_adjustments</code> · SG&A: <code className="bg-gray-100 px-1 rounded">sga_actuals</code>
           </p>
         </div>
       )}
@@ -901,6 +932,11 @@ export default function CashFlowPlanner() {
   const [quickAssignCard, setQuickAssignCard] = useState<DraggableCard | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Treasury seed state ───────────────────────────────────────────────────
+  const [treasuryLoanTx, setTreasuryLoanTx] = useState<{ cash_flow_direction: string; amount: number }[]>([]);
+  const [treasuryAdj, setTreasuryAdj] = useState<{ amount: number }[]>([]);
+  const [treasurySgaActuals, setTreasurySgaActuals] = useState<{ year: number; month: number; amount: number }[]>([]);
+
   // ── Chart state ───────────────────────────────────────────────────────────
   const [chartMode, setChartMode] = useState<ChartMode>('forecast');
   const [chartLoading, setChartLoading] = useState(true);
@@ -928,7 +964,7 @@ export default function CashFlowPlanner() {
 
   async function loadData() {
     setLoading(true);
-    const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes, receiptsByProjectRes, vouchersByProjectRes] = await Promise.all([
+    const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes, receiptsByProjectRes, vouchersByProjectRes, loanTxRes, adjRes, sgaRes] = await Promise.all([
       supabase.from('projects').select('*').order('name'),
       supabase
         .from('client_milestones')
@@ -956,6 +992,10 @@ export default function CashFlowPlanner() {
         .from('payment_vouchers')
         .select('net_paid, project:projects(name)')
         .eq('status', 'issued'),
+      // Treasury seed data
+      supabase.from('loan_transactions').select('cash_flow_direction, amount'),
+      supabase.from('treasury_adjustments').select('amount'),
+      supabase.from('sga_actuals').select('year, month, amount'),
     ]);
 
     setProjects(projectsRes.data ?? []);
@@ -986,6 +1026,10 @@ export default function CashFlowPlanner() {
       return { name, received, paid, net: received - paid };
     }).sort((a, b) => b.received - a.received);
     setProjectBalanceRows(rows);
+
+    setTreasuryLoanTx((loanTxRes.data ?? []) as { cash_flow_direction: string; amount: number }[]);
+    setTreasuryAdj((adjRes.data ?? []) as { amount: number }[]);
+    setTreasurySgaActuals((sgaRes.data ?? []) as { year: number; month: number; amount: number }[]);
 
     setLoading(false);
   }
@@ -1190,7 +1234,24 @@ export default function CashFlowPlanner() {
   ]);
   const sortedKeys = [...allKeys].sort();
 
-  const historicalOpeningBalance = (totalReceipts - totalVouchersPaid) / 1_000_000;
+  const historicalProjectNet = totalReceipts - totalVouchersPaid;
+
+  const netFinancing = treasuryLoanTx.reduce((acc, tx) => {
+    if (tx.cash_flow_direction === 'in') return acc + Number(tx.amount);
+    if (tx.cash_flow_direction === 'out') return acc - Number(tx.amount);
+    return acc;
+  }, 0);
+
+  const totalAdjustments = treasuryAdj.reduce((s, a) => s + Number(a.amount), 0);
+
+  const _now = new Date();
+  const _currentYear = _now.getFullYear();
+  const _currentMonth = _now.getMonth() + 1;
+  const historicalSga = treasurySgaActuals
+    .filter(a => a.year < _currentYear || (a.year === _currentYear && a.month <= _currentMonth))
+    .reduce((s, a) => s + Number(a.amount), 0);
+
+  const trueOpeningBalance = (historicalProjectNet + netFinancing + totalAdjustments - historicalSga) / 1_000_000;
 
   function buildChartData(mode: ChartMode): ChartBar[] {
     const hasForecast = (k: string) =>
@@ -1204,7 +1265,7 @@ export default function CashFlowPlanner() {
       ? [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
       : [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
-    let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
+    let cumNet = mode === 'forecast' ? trueOpeningBalance : 0;
 
     const bars: ChartBar[] = keys.map(key => {
       let cashIn = 0;
@@ -1243,15 +1304,15 @@ export default function CashFlowPlanner() {
       };
     });
 
-    if (mode === 'forecast' && historicalOpeningBalance !== 0) {
+    if (mode === 'forecast' && trueOpeningBalance !== 0) {
       bars.unshift({
         month: 'Opening',
         key: '__opening__',
         cashIn: 0,
         outflowBalance: 0,
         outflowUninvoiced: 0,
-        cumNet: +historicalOpeningBalance.toFixed(2),
-        openingBal: +Math.abs(historicalOpeningBalance).toFixed(2),
+        cumNet: +trueOpeningBalance.toFixed(2),
+        openingBal: +Math.abs(trueOpeningBalance).toFixed(2),
       });
     }
 
@@ -1350,7 +1411,7 @@ export default function CashFlowPlanner() {
       }
     }
 
-    let running = totalReceipts - totalVouchersPaid;
+    let running = historicalProjectNet + netFinancing + totalAdjustments - historicalSga;
     for (const col of columns) {
       col.openingBalance = running;
       col.incomeTotal = col.incomeCards.reduce((s, c) => s + c.amount, 0);
@@ -1569,6 +1630,10 @@ export default function CashFlowPlanner() {
             <OpeningBalancePopover
               totalReceipts={totalReceipts}
               totalVouchersPaid={totalVouchersPaid}
+              netFinancing={netFinancing}
+              totalAdjustments={totalAdjustments}
+              historicalSga={historicalSga}
+              trueCashRaw={historicalProjectNet + netFinancing + totalAdjustments - historicalSga}
               projectRows={projectBalanceRows}
             />
             <div className="flex items-center gap-2 pl-3 border-l border-gray-200">
