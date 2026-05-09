@@ -396,6 +396,7 @@ export default function Dashboard() {
   const [sgaActuals, setSgaActuals] = useState<SgaActual[]>([]);
   const [treasuryAdjustments, setTreasuryAdjustments] = useState<TreasuryAdjustment[]>([]);
   const [sgaMonthly, setSgaMonthly] = useState(3_500_000);
+  const [sgaMonthlyUserOverride, setSgaMonthlyUserOverride] = useState(false);
   const [sgaMonths, setSgaMonths] = useState(24);
   const [selectedFiscalYear, setSelectedFiscalYear] = useState(new Date().getFullYear());
   const [adjLabel, setAdjLabel] = useState('');
@@ -418,6 +419,15 @@ export default function Dashboard() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [location.key]);
+
+  // Auto-derive monthly estimate from actuals average when actuals change,
+  // unless the user has manually overridden the field.
+  useEffect(() => {
+    if (sgaMonthlyUserOverride) return;
+    if (sgaActuals.length === 0) return;
+    const avg = sgaActuals.reduce((s, a) => s + Number(a.amount), 0) / sgaActuals.length;
+    setSgaMonthly(Math.round(avg));
+  }, [sgaActuals, sgaMonthlyUserOverride]);
 
   async function loadData() {
     setLoading(true);
@@ -1731,12 +1741,27 @@ export default function Dashboard() {
               {/* CEO projection inputs */}
               <div className="space-y-2">
                 <div>
-                  <label className="text-[10px] text-gray-400 uppercase tracking-wide">Monthly Estimate (฿)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] text-gray-400 uppercase tracking-wide">Monthly Estimate (฿)</label>
+                    {!sgaMonthlyUserOverride && sgaActuals.length > 0 && (
+                      <span className="text-[9px] font-medium text-[#1D9E75] bg-[#1D9E75]/10 px-1.5 py-0.5 rounded">
+                        Auto · avg of {sgaActuals.length} actuals
+                      </span>
+                    )}
+                    {sgaMonthlyUserOverride && (
+                      <button
+                        onClick={() => setSgaMonthlyUserOverride(false)}
+                        className="text-[9px] text-gray-400 hover:text-[#1D9E75] underline transition-colors"
+                      >
+                        Reset to auto
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="number"
                     value={sgaMonthly}
-                    onChange={e => setSgaMonthly(Number(e.target.value))}
-                    className="mt-1 w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
+                    onChange={e => { setSgaMonthly(Number(e.target.value)); setSgaMonthlyUserOverride(true); }}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums"
                   />
                 </div>
                 <div>
@@ -1757,7 +1782,7 @@ export default function Dashboard() {
                   <span className="font-medium text-gray-700 tabular-nums">{fmtTHBCompact(sgaActualTotal)}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months (incl. past unrecorded)</span>
+                  <span className="text-gray-500">{sgaProjectedMonthCount} estimated months</span>
                   <span className="font-medium text-gray-500 tabular-nums">{fmtTHBCompact(sgaProjectedTotal)}</span>
                 </div>
                 <div className="flex justify-between text-xs border-t border-gray-200 pt-1">
@@ -1770,7 +1795,7 @@ export default function Dashboard() {
               {hasRole(profile?.role, FINANCE_ROLES) && (
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Enter Monthly Actuals</p>
-                  <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                  <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
                     {(() => {
                       const rows = [];
                       const d = new Date(2025, 0, 1);
@@ -1780,26 +1805,47 @@ export default function Dashboard() {
                         const m = d.getMonth() + 1;
                         const key = `${y}-${m}`;
                         const hasActual = sgaActualMap.has(key);
-                        const monthLabel = format(new Date(y, m - 1, 1), 'MMM yyyy');
+                        const monthLabel = format(new Date(y, m - 1, 1), 'MMM yy');
+                        const isSaving = !!sgaSaving[key];
+                        const isDirty = sgaEditValues[key] !== undefined && sgaEditValues[key] !== '';
                         rows.push(
-                          <div key={key} className="flex items-center gap-1.5">
-                            <span className="text-[10px] text-gray-400 w-16 shrink-0">{monthLabel}</span>
+                          <div key={key} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md transition-colors ${hasActual ? 'bg-[#1D9E75]/5' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                            {/* Month label */}
+                            <span className="text-[11px] font-medium text-gray-500 w-[46px] shrink-0 tabular-nums">{monthLabel}</span>
+
+                            {/* Status badge */}
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded w-[26px] text-center shrink-0 ${hasActual ? 'bg-[#1D9E75]/15 text-[#1D9E75]' : 'bg-gray-200 text-gray-400'}`}>
+                              {hasActual ? 'ACT' : 'EST'}
+                            </span>
+
+                            {/* Amount input */}
                             <input
                               type="number"
                               value={sgaEditValues[key] ?? ''}
                               onChange={e => setSgaEditValues(prev => ({ ...prev, [key]: e.target.value }))}
-                              placeholder={hasActual ? String(sgaActualMap.get(key)) : 'Estimate'}
-                              className={`flex-1 text-[11px] border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-gray-300 tabular-nums ${hasActual ? 'border-[#1D9E75]/40 bg-[#1D9E75]/5' : 'border-gray-200'}`}
+                              placeholder={hasActual ? String(sgaActualMap.get(key)) : String(sgaMonthly)}
+                              className={`flex-1 min-w-0 text-[11px] border rounded-md px-2 py-1 focus:outline-none focus:ring-1 tabular-nums bg-white ${
+                                hasActual
+                                  ? 'border-[#1D9E75]/30 focus:ring-[#1D9E75]/30'
+                                  : 'border-gray-200 focus:ring-gray-300 text-gray-400'
+                              }`}
                             />
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${hasActual ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'bg-gray-100 text-gray-400'}`}>
-                              {hasActual ? 'ACT' : 'EST'}
-                            </span>
+
+                            {/* Save button */}
                             <button
                               onClick={() => saveSgaActual(y, m)}
-                              disabled={!!sgaSaving[key]}
-                              className="shrink-0 text-gray-300 hover:text-[#1D9E75] disabled:opacity-40 transition-colors"
+                              disabled={isSaving || !isDirty}
+                              title="Save"
+                              className={`shrink-0 w-6 h-6 flex items-center justify-center rounded transition-colors ${
+                                isDirty && !isSaving
+                                  ? 'text-white bg-[#1D9E75] hover:bg-[#178a64]'
+                                  : 'text-gray-300 bg-transparent cursor-default'
+                              }`}
                             >
-                              <Save size={11} />
+                              {isSaving
+                                ? <span className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
+                                : <Save size={10} />
+                              }
                             </button>
                           </div>
                         );
