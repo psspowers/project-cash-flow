@@ -197,7 +197,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
             )}
 
             {/* Cash Flow Planner */}
-            {['cost_controller', 'accounts_supervisor', 'evp', 'ceo'].includes(role) && (
+            {['cost_controller', 'accounts_supervisor', 'accounts_manager', 'evp', 'ceo'].includes(role) && (
               <NavItem to="/cash-flow-planner" label="Cash Flow Planner" icon={<CalendarRange size={16} />} />
             )}
           </>
