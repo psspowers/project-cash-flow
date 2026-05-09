@@ -20,6 +20,13 @@ import {
   GripVertical,
   X,
   Check,
+  Info,
+  Calendar,
+  SlidersHorizontal,
+  ArrowDownUp,
+  ChevronRight,
+  ChevronUp,
+  Clock,
 } from 'lucide-react';
 import {
   format,
@@ -28,6 +35,7 @@ import {
   addDays,
   parseISO,
   isSameWeek,
+  isAfter,
 } from 'date-fns';
 import {
   ComposedChart,
@@ -35,7 +43,7 @@ import {
   Line,
   XAxis,
   YAxis,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   ResponsiveContainer,
   CartesianGrid,
   Legend,
@@ -46,13 +54,14 @@ import { VendorInvoice, Project, fmtTHB, fmtTHBCompact } from '../types';
 import { useAuth } from '../context/AuthContext';
 
 // ---------------------------------------------------------------------------
-// Existing kanban types (unchanged)
+// Types
 // ---------------------------------------------------------------------------
 
 interface ClientMilestoneRow {
   id: string;
   project_id: string;
   milestone_number: number;
+  milestone_description?: string;
   milestone_pct: number;
   payment_plan_amount: number;
   planned_receive_date: string | null;
@@ -62,6 +71,9 @@ interface ClientMilestoneRow {
 
 type CardType = 'milestone' | 'invoice';
 
+// 'beyond_horizon' = has a date but it's past week 8
+type CardScheduleState = 'scheduled' | 'unscheduled' | 'beyond_horizon';
+
 interface DraggableCard {
   id: string;
   type: CardType;
@@ -69,9 +81,15 @@ interface DraggableCard {
   projectId: string;
   amount: number;
   weekDate: Date | null;
+  scheduleState: CardScheduleState;
   milestoneNo?: number;
   milestonePercent?: number;
+  milestoneDescription?: string;
   vendorName?: string;
+  poNumber?: string;
+  invoiceNo?: string;
+  invoiceStatus?: string;
+  hasPlanningNotes?: boolean;
   rawMilestone?: ClientMilestoneRow;
   rawInvoice?: VendorInvoice & { vendor?: { name: string }; project?: Project };
 }
@@ -100,6 +118,14 @@ interface WarningModal {
 interface MessageOverride {
   text: string;
   color: 'green' | 'red';
+}
+
+// Project breakdown row for the opening balance popover
+interface ProjectBalanceRow {
+  name: string;
+  received: number;
+  paid: number;
+  net: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,22 +159,20 @@ interface ChartClientMs {
 }
 
 interface ChartBar {
-  month: string; // MMM-yy label
-  key: string;   // yyyy-MM
+  month: string;
+  key: string;
   cashIn: number;
   outflowBalance: number;
   outflowUninvoiced: number;
   cumNet: number;
-  openingBal?: number; // only present on the synthetic Opening column in forecast mode
+  openingBal?: number;
 }
 
 type ChartMode = 'historical' | 'forecast' | 'combined';
 
-// ---------------------------------------------------------------------------
-// Tooltip formatter type
-// ---------------------------------------------------------------------------
-
 type RechartsTooltipFormatter = (value: number, name: string) => [string, string];
+
+type UnscheduledSortKey = 'amount_desc' | 'amount_asc' | 'project';
 
 // ---------------------------------------------------------------------------
 // Pulse animation style
@@ -168,7 +192,6 @@ const PULSE_STYLE = `
 
 // ---------------------------------------------------------------------------
 // Chart helper: 1:1 milestone matching pool builder
-// Returns Map<po_id, Map<amount_key, milestone[]>>
 // ---------------------------------------------------------------------------
 
 function buildMilestonePool(
@@ -194,15 +217,71 @@ function buildMilestonePool(
 }
 
 // ---------------------------------------------------------------------------
-// Kanban sub-components (unchanged from original)
+// Closing balance style
+// ---------------------------------------------------------------------------
+
+function getClosingBalanceStyle(balance: number): {
+  bg: string;
+  text: string;
+  label: string;
+  bold: boolean;
+  pulse: boolean;
+  tooltip?: string;
+} {
+  if (balance > 5_000_000) {
+    return { bg: '#E8F5E9', text: '#1D9E75', label: fmtTHBCompact(balance), bold: false, pulse: false };
+  } else if (balance >= 0) {
+    return {
+      bg: '#FFF8E1',
+      text: '#EF9F27',
+      label: `${fmtTHBCompact(balance)} — low`,
+      bold: false,
+      pulse: false,
+      tooltip: 'Cash position is below ฿5M this week. Consider moving a payment or bringing forward income.',
+    };
+  } else {
+    return {
+      bg: '#FFEBEE',
+      text: '#E24B4A',
+      label: `-฿${Math.abs(balance).toLocaleString('en-US', { maximumFractionDigits: 0 })} DEFICIT`,
+      bold: true,
+      pulse: true,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Invoice status label
+// ---------------------------------------------------------------------------
+
+const INVOICE_STATUS_LABELS: Record<string, string> = {
+  received: 'Received',
+  approved_cm: 'CM Approved',
+  approved_evp: 'EVP Approved',
+  released: 'Released',
+};
+
+const INVOICE_STATUS_COLORS: Record<string, string> = {
+  received: 'bg-gray-100 text-gray-500',
+  approved_cm: 'bg-blue-50 text-blue-600',
+  approved_evp: 'bg-blue-50 text-blue-700',
+  released: 'bg-green-50 text-green-700',
+};
+
+// ---------------------------------------------------------------------------
+// DraggableCard component
 // ---------------------------------------------------------------------------
 
 function DraggableCardComponent({
   card,
   isDragOverlay,
+  compact = false,
+  onQuickAssign,
 }: {
   card: DraggableCard;
   isDragOverlay?: boolean;
+  compact?: boolean;
+  onQuickAssign?: (card: DraggableCard) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: card.id,
@@ -210,14 +289,17 @@ function DraggableCardComponent({
   });
 
   const isIncome = card.type === 'milestone';
+  const isBeyond = card.scheduleState === 'beyond_horizon';
 
   return (
     <div
       ref={setNodeRef}
       className={`
-        relative flex items-start gap-2 rounded-md p-2.5 mb-1.5 bg-white shadow-sm
+        relative flex items-start gap-2 rounded-md p-2.5 mb-1.5 bg-white shadow-sm group
         ${isIncome
           ? 'border-l-4 border-l-[#1D9E75] border border-gray-100'
+          : isBeyond
+          ? 'border-l-4 border-l-[#378ADD] border border-gray-100'
           : 'border-l-4 border-l-[#EF9F27] border border-gray-100'
         }
         ${isDragOverlay ? 'shadow-xl ring-2 ring-[#378ADD]/30 rotate-1 opacity-95' : ''}
@@ -233,21 +315,64 @@ function DraggableCardComponent({
           {card.projectName}
         </p>
         {isIncome ? (
-          <p className="text-xs text-gray-500 leading-tight mt-0.5">
-            Milestone {card.milestoneNo} · {card.milestonePercent}%
+          <p className="text-xs text-gray-500 leading-tight mt-0.5 truncate">
+            Milestone {card.milestoneNo}
+            {card.milestonePercent != null ? ` · ${card.milestonePercent.toFixed(0)}%` : ''}
+            {card.milestoneDescription ? ` · ${card.milestoneDescription}` : ''}
           </p>
         ) : (
-          <p className="text-xs text-gray-500 leading-tight mt-0.5 truncate">
-            {card.vendorName}
+          <div className="mt-0.5 space-y-0.5">
+            <p className="text-xs text-gray-500 leading-tight truncate">
+              {card.vendorName}
+            </p>
+            {card.poNumber && (
+              <p className="text-[10px] text-gray-400 leading-tight truncate font-mono">
+                {card.poNumber}
+                {card.invoiceNo ? ` · ${card.invoiceNo}` : ''}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="flex items-center justify-between mt-1 gap-1">
+          <p className={`text-xs font-bold ${isIncome ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+            {isIncome ? '+' : '-'}{fmtTHBCompact(card.amount)}
+          </p>
+          <div className="flex items-center gap-1">
+            {card.hasPlanningNotes && (
+              <span title="Has planning notes" className="text-gray-400">
+                <Info size={9} />
+              </span>
+            )}
+            {!isIncome && card.invoiceStatus && !compact && (
+              <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${INVOICE_STATUS_COLORS[card.invoiceStatus] ?? 'bg-gray-100 text-gray-500'}`}>
+                {INVOICE_STATUS_LABELS[card.invoiceStatus] ?? card.invoiceStatus}
+              </span>
+            )}
+          </div>
+        </div>
+        {isBeyond && card.weekDate && !compact && (
+          <p className="text-[9px] text-[#378ADD] mt-0.5 leading-tight">
+            Scheduled {format(card.weekDate, 'd MMM yy')} — beyond 8-week view
           </p>
         )}
-        <p className={`text-xs font-bold mt-1 ${isIncome ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-          {isIncome ? '+' : '-'}{fmtTHBCompact(card.amount)}
-        </p>
       </div>
+      {onQuickAssign && !isDragOverlay && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onQuickAssign(card); }}
+          className="flex-shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-[#1D9E75] p-0.5 rounded"
+          title="Quick assign to week"
+        >
+          <Calendar size={12} />
+        </button>
+      )}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// WeekColumnDropZone
+// ---------------------------------------------------------------------------
 
 function WeekColumnDropZone({
   col,
@@ -280,25 +405,22 @@ function WeekColumnDropZone({
       >
         <div className="flex items-center gap-1.5">
           {isNegative && (
-            <div className="relative group">
+            <div className="relative group/tip">
               <AlertTriangle size={13} className="flex-shrink-0 cursor-default" />
-              <div className="absolute left-0 top-5 z-20 hidden group-hover:block w-48 bg-[#0f1923] text-white text-xs rounded-lg p-2 shadow-lg border border-white/10">
+              <div className="absolute left-0 top-5 z-20 hidden group-hover/tip:block w-48 bg-[#0f1923] text-white text-xs rounded-lg p-2 shadow-lg border border-white/10">
                 This week has a projected cash deficit of -฿{Math.abs(col.closingBalance).toLocaleString('en-US', { maximumFractionDigits: 0 })}. Drag payments to other weeks to resolve.
               </div>
             </div>
           )}
           <p className="text-xs font-semibold leading-tight flex-1">{col.label}</p>
           {isNegative && (
-            <div className="relative group ml-1">
+            <div className="relative group/tip2 ml-1">
               <span
                 className="text-xs font-bold cursor-default px-0.5 rounded-sm"
                 style={{ color: '#E24B4A', background: 'rgba(255,255,255,0.9)' }}
               >
                 ⚠
               </span>
-              <div className="absolute right-0 top-5 z-20 hidden group-hover:block w-48 bg-[#0f1923] text-white text-xs rounded-lg p-2 shadow-lg border border-white/10">
-                This week has a projected cash deficit of -฿{Math.abs(col.closingBalance).toLocaleString('en-US', { maximumFractionDigits: 0 })}. Drag payments to other weeks to resolve.
-              </div>
             </div>
           )}
         </div>
@@ -367,7 +489,7 @@ function WeekColumnDropZone({
               Income
             </p>
             {col.incomeCards.map((card) => (
-              <DraggableCardComponent key={card.id} card={card} />
+              <DraggableCardComponent key={card.id} card={card} compact />
             ))}
           </div>
         )}
@@ -379,7 +501,7 @@ function WeekColumnDropZone({
               Payments
             </p>
             {col.paymentCards.map((card) => (
-              <DraggableCardComponent key={card.id} card={card} />
+              <DraggableCardComponent key={card.id} card={card} compact />
             ))}
           </div>
         )}
@@ -396,28 +518,302 @@ function WeekColumnDropZone({
   );
 }
 
-function UnscheduledDropZone({ cards }: { cards: DraggableCard[] }) {
+// ---------------------------------------------------------------------------
+// Unscheduled Sidebar Panel
+// ---------------------------------------------------------------------------
+
+function UnscheduledPanel({
+  cards,
+  onQuickAssign,
+}: {
+  cards: DraggableCard[];
+  onQuickAssign: (card: DraggableCard) => void;
+}) {
   const { setNodeRef, isOver } = useDroppable({
     id: 'unscheduled-drop',
     data: { weekIndex: -1 },
   });
 
+  const [sortKey, setSortKey] = useState<UnscheduledSortKey>('amount_desc');
+  const [incomeCollapsed, setIncomeCollapsed] = useState(false);
+  const [paymentsCollapsed, setPaymentsCollapsed] = useState(false);
+  const [beyondCollapsed, setBeyondCollapsed] = useState(true);
+
+  const undated = cards.filter(c => c.scheduleState === 'unscheduled');
+  const beyond = cards.filter(c => c.scheduleState === 'beyond_horizon');
+
+  const sortCards = (list: DraggableCard[]) => {
+    if (sortKey === 'amount_desc') return [...list].sort((a, b) => b.amount - a.amount);
+    if (sortKey === 'amount_asc') return [...list].sort((a, b) => a.amount - b.amount);
+    return [...list].sort((a, b) => a.projectName.localeCompare(b.projectName));
+  };
+
+  const undatedIncome = sortCards(undated.filter(c => c.type === 'milestone'));
+  const undatedPayments = sortCards(undated.filter(c => c.type === 'invoice'));
+
+  const totalUnscheduledOut = undated.filter(c => c.type === 'invoice').reduce((s, c) => s + c.amount, 0);
+  const totalUnscheduledIn = undated.filter(c => c.type === 'milestone').reduce((s, c) => s + c.amount, 0);
+  const totalBeyondOut = beyond.filter(c => c.type === 'invoice').reduce((s, c) => s + c.amount, 0);
+
   return (
     <div
       ref={setNodeRef}
-      className={`flex flex-wrap gap-2 min-h-[80px] rounded-lg transition-colors p-2 -m-2 ${
-        isOver ? 'bg-[#EF9F27]/8 ring-2 ring-[#EF9F27]/40 ring-inset' : ''
-      }`}
+      className={`h-full flex flex-col transition-colors ${isOver ? 'bg-[#EF9F27]/5 ring-2 ring-[#EF9F27]/30 ring-inset rounded-xl' : ''}`}
     >
-      {cards.map((card) => (
-        <div key={card.id} className="w-52">
-          <DraggableCardComponent card={card} />
+      {/* Panel header */}
+      <div className="px-3 pt-3 pb-2 flex-shrink-0">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-xs font-bold text-[#0f1923] flex items-center gap-1.5">
+            <AlertTriangle size={12} className="text-[#EF9F27]" />
+            Unscheduled
+            <span className="bg-[#EF9F27]/15 text-[#EF9F27] text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+              {undated.length}
+            </span>
+          </h2>
+          <div className="relative group/sort">
+            <button className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+              <ArrowDownUp size={12} />
+            </button>
+            <div className="absolute right-0 top-6 z-30 hidden group-hover/sort:block bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-36">
+              {([['amount_desc', 'Largest first'], ['amount_asc', 'Smallest first'], ['project', 'By project']] as [UnscheduledSortKey, string][]).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setSortKey(k)}
+                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${sortKey === k ? 'bg-gray-50 text-[#0f1923] font-semibold' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-      ))}
-      {cards.length === 0 && (
-        <div className={`border-2 border-dashed rounded-lg w-full h-16 flex items-center justify-center transition-colors ${isOver ? 'border-[#EF9F27]/50' : 'border-gray-200'}`}>
-          <p className={`text-xs ${isOver ? 'text-[#EF9F27]' : 'text-gray-300'}`}>
-            {isOver ? 'Drop to unschedule' : 'No unscheduled items'}
+
+        {/* Financial summary */}
+        {(totalUnscheduledOut > 0 || totalUnscheduledIn > 0) && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 space-y-1">
+            {totalUnscheduledOut > 0 && (
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-amber-700">Payments out</span>
+                <span className="text-[10px] font-bold text-[#E24B4A]">-{fmtTHBCompact(totalUnscheduledOut)}</span>
+              </div>
+            )}
+            {totalUnscheduledIn > 0 && (
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-amber-700">Income in</span>
+                <span className="text-[10px] font-bold text-[#1D9E75]">+{fmtTHBCompact(totalUnscheduledIn)}</span>
+              </div>
+            )}
+            <p className="text-[9px] text-amber-600 leading-snug pt-0.5 border-t border-amber-200">
+              Not included in weekly balances above. Drag to schedule.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Scrollable cards */}
+      <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-3 min-h-0">
+
+        {/* Income section */}
+        {undatedIncome.length > 0 && (
+          <div>
+            <button
+              onClick={() => setIncomeCollapsed(!incomeCollapsed)}
+              className="w-full flex items-center justify-between mb-1.5 group/sec"
+            >
+              <span className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold flex items-center gap-1">
+                <TrendingUp size={9} className="text-[#1D9E75]" />
+                Income ({undatedIncome.length})
+              </span>
+              {incomeCollapsed ? <ChevronRight size={10} className="text-gray-400" /> : <ChevronUp size={10} className="text-gray-400" />}
+            </button>
+            {!incomeCollapsed && undatedIncome.map(card => (
+              <DraggableCardComponent key={card.id} card={card} onQuickAssign={onQuickAssign} />
+            ))}
+          </div>
+        )}
+
+        {undatedIncome.length === 0 && undatedPayments.length > 0 && (
+          <p className="text-[10px] text-gray-400 italic flex items-center gap-1">
+            <Check size={10} className="text-[#1D9E75]" />
+            All milestones are scheduled
+          </p>
+        )}
+
+        {/* Payments section */}
+        {undatedPayments.length > 0 && (
+          <div>
+            <button
+              onClick={() => setPaymentsCollapsed(!paymentsCollapsed)}
+              className="w-full flex items-center justify-between mb-1.5"
+            >
+              <span className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold flex items-center gap-1">
+                <TrendingDown size={9} className="text-[#EF9F27]" />
+                Payments ({undatedPayments.length})
+              </span>
+              {paymentsCollapsed ? <ChevronRight size={10} className="text-gray-400" /> : <ChevronUp size={10} className="text-gray-400" />}
+            </button>
+            {!paymentsCollapsed && undatedPayments.map(card => (
+              <DraggableCardComponent key={card.id} card={card} onQuickAssign={onQuickAssign} />
+            ))}
+          </div>
+        )}
+
+        {undated.length === 0 && (
+          <div className="border-2 border-dashed rounded-lg h-16 flex items-center justify-center">
+            <p className="text-xs text-gray-300">
+              {isOver ? 'Drop to unschedule' : 'All items scheduled'}
+            </p>
+          </div>
+        )}
+
+        {/* Beyond horizon section */}
+        {beyond.length > 0 && (
+          <div className="border-t border-gray-100 pt-3">
+            <button
+              onClick={() => setBeyondCollapsed(!beyondCollapsed)}
+              className="w-full flex items-center justify-between mb-1.5"
+            >
+              <span className="text-[10px] uppercase tracking-wide text-[#378ADD] font-semibold flex items-center gap-1">
+                <Clock size={9} className="text-[#378ADD]" />
+                Beyond 8 weeks ({beyond.length})
+              </span>
+              {beyondCollapsed ? <ChevronRight size={10} className="text-gray-400" /> : <ChevronUp size={10} className="text-gray-400" />}
+            </button>
+            {!beyondCollapsed && (
+              <>
+                {totalBeyondOut > 0 && (
+                  <p className="text-[10px] text-[#378ADD] mb-1.5 bg-blue-50 rounded px-2 py-1">
+                    {fmtTHBCompact(totalBeyondOut)} scheduled beyond the 8-week view — not shown in columns
+                  </p>
+                )}
+                {sortCards(beyond).map(card => (
+                  <DraggableCardComponent key={card.id} card={card} onQuickAssign={onQuickAssign} />
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Opening Balance Popover
+// ---------------------------------------------------------------------------
+
+function OpeningBalancePopover({
+  totalReceipts,
+  totalVouchersPaid,
+  projectRows,
+}: {
+  totalReceipts: number;
+  totalVouchersPaid: number;
+  projectRows: ProjectBalanceRow[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  const net = totalReceipts - totalVouchersPaid;
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-200 transition-colors"
+      >
+        <TrendingUp size={12} className="text-[#1D9E75]" />
+        <span className="text-xs text-gray-600">
+          Net Project Cash Position: <strong className="text-[#0f1923]">{fmtTHB(net)}</strong>
+        </span>
+        <Info size={11} className="text-gray-400" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-10 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-[480px] p-4">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-[#0f1923]">Net Project Cash Position Breakdown</h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Total client receipts minus payment vouchers issued — not a bank balance
+              </p>
+            </div>
+            <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 ml-2">
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Summary row */}
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="rounded-lg bg-green-50 border border-green-100 p-2.5 text-center">
+              <p className="text-[10px] text-green-700 font-medium uppercase tracking-wide">Client Receipts</p>
+              <p className="text-sm font-bold text-[#1D9E75] mt-0.5">{fmtTHBCompact(totalReceipts)}</p>
+            </div>
+            <div className="rounded-lg bg-red-50 border border-red-100 p-2.5 text-center">
+              <p className="text-[10px] text-red-700 font-medium uppercase tracking-wide">Vendor Payments</p>
+              <p className="text-sm font-bold text-[#E24B4A] mt-0.5">-{fmtTHBCompact(totalVouchersPaid)}</p>
+            </div>
+            <div className={`rounded-lg border p-2.5 text-center ${net >= 0 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
+              <p className={`text-[10px] font-medium uppercase tracking-wide ${net >= 0 ? 'text-green-700' : 'text-red-700'}`}>Net Position</p>
+              <p className={`text-sm font-bold mt-0.5 ${net >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{fmtTHBCompact(net)}</p>
+            </div>
+          </div>
+
+          {/* Per-project table */}
+          {projectRows.length > 0 && (
+            <>
+              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-1.5">By Project</p>
+              <div className="border border-gray-100 rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="text-left px-2.5 py-1.5 text-[10px] text-gray-500 font-semibold">Project</th>
+                      <th className="text-right px-2.5 py-1.5 text-[10px] text-gray-500 font-semibold">Received</th>
+                      <th className="text-right px-2.5 py-1.5 text-[10px] text-gray-500 font-semibold">Paid Out</th>
+                      <th className="text-right px-2.5 py-1.5 text-[10px] text-gray-500 font-semibold">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectRows.map((row, i) => (
+                      <tr key={row.name} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                        <td className="px-2.5 py-1.5 text-[#0f1923] font-medium truncate max-w-[160px]" title={row.name}>
+                          {row.name.length > 22 ? row.name.slice(0, 22) + '…' : row.name}
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right text-[#1D9E75] font-medium">
+                          {fmtTHBCompact(row.received)}
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right text-[#E24B4A] font-medium">
+                          -{fmtTHBCompact(row.paid)}
+                        </td>
+                        <td className={`px-2.5 py-1.5 text-right font-bold ${row.net >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
+                          {row.net >= 0 ? '+' : ''}{fmtTHBCompact(row.net)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-gray-200 bg-gray-50">
+                      <td className="px-2.5 py-1.5 text-[10px] text-gray-500 font-bold">TOTAL</td>
+                      <td className="px-2.5 py-1.5 text-right text-[10px] font-bold text-[#1D9E75]">{fmtTHBCompact(totalReceipts)}</td>
+                      <td className="px-2.5 py-1.5 text-right text-[10px] font-bold text-[#E24B4A]">-{fmtTHBCompact(totalVouchersPaid)}</td>
+                      <td className={`px-2.5 py-1.5 text-right text-[10px] font-bold ${net >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{fmtTHBCompact(net)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          )}
+
+          <p className="text-[10px] text-gray-400 mt-2 leading-relaxed">
+            Receipts: <code className="bg-gray-100 px-1 rounded">client_invoice_payments</code> · Paid out: <code className="bg-gray-100 px-1 rounded">payment_vouchers (status=issued)</code>
           </p>
         </div>
       )}
@@ -425,34 +821,55 @@ function UnscheduledDropZone({ cards }: { cards: DraggableCard[] }) {
   );
 }
 
-function getClosingBalanceStyle(balance: number): {
-  bg: string;
-  text: string;
-  label: string;
-  bold: boolean;
-  pulse: boolean;
-  tooltip?: string;
-} {
-  if (balance > 5_000_000) {
-    return { bg: '#E8F5E9', text: '#1D9E75', label: fmtTHBCompact(balance), bold: false, pulse: false };
-  } else if (balance >= 0) {
-    return {
-      bg: '#FFF8E1',
-      text: '#EF9F27',
-      label: `${fmtTHBCompact(balance)} — low`,
-      bold: false,
-      pulse: false,
-      tooltip: 'Cash position is below ฿5M this week. Consider moving a payment or bringing forward income.',
-    };
-  } else {
-    return {
-      bg: '#FFEBEE',
-      text: '#E24B4A',
-      label: `-฿${Math.abs(balance).toLocaleString('en-US', { maximumFractionDigits: 0 })} DEFICIT`,
-      bold: true,
-      pulse: true,
-    };
-  }
+// ---------------------------------------------------------------------------
+// Quick-assign week picker modal
+// ---------------------------------------------------------------------------
+
+function QuickAssignModal({
+  card,
+  weekStarts,
+  onAssign,
+  onClose,
+}: {
+  card: DraggableCard;
+  weekStarts: Date[];
+  onAssign: (card: DraggableCard, weekStart: Date) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl p-5 max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-bold text-[#0f1923]">Assign to Week</h3>
+            <p className="text-xs text-gray-500 mt-0.5 truncate max-w-[240px]">
+              {card.projectName}
+              {card.type === 'invoice' && card.vendorName ? ` · ${card.vendorName}` : ''}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-2">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {weekStarts.map((ws, i) => (
+            <button
+              key={i}
+              onClick={() => { onAssign(card, ws); onClose(); }}
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-gray-200 hover:border-[#1D9E75] hover:bg-green-50 transition-colors group"
+            >
+              <p className="text-xs font-semibold text-[#0f1923] group-hover:text-[#1D9E75]">
+                Week {i + 1}
+              </p>
+              <p className="text-[10px] text-gray-400">
+                {format(ws, 'EEE d MMM')} – {format(addDays(ws, 6), 'EEE d MMM')}
+              </p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -462,12 +879,13 @@ function getClosingBalanceStyle(balance: number): {
 export default function CashFlowPlanner() {
   useAuth();
 
-  // ── Kanban state (unchanged) ─────────────────────────────────────────────
+  // ── Kanban state ─────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<Project[]>([]);
   const [milestones, setMilestones] = useState<ClientMilestoneRow[]>([]);
   const [invoices, setInvoices] = useState<(VendorInvoice & { vendor?: { name: string }; project?: Project })[]>([]);
   const [totalReceipts, setTotalReceipts] = useState(0);
   const [totalVouchersPaid, setTotalVouchersPaid] = useState(0);
+  const [projectBalanceRows, setProjectBalanceRows] = useState<ProjectBalanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
   const [activeCard, setActiveCard] = useState<DraggableCard | null>(null);
@@ -481,9 +899,10 @@ export default function CashFlowPlanner() {
   });
   const [dismissedWeeks, setDismissedWeeks] = useState<Set<string>>(new Set());
   const [messageOverride, setMessageOverride] = useState<MessageOverride | null>(null);
+  const [quickAssignCard, setQuickAssignCard] = useState<DraggableCard | null>(null);
   const msgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Chart state ──────────────────────────────────────────────────────────
+  // ── Chart state ───────────────────────────────────────────────────────────
   const [chartMode, setChartMode] = useState<ChartMode>('forecast');
   const [chartLoading, setChartLoading] = useState(true);
   const [paidInvoices, setPaidInvoices] = useState<ChartPaidInvoice[]>([]);
@@ -499,25 +918,26 @@ export default function CashFlowPlanner() {
   const weekStarts = Array.from({ length: 8 }, (_, i) =>
     startOfWeek(addWeeks(new Date(), i), { weekStartsOn: 1 })
   );
+  const horizonEnd = addDays(weekStarts[7], 6);
 
   useEffect(() => {
     loadData();
     loadChartData();
   }, []);
 
-  // ── Kanban data load (unchanged) ─────────────────────────────────────────
+  // ── Kanban data load ──────────────────────────────────────────────────────
 
   async function loadData() {
     setLoading(true);
-    const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes] = await Promise.all([
+    const [projectsRes, milestonesRes, invoicesRes, receiptsRes, vouchersRes, receiptsByProjectRes, vouchersByProjectRes] = await Promise.all([
       supabase.from('projects').select('*').order('name'),
       supabase
         .from('client_milestones')
-        .select('id, project_id, milestone_number, milestone_pct, payment_plan_amount, planned_receive_date, status, project:projects(*)')
+        .select('id, project_id, milestone_number, milestone_description, milestone_pct, payment_plan_amount, planned_receive_date, status, project:projects(*)')
         .neq('status', 'received'),
       supabase
         .from('vendor_invoices')
-        .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(*)')
+        .select('*, vendor:entities!vendor_id(name), project:projects(*), purchase_order:purchase_orders(pss_po_no, supplier_name_raw)')
         .in('status', VENDOR_INVOICE_UNPAID_STATUSES),
       supabase
         .from('client_invoice_payments')
@@ -526,6 +946,16 @@ export default function CashFlowPlanner() {
       supabase
         .from('payment_vouchers')
         .select('net_paid')
+        .eq('status', 'issued'),
+      // Per-project receipts for opening balance breakdown
+      supabase
+        .from('client_invoice_payments')
+        .select('amount, client_invoice:client_invoices(client_milestone:client_milestones(project:projects(name)))')
+        .gt('amount', 0),
+      // Per-project payments for opening balance breakdown
+      supabase
+        .from('payment_vouchers')
+        .select('net_paid, project:projects(name)')
         .eq('status', 'issued'),
     ]);
 
@@ -538,48 +968,59 @@ export default function CashFlowPlanner() {
     setTotalVouchersPaid(
       (vouchersRes.data ?? []).reduce((s: number, v: { net_paid: number }) => s + (v.net_paid ?? 0), 0)
     );
+
+    // Build per-project balance rows
+    const receiptMap = new Map<string, number>();
+    for (const r of (receiptsByProjectRes.data ?? []) as any[]) {
+      const name = r.client_invoice?.client_milestone?.project?.name;
+      if (name) receiptMap.set(name, (receiptMap.get(name) ?? 0) + Number(r.amount));
+    }
+    const paidMap = new Map<string, number>();
+    for (const v of (vouchersByProjectRes.data ?? []) as any[]) {
+      const name = v.project?.name;
+      if (name) paidMap.set(name, (paidMap.get(name) ?? 0) + Number(v.net_paid));
+    }
+    const allProjectNames = new Set([...receiptMap.keys(), ...paidMap.keys()]);
+    const rows: ProjectBalanceRow[] = [...allProjectNames].map(name => {
+      const received = receiptMap.get(name) ?? 0;
+      const paid = paidMap.get(name) ?? 0;
+      return { name, received, paid, net: received - paid };
+    }).sort((a, b) => b.received - a.received);
+    setProjectBalanceRows(rows);
+
     setLoading(false);
   }
 
   // ── Chart data load ───────────────────────────────────────────────────────
-  // Mirrors the exact same query shape used by MonthlyAnalysis / MonthlyAnalysisBalance
-  // / MonthlyAnalysisUninvoiced pivot tables.
 
   async function loadChartData() {
     setChartLoading(true);
 
     const [paidRes, receivedRes, allMsRes, allInvRes, clientMsRes, clientReceiptsRes] = await Promise.all([
-      // Historical: paid invoices with their PO milestone relations for 1:1 matching
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_date, invoice_amount_incl_vat, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
         .in('status', VENDOR_INVOICE_PAID_STATUSES),
-      // Forecast Balance: unpaid invoices (full pipeline) with milestone relations
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat, received_amount, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
         .in('status', VENDOR_INVOICE_UNPAID_STATUSES),
-      // For uninvoiced matching: all milestones
       supabase
         .from('po_milestones')
         .select('purchase_order_id, amount_due, planned_payment_date')
         .order('planned_payment_date', { ascending: true, nullsFirst: false }),
-      // For uninvoiced matching: all invoices (to consume milestones)
       supabase
         .from('vendor_invoices')
         .select('po_id, invoice_amount_incl_vat'),
-      // Cash In: client milestones (forecast inflow base)
       supabase
         .from('client_milestones')
         .select('id, payment_plan_amount, planned_receive_date'),
-      // Cash In: client invoice receipts (historical inflow & deduction source)
       supabase
         .from('client_invoice_payments')
         .select('client_invoice:client_invoices(client_milestone_id), amount, payment_date')
         .gt('amount', 0),
     ]);
 
-    // Normalize paid invoices
     setPaidInvoices(
       (paidRes.data ?? []).map((vi: any) => ({
         po_id: vi.po_id,
@@ -589,7 +1030,6 @@ export default function CashFlowPlanner() {
       }))
     );
 
-    // Normalize received invoices
     setReceivedInvoices(
       (receivedRes.data ?? []).map((vi: any) => ({
         po_id: vi.po_id,
@@ -599,7 +1039,6 @@ export default function CashFlowPlanner() {
       }))
     );
 
-    // Compute uninvoiced milestones via 1:1 subtraction (mirrors MonthlyAnalysisUninvoiced)
     const allMs = (allMsRes.data ?? []) as { purchase_order_id: string; amount_due: number; planned_payment_date: string | null }[];
     const allInvs = (allInvRes.data ?? []) as { po_id: string | null; invoice_amount_incl_vat: number }[];
     const availByKey = new Map<string, number[]>();
@@ -624,7 +1063,6 @@ export default function CashFlowPlanner() {
     const rawClientMs = (clientMsRes.data ?? []);
     const rawClientReceipts = (clientReceiptsRes.data ?? []);
 
-    // 1. Plot Historical Receipts — strict: only rows with a confirmed payment_date
     setClientReceipts(
       rawClientReceipts.map((r: any) => ({
         received_amount: r.amount,
@@ -632,7 +1070,6 @@ export default function CashFlowPlanner() {
       }))
     );
 
-    // 2. Map total received cash by Milestone ID
     const receivedByMilestone = new Map<string, number>();
     for (const r of rawClientReceipts) {
       const milestoneId = r.client_invoice?.client_milestone_id;
@@ -642,7 +1079,6 @@ export default function CashFlowPlanner() {
       }
     }
 
-    // 3. Deduct received cash from milestones to find the TRUE remaining forecast
     const trueForecastMs: ChartClientMs[] = rawClientMs
       .map((m: any) => {
         const alreadyReceived = receivedByMilestone.get(m.id) || 0;
@@ -663,7 +1099,6 @@ export default function CashFlowPlanner() {
 
   const today = new Date();
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  // Overdue sweep anchor: 15th of CURRENT month
   const sweepDate = new Date(today.getFullYear(), today.getMonth(), 15);
   const sweepKey = format(sweepDate, 'yyyy-MM');
 
@@ -673,7 +1108,6 @@ export default function CashFlowPlanner() {
     return format(effective, 'yyyy-MM');
   }
 
-  // Historical Cash Out: paid invoices, 1:1 matched to milestone planned_payment_date
   const historicalOutByMonth = (() => {
     const pool = buildMilestonePool(paidInvoices);
     const map = new Map<string, number>();
@@ -686,7 +1120,6 @@ export default function CashFlowPlanner() {
           const cands = poPool.get(k);
           if (cands && cands.length > 0) {
             const matched = cands.shift()!;
-            // Cap future-dated milestones to invoice_date for historical paid rows
             const isFuture = matched.planned_payment_date && new Date(matched.planned_payment_date) > today;
             assignedDate = isFuture ? inv.invoice_date : (matched.planned_payment_date ?? inv.invoice_date);
           }
@@ -699,7 +1132,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Historical Cash In: actual client invoice receipts
   const historicalInByMonth = (() => {
     const map = new Map<string, number>();
     for (const r of clientReceipts) {
@@ -710,7 +1142,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash Out Col O: invoice balances (received, not yet paid) with overdue sweep
   const forecastBalanceByMonth = (() => {
     const map = new Map<string, number>();
     const pool = buildMilestonePool(receivedInvoices);
@@ -732,7 +1163,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash Out Col P: uninvoiced milestones with overdue sweep
   const forecastUninvoicedByMonth = (() => {
     const map = new Map<string, number>();
     for (const m of uninvoicedMs) {
@@ -742,7 +1172,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Forecast Cash In: client milestones (planned inflow) — apply same overdue sweep
   const forecastInByMonth = (() => {
     const map = new Map<string, number>();
     for (const m of clientMs) {
@@ -753,7 +1182,6 @@ export default function CashFlowPlanner() {
     return map;
   })();
 
-  // Build unified sorted month keys across all datasets
   const allKeys = new Set([
     ...historicalOutByMonth.keys(),
     ...historicalInByMonth.keys(),
@@ -763,8 +1191,6 @@ export default function CashFlowPlanner() {
   ]);
   const sortedKeys = [...allKeys].sort();
 
-  // Opening balance = net of all historical settled cash (paid invoices vs actual receipts).
-  // Used to seed the Forecast cumulative line so it continues from where history ended.
   const historicalOpeningBalance = (() => {
     let totalIn = 0;
     let totalOut = 0;
@@ -785,7 +1211,6 @@ export default function CashFlowPlanner() {
       ? [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasForecast(k))
       : [...new Set([sweepKey, ...sortedKeys])].sort().filter(k => hasHistorical(k) || hasForecast(k));
 
-    // Forecast seeds from historical net; combined naturally accumulates from first historical month
     let cumNet = mode === 'forecast' ? historicalOpeningBalance : 0;
 
     const bars: ChartBar[] = keys.map(key => {
@@ -795,7 +1220,6 @@ export default function CashFlowPlanner() {
 
       if (mode === 'historical') {
         cashIn = (historicalInByMonth.get(key) ?? 0) / 1_000_000;
-        // Historical has no split — show all paid as outflowBalance
         outflowBalance = (historicalOutByMonth.get(key) ?? 0) / 1_000_000;
         outflowUninvoiced = 0;
       } else if (mode === 'forecast') {
@@ -803,7 +1227,6 @@ export default function CashFlowPlanner() {
         outflowBalance = (forecastBalanceByMonth.get(key) ?? 0) / 1_000_000;
         outflowUninvoiced = (forecastUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
       } else {
-        // Combined: historical months get historical data, current+ get forecast
         const isForecastMonth = key >= format(today, 'yyyy-MM');
         cashIn = isForecastMonth
           ? (forecastInByMonth.get(key) ?? 0) / 1_000_000
@@ -827,7 +1250,6 @@ export default function CashFlowPlanner() {
       };
     });
 
-    // Prepend a synthetic Opening column in forecast mode to visually anchor the starting balance
     if (mode === 'forecast' && historicalOpeningBalance !== 0) {
       bars.unshift({
         month: 'Opening',
@@ -846,45 +1268,69 @@ export default function CashFlowPlanner() {
   const chartData = buildChartData(chartMode);
   const todayMonthLabel = format(today, 'MMM-yy');
 
-  // ── Kanban derived values (unchanged) ────────────────────────────────────
+  // ── Kanban derived values ─────────────────────────────────────────────────
 
   const buildCards = useCallback((): DraggableCard[] => {
     const cards: DraggableCard[] = [];
     for (const m of milestones) {
       if (selectedProjectId !== 'all' && m.project_id !== selectedProjectId) continue;
       const d = m.planned_receive_date;
+      const weekDate = d ? parseISO(d) : null;
+      let scheduleState: CardScheduleState = 'unscheduled';
+      if (weekDate) {
+        scheduleState = isAfter(weekDate, horizonEnd) ? 'beyond_horizon' : 'scheduled';
+      }
       cards.push({
         id: `m-${m.id}`,
         type: 'milestone',
         projectName: m.project?.name ?? 'Unknown Project',
         projectId: m.project_id,
         amount: m.payment_plan_amount,
-        weekDate: d ? parseISO(d) : null,
+        weekDate,
+        scheduleState,
         milestoneNo: m.milestone_number,
         milestonePercent: m.milestone_pct != null ? m.milestone_pct * 100 : undefined,
+        milestoneDescription: m.milestone_description,
         rawMilestone: m,
       });
     }
     for (const inv of invoices) {
       if (selectedProjectId !== 'all' && inv.project_id !== selectedProjectId) continue;
       const d = inv.planned_payment_date ?? inv.original_due_date;
+      const weekDate = d ? parseISO(d) : null;
+      let scheduleState: CardScheduleState = 'unscheduled';
+      if (weekDate) {
+        scheduleState = isAfter(weekDate, horizonEnd) ? 'beyond_horizon' : 'scheduled';
+      }
+
+      // Vendor name: try entity join first, fall back to PO supplier_name_raw
+      const po = (inv as any).purchase_order;
+      const vendorName = inv.vendor?.name ?? po?.supplier_name_raw ?? 'Unassigned Vendor';
+
       cards.push({
         id: `i-${inv.id}`,
         type: 'invoice',
         projectName: inv.project?.name ?? 'Unknown Project',
         projectId: inv.project_id,
         amount: inv.net_payable,
-        weekDate: d ? parseISO(d) : null,
-        vendorName: inv.vendor?.name ?? 'Unknown Vendor',
+        weekDate,
+        scheduleState,
+        vendorName,
+        poNumber: po?.pss_po_no ?? undefined,
+        invoiceNo: inv.vendor_invoice_no ?? undefined,
+        invoiceStatus: inv.status,
+        hasPlanningNotes: !!(inv.planning_notes),
         rawInvoice: inv,
       });
     }
     return cards;
-  }, [milestones, invoices, selectedProjectId]);
+  }, [milestones, invoices, selectedProjectId, horizonEnd]);
 
   const allCards = buildCards();
-  const scheduledCards = allCards.filter((c) => c.weekDate !== null);
-  const unscheduledCards = allCards.filter((c) => c.weekDate === null);
+  const scheduledCards = allCards.filter((c) => c.scheduleState === 'scheduled');
+  const unscheduledAndBeyond = allCards.filter((c) => c.scheduleState !== 'scheduled');
+  const totalUnscheduledOut = allCards.filter(c => c.scheduleState === 'unscheduled' && c.type === 'invoice')
+    .reduce((s, c) => s + c.amount, 0);
 
   function buildWeekColumns(cards: DraggableCard[]): WeekColumn[] {
     const columns: WeekColumn[] = weekStarts.map((ws, i) => ({
@@ -927,9 +1373,9 @@ export default function CashFlowPlanner() {
 
   function wouldCauseNegative(card: DraggableCard, targetWeekStart: Date | null) {
     const modifiedCards = allCards.map((c) =>
-      c.id === card.id ? { ...c, weekDate: targetWeekStart } : c
+      c.id === card.id ? { ...c, weekDate: targetWeekStart, scheduleState: (targetWeekStart ? 'scheduled' : 'unscheduled') as CardScheduleState } : c
     );
-    const scheduled = modifiedCards.filter((c) => c.weekDate !== null);
+    const scheduled = modifiedCards.filter((c) => c.scheduleState === 'scheduled');
     const cols = buildWeekColumns(scheduled);
     const negCol = cols.find((c) => c.closingBalance < 0);
     return negCol
@@ -959,9 +1405,9 @@ export default function CashFlowPlanner() {
     }
 
     const modifiedCards = allCards.map((c) =>
-      c.id === card.id ? { ...c, weekDate: targetWeekStart } : c
+      c.id === card.id ? { ...c, weekDate: targetWeekStart, scheduleState: (targetWeekStart ? 'scheduled' : 'unscheduled') as CardScheduleState } : c
     );
-    const scheduled = modifiedCards.filter((c) => c.weekDate !== null);
+    const scheduled = modifiedCards.filter((c) => c.scheduleState === 'scheduled');
     const cols = buildWeekColumns(scheduled);
 
     if (targetWeekStart) {
@@ -1018,7 +1464,7 @@ export default function CashFlowPlanner() {
     let targetWeekStart: Date | null = null;
 
     if (overId === 'unscheduled-drop') {
-      if (card.weekDate === null) return;
+      if (card.scheduleState === 'unscheduled') return;
       applyMove(card, null);
       return;
     }
@@ -1126,22 +1572,13 @@ export default function CashFlowPlanner() {
             {messageOverride.text}
           </div>
         ) : (
-          <div className="flex flex-wrap gap-6 mt-4">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-sm bg-[#1D9E75]" />
-              <span className="text-xs text-gray-600">Income (Milestones)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-sm bg-[#EF9F27]" />
-              <span className="text-xs text-gray-600">Payments (Vendor Invoices)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <TrendingUp size={12} className="text-[#1D9E75]" />
-              <span className="text-xs text-gray-600">
-                Opening Balance: <strong className="text-[#0f1923]">{fmtTHB(totalReceipts - totalVouchersPaid)}</strong>
-              </span>
-            </div>
-            <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
+          <div className="flex flex-wrap gap-4 mt-4 items-center">
+            <OpeningBalancePopover
+              totalReceipts={totalReceipts}
+              totalVouchersPaid={totalVouchersPaid}
+              projectRows={projectBalanceRows}
+            />
+            <div className="flex items-center gap-2 pl-3 border-l border-gray-200">
               <span className="text-xs text-gray-500">Next 4 weeks:</span>
               <span className="text-xs text-gray-600">Income <strong className="text-[#1D9E75]">{fmtTHBCompact(totalIncome)}</strong></span>
               <span className="text-xs text-gray-400">·</span>
@@ -1165,14 +1602,11 @@ export default function CashFlowPlanner() {
       {/* ── Cash Flow Chart ───────────────────────────────────────────────── */}
       <div className="px-6 pt-6">
         <div className="bg-white rounded-xl border border-black/[0.08] p-5 shadow-sm">
-
-          {/* Chart header */}
           <div className="flex items-start justify-between mb-4 gap-4">
             <div>
               <h2 className="text-[13px] font-semibold text-gray-900">Cash Flow Overview — Expected Payment Month (฿M)</h2>
               <p className="text-[11px] text-gray-400 mt-0.5">{chartSubtitle[chartMode]}</p>
             </div>
-            {/* Tab switcher */}
             <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 shrink-0">
               {(['historical', 'forecast', 'combined'] as const).map(mode => (
                 <button
@@ -1190,7 +1624,6 @@ export default function CashFlowPlanner() {
             </div>
           </div>
 
-          {/* Legend */}
           <div className="flex items-center gap-5 mb-4 flex-wrap">
             <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span className="inline-block w-3 h-3 rounded-sm bg-[#1D9E75]" />
@@ -1210,6 +1643,12 @@ export default function CashFlowPlanner() {
               <span className="inline-block w-8 h-0.5 bg-[#3B82F6]" />
               Cumulative Net
             </span>
+            {chartMode === 'forecast' && historicalOpeningBalance !== 0 && (
+              <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="inline-block w-3 h-3 rounded-sm bg-[#EF9F27]" />
+                Net Project Cash Position ({fmtTHBCompact(historicalOpeningBalance * 1_000_000)})
+              </span>
+            )}
             {chartMode !== 'historical' && (
               <span className="ml-auto text-[11px] text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full">
                 Overdue items swept into {format(sweepDate, 'MMM-yy')}
@@ -1217,7 +1656,6 @@ export default function CashFlowPlanner() {
             )}
           </div>
 
-          {/* Chart */}
           {chartLoading ? (
             <div className="h-[260px] flex items-center justify-center">
               <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
@@ -1251,15 +1689,19 @@ export default function CashFlowPlanner() {
                   tickLine={false}
                   tickFormatter={(v: number) => `฿${v}M`}
                 />
-                <Tooltip
-                  formatter={((value: number, name: string): [string, string] => [
-                    `฿${value.toFixed(1)}M`,
-                    name === 'cashIn' ? 'Cash In'
-                    : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                    : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                    : name === 'openingBal' ? 'Opening Balance'
-                    : 'Cumulative Net',
-                  ]) as RechartsTooltipFormatter}
+                <RechartsTooltip
+                  formatter={((value: number, name: string): [string, string] => {
+                    if (name === 'openingBal') {
+                      return [`฿${value.toFixed(1)}M (receipts - paid vouchers)`, 'Net Project Cash Position'];
+                    }
+                    return [
+                      `฿${value.toFixed(1)}M`,
+                      name === 'cashIn' ? 'Cash In'
+                      : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
+                      : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
+                      : 'Cumulative Net',
+                    ];
+                  }) as RechartsTooltipFormatter}
                   contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
                   cursor={{ fill: 'rgba(0,0,0,0.03)' }}
                 />
@@ -1268,13 +1710,12 @@ export default function CashFlowPlanner() {
                     value === 'cashIn' ? 'Cash In'
                     : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
                     : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                    : value === 'openingBal' ? 'Opening Balance'
+                    : value === 'openingBal' ? 'Net Project Cash Position'
                     : 'Cumulative Net'
                   }
                   iconType="square"
                   wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
                 />
-                {/* Today reference line — only visible in combined mode */}
                 {chartMode === 'combined' && (
                   <ReferenceLine
                     yAxisId="bars"
@@ -1285,6 +1726,16 @@ export default function CashFlowPlanner() {
                   />
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
+                {chartMode === 'forecast' && historicalOpeningBalance !== 0 && (
+                  <ReferenceLine
+                    yAxisId="line"
+                    y={historicalOpeningBalance}
+                    stroke="#EF9F27"
+                    strokeDasharray="4 2"
+                    strokeWidth={1.5}
+                    label={{ value: `Starting: ฿${historicalOpeningBalance.toFixed(1)}M`, position: 'insideTopRight', fontSize: 10, fill: '#EF9F27' }}
+                  />
+                )}
                 {chartMode === 'forecast' && (
                   <Bar yAxisId="bars" dataKey="openingBal" fill="#EF9F27" radius={[3, 3, 0, 0]} opacity={0.9} name="openingBal" />
                 )}
@@ -1305,18 +1756,32 @@ export default function CashFlowPlanner() {
             </ResponsiveContainer>
           )}
 
-          {/* Footer note */}
           <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? `Cumulative Net seeded from historical opening balance of ฿${historicalOpeningBalance.toFixed(1)}M (total settled receipts minus paid invoices). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P).`
+              ? `Cumulative Net seeded from Net Project Cash Position of ฿${historicalOpeningBalance.toFixed(1)}M (total client receipts minus payment vouchers issued). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P). Click the position chip in the header for a project-by-project breakdown.`
               : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded). Cumulative Net runs continuously across both periods.'}
           </p>
         </div>
       </div>
 
-      {/* ── Kanban planner ───────────────────────────────────────────────── */}
+      {/* ── Unscheduled impact warning ────────────────────────────────────── */}
+      {totalUnscheduledOut > 0 && (
+        <div className="mx-6 mt-4 flex items-center gap-3 px-4 py-2.5 rounded-lg border border-amber-200 bg-amber-50">
+          <AlertTriangle size={14} className="text-amber-600 flex-shrink-0" />
+          <p className="text-xs text-amber-700 flex-1">
+            <strong>{fmtTHBCompact(totalUnscheduledOut)}</strong> in vendor payments
+            {unscheduledAndBeyond.filter(c => c.scheduleState === 'unscheduled' && c.type === 'invoice').length > 0
+              ? ` (${unscheduledAndBeyond.filter(c => c.scheduleState === 'unscheduled' && c.type === 'invoice').length} invoice${unscheduledAndBeyond.filter(c => c.scheduleState === 'unscheduled' && c.type === 'invoice').length > 1 ? 's' : ''})`
+              : ''
+            } are unscheduled and excluded from the weekly balance above. Use the panel on the left to drag them into a week.
+          </p>
+          <SlidersHorizontal size={12} className="text-amber-500 flex-shrink-0" />
+        </div>
+      )}
+
+      {/* ── Two-panel layout: Unscheduled sidebar + Kanban ───────────────── */}
       <DndContext
         sensors={sensors}
         collisionDetection={pointerWithin}
@@ -1324,40 +1789,42 @@ export default function CashFlowPlanner() {
         onDragOver={handleDragOver as never}
         onDragEnd={handleDragEnd}
       >
-        <div className="p-6 overflow-x-auto">
-          <div className="flex gap-3 min-w-max pb-4">
-            {weekColumns.map((col) => {
-              const weekKey = format(col.weekStart, 'yyyy-MM-dd');
-              const isNegative = col.closingBalance < 0;
-              const showBanner = isNegative && !dismissedWeeks.has(weekKey);
-
-              return (
-                <WeekColumnDropZone
-                  key={col.weekIndex}
-                  col={col}
-                  weekKey={weekKey}
-                  isOver={overWeekIndex === col.weekIndex}
-                  showBanner={showBanner}
-                  onDismissBanner={() => {
-                    setDismissedWeeks((prev) => {
-                      const next = new Set(prev);
-                      next.add(weekKey);
-                      return next;
-                    });
-                  }}
-                />
-              );
-            })}
+        <div className="flex mt-4 mx-6 mb-8 gap-4 items-start">
+          {/* Left panel — Unscheduled */}
+          <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+            style={{ maxHeight: 'calc(100vh - 280px)', position: 'sticky', top: '80px', display: 'flex', flexDirection: 'column' }}>
+            <UnscheduledPanel
+              cards={unscheduledAndBeyond}
+              onQuickAssign={(card) => setQuickAssignCard(card)}
+            />
           </div>
-        </div>
 
-        <div className="px-6 pb-8">
-          <div className="border-t border-gray-200 pt-6">
-            <h2 className="text-sm font-semibold text-[#0f1923] mb-3 flex items-center gap-2">
-              <AlertTriangle size={14} className="text-[#EF9F27]" />
-              Unscheduled ({unscheduledCards.length})
-            </h2>
-            <UnscheduledDropZone cards={unscheduledCards} />
+          {/* Right panel — Kanban scrollable */}
+          <div className="flex-1 overflow-x-auto pb-4 min-w-0">
+            <div className="flex gap-3 min-w-max">
+              {weekColumns.map((col) => {
+                const weekKey = format(col.weekStart, 'yyyy-MM-dd');
+                const isNegative = col.closingBalance < 0;
+                const showBanner = isNegative && !dismissedWeeks.has(weekKey);
+
+                return (
+                  <WeekColumnDropZone
+                    key={col.weekIndex}
+                    col={col}
+                    weekKey={weekKey}
+                    isOver={overWeekIndex === col.weekIndex}
+                    showBanner={showBanner}
+                    onDismissBanner={() => {
+                      setDismissedWeeks((prev) => {
+                        const next = new Set(prev);
+                        next.add(weekKey);
+                        return next;
+                      });
+                    }}
+                  />
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -1366,7 +1833,30 @@ export default function CashFlowPlanner() {
         </DragOverlay>
       </DndContext>
 
-      {/* ── Warning modal (unchanged) ─────────────────────────────────────── */}
+      {/* ── Quick-assign modal ────────────────────────────────────────────── */}
+      {quickAssignCard && (
+        <QuickAssignModal
+          card={quickAssignCard}
+          weekStarts={weekStarts}
+          onAssign={(card, weekStart) => {
+            const check = wouldCauseNegative(card, weekStart);
+            if (check.negative) {
+              setWarningModal({
+                open: true,
+                weekLabel: check.weekLabel,
+                weekIndex: check.weekIndex,
+                pendingCard: card,
+                pendingTargetWeekStart: weekStart,
+              });
+            } else {
+              applyMove(card, weekStart);
+            }
+          }}
+          onClose={() => setQuickAssignCard(null)}
+        />
+      )}
+
+      {/* ── Warning modal ─────────────────────────────────────────────────── */}
       {warningModal.open && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
