@@ -1701,10 +1701,10 @@ export default function CashFlowPlanner() {
               <span className="inline-block w-8 h-0.5 bg-[#3B82F6]" />
               Cumulative Net
             </span>
-            {chartMode === 'forecast' && historicalOpeningBalance !== 0 && (
+            {chartMode === 'forecast' && trueOpeningBalance !== 0 && (
               <span className="flex items-center gap-1.5 text-[11px] text-gray-500">
                 <span className="inline-block w-3 h-3 rounded-sm bg-[#EF9F27]" />
-                Net Project Cash Position ({fmtTHBCompact(historicalOpeningBalance * 1_000_000)})
+                Corporate Bank Balance (Est.) ({fmtTHBCompact(trueOpeningBalance * 1_000_000)})
               </span>
             )}
             {chartMode !== 'historical' && (
@@ -1774,14 +1774,14 @@ export default function CashFlowPlanner() {
                   />
                 )}
                 <ReferenceLine yAxisId="line" y={0} stroke="#E24B4A" strokeDasharray="3 2" strokeWidth={1} />
-                {chartMode === 'forecast' && historicalOpeningBalance !== 0 && (
+                {chartMode === 'forecast' && trueOpeningBalance !== 0 && (
                   <ReferenceLine
                     yAxisId="line"
-                    y={historicalOpeningBalance}
+                    y={trueOpeningBalance}
                     stroke="#EF9F27"
                     strokeDasharray="4 2"
                     strokeWidth={1.5}
-                    label={{ value: `Starting: ฿${historicalOpeningBalance.toFixed(1)}M`, position: 'insideTopRight', fontSize: 10, fill: '#EF9F27' }}
+                    label={{ value: `Starting: ฿${trueOpeningBalance.toFixed(1)}M`, position: 'insideTopRight', fontSize: 10, fill: '#EF9F27' }}
                   />
                 )}
                 {chartMode === 'forecast' && (
@@ -1808,7 +1808,7 @@ export default function CashFlowPlanner() {
             {chartMode === 'historical'
               ? 'Cash Out grouped by milestone expected payment month — ties out to the Paid Invoices pivot table.'
               : chartMode === 'forecast'
-              ? `Cumulative Net seeded from Net Project Cash Position of ฿${historicalOpeningBalance.toFixed(1)}M (total client receipts minus payment vouchers issued). Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P). Click the position chip in the header for a project-by-project breakdown.`
+              ? `Cumulative Net seeded from Corporate Bank Balance (Est.) of ฿${trueOpeningBalance.toFixed(1)}M. Dark red = Invoice Balance (Col O). Faded red = Yet to Invoice (Col P). Click the position chip in the header for a project-by-project breakdown.`
               : 'Past months show actual settled cash. Current month onwards shows forecast split into Invoice Balance (dark) + Yet to Invoice (faded). Cumulative Net runs continuously across both periods.'}
           </p>
         </div>
