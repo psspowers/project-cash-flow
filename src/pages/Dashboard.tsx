@@ -406,6 +406,17 @@ export default function Dashboard() {
     setSgaMonthly(Math.round(avg));
   }, [sgaActuals, sgaMonthlyUserOverride]);
 
+  // Auto-set estimated months to balance of current year without an actual entry.
+  useEffect(() => {
+    const currentYear = now.getFullYear();
+    const actualKeys = new Set(
+      sgaActuals.filter(a => a.year === currentYear).map(a => a.month)
+    );
+    const remaining = Array.from({ length: 12 }, (_, i) => i + 1)
+      .filter(m => !actualKeys.has(m)).length;
+    setSgaMonths(remaining);
+  }, [sgaActuals]);
+
   async function loadData() {
     setLoading(true);
     setError(null);
