@@ -1,10 +1,10 @@
-import { useState } from 'react';
-import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send, FileText } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Plus, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, X, Send, FileText, Search, CheckCircle2 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { VENDOR_INVOICE_UNPAID_STATUSES } from '../../../config/statusConstants';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import {
-  fmtTHB, COSTING_CATEGORY_KEYS, PROJECT_STATUS_LABELS, CostCategory,
+  fmtTHB, PROJECT_STATUS_LABELS, CostCategory, COST_CATEGORY_LABELS,
 } from '../../../types';
 import type { ProjectCosting, VariationOrder, Entity, POMilestone, PurchaseOrder } from '../../../types';
 import Badge, { statusVariant } from '../../ui/Badge';
@@ -26,6 +26,23 @@ interface OverrunInfo {
   overrunAmt: number;
   overrunPct: number;
   categoryLabel: string;
+}
+
+type StatusFilter = 'all' | 'outstanding' | 'paid' | 'pending';
+
+function statusBarColor(status: string): string {
+  switch (status) {
+    case 'approved':
+    case 'fully_paid': return 'bg-[#1D9E75]';
+    case 'partially_paid': return 'bg-[#1D9E75]/50';
+    case 'invoiced': return 'bg-[#EF9F27]';
+    case 'pending_cc':
+    case 'pending_evp':
+    case 'pending_ceo': return 'bg-[#378ADD]';
+    case 'rejected':
+    case 'cancelled': return 'bg-[#E24B4A]';
+    default: return 'bg-gray-300';
+  }
 }
 
 export default function OrdersTab() {
@@ -53,6 +70,9 @@ export default function OrdersTab() {
   const [logInvoicePreFilled, setLogInvoicePreFilled] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [isLoggingInvoice, setIsLoggingInvoice] = useState(false);
+
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   const poCatTotal = (cat: CostCategory) =>
     orders.filter(o => o.cost_category === cat).reduce((s, o) => s + o.po_amount_excl_vat, 0);
@@ -219,197 +239,368 @@ export default function OrdersTab() {
     reload();
   }
 
+  // ── Filtered orders ──────────────────────────────────────────────────────────
+  const filteredOrders = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return orders.filter(o => {
+      const vendor = (o.vendor as Entity | undefined)?.name ?? o.supplier_name_raw ?? '';
+      const matchesSearch = !q ||
+        (o.pss_po_no ?? '').toLowerCase().includes(q) ||
+        vendor.toLowerCase().includes(q) ||
+        o.description.toLowerCase().includes(q);
+
+      const balanceDue = o.has_supplier_milestones
+        ? poMilestones.filter(pm => pm.purchase_order_id === o.id && pm.status !== 'paid').reduce((sum, pm) => sum + (pm.amount_due ?? 0), 0)
+        : (o.pending_invoice_amount ?? 0) + (o.pending_remaining_amount ?? 0);
+
+      const matchesStatus =
+        statusFilter === 'all' ? true :
+        statusFilter === 'outstanding' ? balanceDue > 0 :
+        statusFilter === 'paid' ? balanceDue === 0 :
+        statusFilter === 'pending' ? ['pending_cc', 'pending_evp', 'pending_ceo', 'draft'].includes(o.status) :
+        true;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [orders, poMilestones, search, statusFilter]);
+
+  // ── Totals ───────────────────────────────────────────────────────────────────
+  const totals = useMemo(() => {
+    const exclVat = filteredOrders.reduce((s, o) => s + o.po_amount_excl_vat, 0);
+    const vat = filteredOrders.reduce((s, o) => s + o.vat_7pct, 0);
+    const total = filteredOrders.reduce((s, o) => s + o.po_amount_incl_vat, 0);
+    const balanceDue = filteredOrders.reduce((s, o) => {
+      const b = o.has_supplier_milestones
+        ? poMilestones.filter(pm => pm.purchase_order_id === o.id && pm.status !== 'paid').reduce((sum, pm) => sum + (pm.amount_due ?? 0), 0)
+        : (o.pending_invoice_amount ?? 0) + (o.pending_remaining_amount ?? 0);
+      return s + b;
+    }, 0);
+    return { exclVat, vat, total, balanceDue };
+  }, [filteredOrders, poMilestones]);
+
+  const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'outstanding', label: 'Outstanding' },
+    { key: 'pending', label: 'Pending Approval' },
+    { key: 'paid', label: 'Fully Paid' },
+  ];
+
   return (
     <div className="space-y-4">
-      {project?.status === 'active' && isCostController && (
-        <div className="flex justify-end">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search PO No., supplier, description…"
+            className="w-full pl-8 pr-3 py-2 text-xs border border-[rgba(0,0,0,0.12)] rounded-lg focus:outline-none focus:border-[#1D9E75] bg-white"
+          />
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {STATUS_FILTERS.map(f => (
+            <button
+              key={f.key}
+              onClick={() => setStatusFilter(f.key)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                statusFilter === f.key
+                  ? 'bg-[#1D9E75] text-white'
+                  : 'bg-white border border-[rgba(0,0,0,0.12)] text-gray-500 hover:border-[#1D9E75] hover:text-[#1D9E75]'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {project?.status === 'active' && isCostController && (
           <button
             onClick={() => setShowNewPO(true)}
-            className="flex items-center gap-1 px-3 py-1.5 bg-[#1D9E75] text-white text-sm rounded hover:bg-[#178a64] transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 bg-[#1D9E75] text-white text-xs font-medium rounded-lg hover:bg-[#178a64] transition-colors shrink-0 ml-auto"
           >
-            <Plus size={14} /> New PO
+            <Plus size={13} /> New PO
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="bg-white border border-[rgba(0,0,0,0.08)] rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
-              {['', 'PO No.', 'Supplier', 'Category', 'PO Amount (excl VAT)', 'VAT 7%', 'Total', 'Balance Due', 'Status', ''].map((h, i) => (
-                <th key={i} className={`px-4 py-2.5 text-left font-medium text-gray-500 ${h === 'Balance Due' ? 'text-[#E24B4A]' : ''}`}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map(o => (
-              <>
-                <tr
-                  key={o.id}
-                  className="border-b border-[rgba(0,0,0,0.04)] hover:bg-[#F8F8F7] cursor-pointer"
-                  onClick={() => setExpandedPO(expandedPO === o.id ? null : o.id)}
-                >
-                  <td className="px-3 py-2.5 text-gray-400 w-8">
-                    {expandedPO === o.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  </td>
-                  <td className="px-4 py-2.5" onClick={e => e.stopPropagation()}>
-                    <button
-                      onClick={() => setDetailPO(o)}
-                      className="font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline transition-colors text-left text-xs"
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs min-w-[720px]">
+            <thead>
+              <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
+                <th className="w-10" />
+                <th className="px-4 py-3 text-left font-medium text-gray-500">PO No.</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-500">Supplier</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-500">Category</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-500">PO Amount (excl VAT)</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-500">VAT 7%</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-500">Total</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-500">Balance Due</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-500">Status</th>
+                <th className="w-8" />
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.map(o => {
+                const balanceDue = o.has_supplier_milestones
+                  ? poMilestones.filter(pm => pm.purchase_order_id === o.id && pm.status !== 'paid').reduce((sum, pm) => sum + (pm.amount_due ?? 0), 0)
+                  : (o.pending_invoice_amount ?? 0) + (o.pending_remaining_amount ?? 0);
+                const isFullyPaid = balanceDue === 0;
+                const vendorName = (o.vendor as Entity | undefined)?.name ?? o.supplier_name_raw ?? '—';
+
+                return (
+                  <>
+                    <tr
+                      key={o.id}
+                      className="border-b border-[rgba(0,0,0,0.04)] hover:bg-[#F8F8F7]/80 cursor-pointer transition-colors"
+                      onClick={() => setExpandedPO(expandedPO === o.id ? null : o.id)}
                     >
-                      {o.pss_po_no ?? <span className="text-gray-400 italic font-normal">Pending approval</span>}
-                    </button>
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-600">{(o.vendor as Entity | undefined)?.name ?? o.supplier_name_raw ?? '—'}</td>
-                  <td className="px-4 py-2.5 text-gray-500">{o.cost_category.replace(/_/g, ' ')}</td>
-                  <td className="px-4 py-2.5">{fmtTHB(o.po_amount_excl_vat)}</td>
-                  <td className="px-4 py-2.5 text-gray-500">{fmtTHB(o.vat_7pct)}</td>
-                  <td className="px-4 py-2.5 font-medium">{fmtTHB(o.po_amount_incl_vat)}</td>
-                  <td className="px-4 py-2.5 font-medium text-[#E24B4A]">{fmtTHB(
-                    o.has_supplier_milestones
-                      ? poMilestones.filter(pm => pm.purchase_order_id === o.id && pm.status !== 'paid').reduce((sum, pm) => sum + (pm.amount_due ?? 0), 0)
-                      : (o.pending_invoice_amount ?? 0) + (o.pending_remaining_amount ?? 0)
-                  )}</td>
-                  <td className="px-4 py-2.5">
-                    <Badge label={o.status.replace(/_/g, ' ')} variant={statusVariant(o.status)} />
-                  </td>
-                  <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
-                    {o.status === 'draft' && !o.pss_po_no && isCostController && (
+                      <td className="pl-2 pr-2 py-3 w-10">
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-1 h-7 rounded-full shrink-0 ${statusBarColor(o.status)}`} />
+                          <span className="text-gray-400">
+                            {expandedPO === o.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => setDetailPO(o)}
+                          className="font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline transition-colors text-left text-xs"
+                        >
+                          {o.pss_po_no ?? <span className="text-gray-400 italic font-normal">Pending</span>}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{vendorName}</td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {COST_CATEGORY_LABELS[o.cost_category] ?? o.cost_category.replace(/_/g, ' ')}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{fmtTHB(o.po_amount_excl_vat)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-gray-500">{fmtTHB(o.vat_7pct)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums font-medium">{fmtTHB(o.po_amount_incl_vat)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {isFullyPaid ? (
+                          <span className="inline-flex items-center justify-end gap-1 text-[#1D9E75] font-medium">
+                            <CheckCircle2 size={12} />
+                            ฿0
+                          </span>
+                        ) : (
+                          <span className="font-medium text-[#E24B4A]">{fmtTHB(balanceDue)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge label={o.status.replace(/_/g, ' ')} variant={statusVariant(o.status)} />
+                      </td>
+                      <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                        {o.status === 'draft' && !o.pss_po_no && isCostController && (
+                          <button
+                            onClick={() => handleSubmitDraft(o.id)}
+                            disabled={isSubmitting}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#EF9F27] text-[#EF9F27] text-xs font-medium rounded-lg hover:bg-[#EF9F27]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                          >
+                            <Send size={11} />
+                            Submit
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+
+                    {expandedPO === o.id && (() => {
+                      if (o.has_supplier_milestones) {
+                        const oMilestones = poMilestones
+                          .filter(pm => pm.purchase_order_id === o.id)
+                          .sort((a, b) => a.milestone_number - b.milestone_number);
+                        if (oMilestones.length === 0) {
+                          return (
+                            <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                              <td colSpan={10} className="pl-10 pr-4 py-3 text-xs text-gray-400 italic">No milestones configured for this PO</td>
+                            </tr>
+                          );
+                        }
+                        return oMilestones.map(pm => (
+                          <tr key={pm.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                            <td className="pl-3 pr-0 py-2.5">
+                              <div className="w-1 h-full min-h-[28px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
+                            </td>
+                            <td colSpan={9} className="pr-4 pl-4 py-2.5">
+                              <div className="flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-5 text-xs flex-wrap flex-1">
+                                  <span className="font-semibold text-[#0f1923] w-8 shrink-0">MS{pm.milestone_number}</span>
+                                  {pm.milestone_pct != null && pm.milestone_pct > 0 && (
+                                    <span className="text-gray-400 shrink-0">{(pm.milestone_pct * 100).toFixed(0)}%</span>
+                                  )}
+                                  <span className="tabular-nums font-medium text-gray-800">{fmtTHB(pm.amount_due)}</span>
+                                  <span className="text-gray-500">
+                                    <span className="text-gray-400">Planned: </span>
+                                    {formatDate(pm.planned_payment_date) || '—'}
+                                  </span>
+                                  <Badge
+                                    label={pm.status}
+                                    variant={pm.status === 'paid' ? 'green' : pm.status === 'invoiced' ? 'amber' : 'gray'}
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {isCM && pm.status === 'pending' && (
+                                    <button
+                                      onClick={() => markMilestoneComplete(pm.id, o.pss_po_no, vendorName, pm.milestone_number, pm.amount_due)}
+                                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#1D9E75] text-white text-xs font-medium rounded-lg hover:bg-[#178a64] transition-colors whitespace-nowrap"
+                                    >
+                                      <CheckCircle size={11} />
+                                      Mark Complete
+                                    </button>
+                                  )}
+                                  {isCostController && (pm.status === 'pending' || pm.status === 'invoiced') && (
+                                    <button
+                                      onClick={async () => {
+                                        setLogInvoiceTarget({ milestone: pm, po: o });
+                                        setLogInvoiceAmount(String(pm.amount_due));
+                                        const { data: existing } = await supabase
+                                          .from('vendor_invoices')
+                                          .select('id, vendor_invoice_no, invoice_amount_incl_vat')
+                                          .eq('po_id', o.id)
+                                          .is('po_milestone_id', null)
+                                          .in('status', VENDOR_INVOICE_UNPAID_STATUSES)
+                                          .order('created_at', { ascending: false })
+                                          .limit(1)
+                                          .maybeSingle();
+                                        if (existing?.vendor_invoice_no) {
+                                          setLogInvoiceNo(existing.vendor_invoice_no);
+                                          setLogInvoiceAmount(String(existing.invoice_amount_incl_vat ?? pm.amount_due));
+                                          setLogInvoicePreFilled(true);
+                                          setEditingInvoiceId((existing as { id: string }).id);
+                                        } else {
+                                          setLogInvoiceNo('');
+                                          setLogInvoicePreFilled(false);
+                                          setEditingInvoiceId(null);
+                                        }
+                                      }}
+                                      className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap"
+                                    >
+                                      <FileText size={11} />
+                                      Log Invoice
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ));
+                      }
+
+                      if (o.invoices.length === 0) {
+                        return (
+                          <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                            <td colSpan={10} className="pl-10 pr-4 py-3 text-xs text-gray-400 italic">No invoices for this PO</td>
+                          </tr>
+                        );
+                      }
+                      return o.invoices.map(inv => (
+                        <tr key={inv.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                          <td className="pl-3 pr-0 py-2.5">
+                            <div className="w-1 h-full min-h-[28px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
+                          </td>
+                          <td colSpan={9} className="pr-4 pl-4 py-2.5">
+                            <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-xs text-gray-600 sm:grid-cols-6">
+                              <span><span className="text-gray-400">Invoice: </span><span className="font-medium text-gray-800">{inv.vendor_invoice_no ?? '—'}</span></span>
+                              <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
+                              <span><span className="text-gray-400">Total: </span><span className="tabular-nums font-medium">{fmtTHB(inv.invoice_amount_incl_vat)}</span></span>
+                              <span><span className="text-gray-400">WHT 3%: </span><span className="tabular-nums">{fmtTHB(inv.wht_3pct)}</span></span>
+                              <span><span className="text-gray-400">Paid: </span><span className="tabular-nums text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount ?? 0)}</span></span>
+                              <span>
+                                <span className="text-gray-400">Balance: </span>
+                                <span className={`tabular-nums font-medium ${inv.invoice_amount_incl_vat - (inv.received_amount ?? 0) > 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                                  {fmtTHB(inv.invoice_amount_incl_vat - (inv.received_amount ?? 0))}
+                                </span>
+                              </span>
+                            </div>
+                            <div className="mt-1.5">
+                              <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />
+                            </div>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </>
+                );
+              })}
+
+              {filteredOrders.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="px-4 py-10 text-center">
+                    <p className="text-gray-400 text-xs">
+                      {search || statusFilter !== 'all' ? 'No purchase orders match your filters.' : 'No purchase orders'}
+                    </p>
+                    {(search || statusFilter !== 'all') && (
                       <button
-                        onClick={() => handleSubmitDraft(o.id)}
-                        disabled={isSubmitting}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#EF9F27] text-[#EF9F27] text-xs font-medium rounded-lg hover:bg-[#EF9F27]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                        onClick={() => { setSearch(''); setStatusFilter('all'); }}
+                        className="mt-2 text-xs text-[#1D9E75] hover:underline"
                       >
-                        <Send size={11} />
-                        Submit
+                        Clear filters
                       </button>
                     )}
                   </td>
                 </tr>
-                {expandedPO === o.id && (() => {
-                  const vendorName = (o.vendor as Entity | undefined)?.name ?? '—';
-                  if (o.has_supplier_milestones) {
-                    const oMilestones = poMilestones
-                      .filter(pm => pm.purchase_order_id === o.id)
-                      .sort((a, b) => a.milestone_number - b.milestone_number);
-                    return oMilestones.length > 0 ? oMilestones.map(pm => (
-                      <tr key={pm.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                        <td className="px-3 py-2" />
-                        <td colSpan={9} className="px-4 py-2">
-                          <div className="flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-4 text-xs text-gray-600 flex-1 flex-wrap">
-                              <span className="font-semibold text-[#0f1923]">MS{pm.milestone_number}</span>
-                              <span>{pm.milestone_pct != null ? `${(pm.milestone_pct * 100).toFixed(0)}%` : '—'}</span>
-                              <span><span className="text-gray-400">Due: </span>{fmtTHB(pm.amount_due)}</span>
-                              <span><span className="text-gray-400">Planned: </span>{formatDate(pm.planned_payment_date)}</span>
-                              <Badge
-                                label={pm.status}
-                                variant={pm.status === 'paid' ? 'green' : pm.status === 'invoiced' ? 'amber' : 'gray'}
-                              />
-                            </div>
-                            {isCM && pm.status === 'pending' && (
-                              <button
-                                onClick={() => markMilestoneComplete(pm.id, o.pss_po_no, vendorName, pm.milestone_number, pm.amount_due)}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#1D9E75] text-white text-xs font-medium rounded-lg hover:bg-[#178a64] transition-colors whitespace-nowrap shrink-0"
-                              >
-                                <CheckCircle size={11} />
-                                Mark Complete
-                              </button>
-                            )}
-                            {isCostController && (pm.status === 'pending' || pm.status === 'invoiced') && (
-                              <button
-                                onClick={async () => {
-                                  setLogInvoiceTarget({ milestone: pm, po: o });
-                                  setLogInvoiceAmount(String(pm.amount_due));
-                                  // Look for an existing unlinked received invoice for this PO
-                                  const { data: existing } = await supabase
-                                    .from('vendor_invoices')
-                                    .select('id, vendor_invoice_no, invoice_amount_incl_vat')
-                                    .eq('po_id', o.id)
-                                    .is('po_milestone_id', null)
-                                    .in('status', VENDOR_INVOICE_UNPAID_STATUSES)
-                                    .order('created_at', { ascending: false })
-                                    .limit(1)
-                                    .maybeSingle();
-                                  if (existing?.vendor_invoice_no) {
-                                    setLogInvoiceNo(existing.vendor_invoice_no);
-                                    setLogInvoiceAmount(String(existing.invoice_amount_incl_vat ?? pm.amount_due));
-                                    setLogInvoicePreFilled(true);
-                                    setEditingInvoiceId((existing as { id: string }).id);
-                                  } else {
-                                    setLogInvoiceNo('');
-                                    setLogInvoicePreFilled(false);
-                                    setEditingInvoiceId(null);
-                                  }
-                                }}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap shrink-0"
-                              >
-                                <FileText size={11} />
-                                Log Supplier Invoice
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )) : (
-                      <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                        <td className="px-3 py-2" />
-                        <td colSpan={9} className="px-4 py-2 text-xs text-gray-400 italic">No milestones configured for this PO</td>
-                      </tr>
-                    );
-                  }
-                  return o.invoices.length > 0 ? o.invoices.map(inv => (
-                    <tr key={inv.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                      <td className="px-3 py-2" />
-                      <td colSpan={9} className="px-4 py-2">
-                        <div className="grid grid-cols-6 gap-4 text-xs text-gray-600">
-                          <span><span className="text-gray-400">Invoice: </span>{inv.vendor_invoice_no ?? '—'}</span>
-                          <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
-                          <span><span className="text-gray-400">Total Invoice: </span>{fmtTHB(inv.invoice_amount_incl_vat)}</span>
-                          <span><span className="text-gray-400">WHT 3%: </span>{fmtTHB(inv.wht_3pct)}</span>
-                          <span><span className="text-gray-400">Paid to date: </span><span className="text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount ?? 0)}</span></span>
-                          <span><span className="text-gray-400">Balance due: </span><span className="text-[#E24B4A] font-medium">{fmtTHB(inv.invoice_amount_incl_vat - (inv.received_amount ?? 0))}</span></span>
-                        </div>
-                        <div className="mt-1.5">
-                          <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />
-                        </div>
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                      <td className="px-3 py-2" />
-                      <td colSpan={9} className="px-4 py-2 text-xs text-gray-400 italic">No invoices for this PO</td>
-                    </tr>
-                  );
-                })()}
-              </>
-            ))}
-            {orders.length === 0 && (
-              <tr><td colSpan={10} className="px-4 py-6 text-center text-gray-400">No purchase orders</td></tr>
+              )}
+            </tbody>
+
+            {filteredOrders.length > 0 && (
+              <tfoot>
+                <tr className="bg-[#F8F8F7] border-t-2 border-[rgba(0,0,0,0.08)]">
+                  <td colSpan={4} className="px-4 py-3">
+                    <span className="text-xs font-semibold text-gray-600">
+                      {filteredOrders.length} PO{filteredOrders.length !== 1 ? 's' : ''}
+                      {(search || statusFilter !== 'all') && orders.length !== filteredOrders.length && (
+                        <span className="font-normal text-gray-400"> of {orders.length}</span>
+                      )}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs font-semibold text-gray-700">{fmtTHB(totals.exclVat)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs font-medium text-gray-500">{fmtTHB(totals.vat)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs font-bold text-gray-900">{fmtTHB(totals.total)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs font-bold">
+                    {totals.balanceDue > 0
+                      ? <span className="text-[#E24B4A]">{fmtTHB(totals.balanceDue)}</span>
+                      : <span className="text-[#1D9E75]">฿0</span>
+                    }
+                  </td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
             )}
-          </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
+      {/* Log Invoice Modal */}
       {logInvoiceTarget && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg w-full max-w-sm">
+          <div className="bg-white rounded-xl w-full max-w-sm shadow-xl border border-gray-200">
             <div className="px-5 py-4 border-b border-[rgba(0,0,0,0.08)] flex justify-between items-center">
-              <h3 className="font-semibold text-[#0f1923] text-sm">
-                Log Supplier Invoice — MS{logInvoiceTarget.milestone.milestone_number}
-              </h3>
-              <button onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}><X size={16} className="text-gray-400" /></button>
+              <div>
+                <h3 className="font-semibold text-[#0f1923] text-sm">Log Supplier Invoice</h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  MS{logInvoiceTarget.milestone.milestone_number} — {logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}
+                </p>
+              </div>
+              <button onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}>
+                <X size={16} className="text-gray-400 hover:text-gray-600 transition-colors" />
+              </button>
             </div>
             <div className="p-5 space-y-3">
-              <div className="text-xs text-gray-500 bg-[#F8F8F7] rounded-lg px-3 py-2 space-y-0.5">
-                <div><span className="text-gray-400">PO: </span>{logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}</div>
-                <div><span className="text-gray-400">Milestone amount due: </span><span className="font-medium text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span></div>
+              <div className="text-xs bg-[#F8F8F7] rounded-lg px-3 py-2.5">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Milestone amount due</span>
+                  <span className="font-semibold text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span>
+                </div>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-gray-500">Supplier Invoice No. <span className="text-[#E24B4A]">*</span></label>
                   {logInvoicePreFilled && (
-                    <span className="text-xs text-[#1D9E75] font-medium">Pre-filled from existing record</span>
+                    <span className="text-xs text-[#1D9E75] font-medium">Pre-filled from record</span>
                   )}
                 </div>
                 <input
@@ -417,7 +608,7 @@ export default function OrdersTab() {
                   value={logInvoiceNo}
                   onChange={e => { setLogInvoiceNo(e.target.value); setLogInvoicePreFilled(false); }}
                   placeholder="e.g. INV-2026-001"
-                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD] transition-colors"
                 />
               </div>
               <div>
@@ -430,7 +621,7 @@ export default function OrdersTab() {
                     const raw = e.target.value.replace(/,/g, '');
                     if (raw === '' || /^\d+$/.test(raw)) setLogInvoiceAmount(raw);
                   }}
-                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD]"
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD] transition-colors"
                   placeholder="0"
                 />
               </div>
@@ -438,14 +629,14 @@ export default function OrdersTab() {
             <div className="px-5 py-4 border-t border-[rgba(0,0,0,0.08)] flex justify-end gap-2">
               <button
                 onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}
-                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700"
+                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
               >Cancel</button>
               <button
                 onClick={handleLogInvoice}
                 disabled={isLoggingInvoice}
-                className="px-4 py-2 bg-[#378ADD] text-white text-sm rounded hover:bg-[#2e6db5] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#378ADD] text-white text-sm font-medium rounded-lg hover:bg-[#2e6db5] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {isLoggingInvoice ? 'Saving...' : 'Log Invoice'}
+                {isLoggingInvoice ? 'Saving…' : 'Log Invoice'}
               </button>
             </div>
           </div>
@@ -462,12 +653,15 @@ export default function OrdersTab() {
         />
       )}
 
+      {/* New PO Modal */}
       {showNewPO && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg w-full max-w-md">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl border border-gray-200">
             <div className="px-5 py-4 border-b border-[rgba(0,0,0,0.08)] flex justify-between items-center">
               <h3 className="font-semibold text-[#0f1923]">New Purchase Order</h3>
-              <button onClick={() => { setShowNewPO(false); setFormError(''); }}><X size={16} className="text-gray-400" /></button>
+              <button onClick={() => { setShowNewPO(false); setFormError(''); }}>
+                <X size={16} className="text-gray-400 hover:text-gray-600 transition-colors" />
+              </button>
             </div>
             <div className="p-5 space-y-3">
               {[
@@ -480,7 +674,7 @@ export default function OrdersTab() {
                     type="text"
                     value={poForm[f.key as keyof typeof poForm] as string}
                     onChange={e => setPoForm(prev => ({ ...prev, [f.key]: e.target.value }))}
-                    className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75]"
+                    className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75] transition-colors"
                   />
                 </div>
               ))}
@@ -498,63 +692,12 @@ export default function OrdersTab() {
                 <select
                   value={poForm.cost_category}
                   onChange={e => setPoForm(prev => ({ ...prev, cost_category: e.target.value as CostCategory }))}
-                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75]"
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75] transition-colors"
                 >
                   {(Object.entries(CATEGORY_MAP) as [import('../../../types').CostingCategoryKey, CostCategory][]).map(([k, v]) => (
                     <option key={v} value={v}>{CATEGORY_KEY_LABELS[k]}</option>
                   ))}
                 </select>
-                {budget && (() => {
-                  const catKey = (Object.entries(CATEGORY_MAP) as [import('../../../types').CostingCategoryKey, CostCategory][])
-                    .find(([, v]) => v === poForm.cost_category)?.[0];
-                  if (!catKey) return null;
-                  const budgetAmt = (budget[catKey as keyof ProjectCosting] as number) ?? 0;
-                  const committed = poCatTotal(poForm.cost_category);
-                  const newAmt = parseFloat(poForm.po_amount_excl_vat) || 0;
-                  const pending = orders
-                    .filter(o => o.cost_category === poForm.cost_category && o.status !== 'cancelled')
-                    .reduce((s, o) => {
-                      const paid = o.invoices.reduce((si, i) => si + (i.received_amount ?? 0), 0);
-                      return s + (o.po_amount_excl_vat - paid);
-                    }, 0);
-                  const paid = committed - pending;
-                  const newTotal = committed + newAmt;
-                  const usedPct = budgetAmt > 0 ? Math.min((paid / budgetAmt) * 100, 100) : 0;
-                  const pendingPct = budgetAmt > 0 ? Math.min((pending / budgetAmt) * 100, 100 - usedPct) : 0;
-                  const newPct = budgetAmt > 0 ? Math.min((newAmt / budgetAmt) * 100, 100 - usedPct - pendingPct) : 0;
-                  const overrun = newTotal > budgetAmt;
-                  const remaining = budgetAmt - newTotal;
-                  return (
-                    <div className="mt-2.5 rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#F8F8F7] p-3 space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-medium text-[#0f1923]">Budget utilisation</span>
-                        <span className={`font-semibold ${overrun ? 'text-[#E24B4A]' : 'text-gray-600'}`}>
-                          {fmtTHB(newTotal)} / {fmtTHB(budgetAmt)}
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-gray-200 overflow-hidden flex">
-                        <div className="h-full bg-[#1D9E75] transition-all duration-300" style={{ width: `${usedPct}%` }} />
-                        <div className="h-full bg-[#1D9E75]/40 transition-all duration-300" style={{ width: `${pendingPct}%` }} />
-                        {newAmt > 0 && (
-                          <div className={`h-full transition-all duration-300 ${overrun ? 'bg-[#E24B4A]/70' : 'bg-[#378ADD]/60'}`} style={{ width: `${newPct}%` }} />
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
-                        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#1D9E75] inline-block" />Paid {fmtTHB(paid)}</span>
-                        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#1D9E75]/40 inline-block" />Pending {fmtTHB(pending)}</span>
-                        {newAmt > 0 && (
-                          <span className={`flex items-center gap-1.5 ${overrun ? 'text-[#E24B4A] font-medium' : ''}`}>
-                            <span className={`w-2.5 h-2.5 rounded-sm inline-block ${overrun ? 'bg-[#E24B4A]/70' : 'bg-[#378ADD]/60'}`} />
-                            This PO {fmtTHB(newAmt)}
-                          </span>
-                        )}
-                        <span className={`flex items-center gap-1.5 ml-auto font-medium ${overrun ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
-                          {overrun ? `Over by ${fmtTHB(Math.abs(remaining))}` : `Remaining ${fmtTHB(remaining)}`}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">PO Amount (excl VAT)</label>
@@ -562,15 +705,69 @@ export default function OrdersTab() {
                   type="number"
                   value={poForm.po_amount_excl_vat}
                   onChange={e => setPoForm(prev => ({ ...prev, po_amount_excl_vat: e.target.value }))}
-                  className="w-full border border-[rgba(0,0,0,0.12)] rounded px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75]"
+                  className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#1D9E75] transition-colors"
                   placeholder="0"
                 />
                 {poForm.po_amount_excl_vat && (
                   <p className="text-xs text-gray-400 mt-1">
-                    VAT {(vatRate * 100).toFixed(0)}%: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * vatRate)} | Total incl VAT: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * (1 + vatRate))}
+                    VAT {(vatRate * 100).toFixed(0)}%: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * vatRate)} · Total incl VAT: {fmtTHB((parseFloat(poForm.po_amount_excl_vat) || 0) * (1 + vatRate))}
                   </p>
                 )}
               </div>
+
+              {/* Budget visualisation below amount field */}
+              {budget && (() => {
+                const catKey = (Object.entries(CATEGORY_MAP) as [import('../../../types').CostingCategoryKey, CostCategory][])
+                  .find(([, v]) => v === poForm.cost_category)?.[0];
+                if (!catKey) return null;
+                const budgetAmt = (budget[catKey as keyof ProjectCosting] as number) ?? 0;
+                const committed = poCatTotal(poForm.cost_category);
+                const newAmt = parseFloat(poForm.po_amount_excl_vat) || 0;
+                const pending = orders
+                  .filter(o => o.cost_category === poForm.cost_category && o.status !== 'cancelled')
+                  .reduce((s, o) => {
+                    const paid = o.invoices.reduce((si, i) => si + (i.received_amount ?? 0), 0);
+                    return s + (o.po_amount_excl_vat - paid);
+                  }, 0);
+                const paid = committed - pending;
+                const newTotal = committed + newAmt;
+                const usedPct = budgetAmt > 0 ? Math.min((paid / budgetAmt) * 100, 100) : 0;
+                const pendingPct = budgetAmt > 0 ? Math.min((pending / budgetAmt) * 100, 100 - usedPct) : 0;
+                const newPct = budgetAmt > 0 ? Math.min((newAmt / budgetAmt) * 100, 100 - usedPct - pendingPct) : 0;
+                const overrun = newTotal > budgetAmt;
+                const remaining = budgetAmt - newTotal;
+                return (
+                  <div className="rounded-lg border border-[rgba(0,0,0,0.08)] bg-[#F8F8F7] p-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-[#0f1923]">Budget utilisation</span>
+                      <span className={`font-semibold ${overrun ? 'text-[#E24B4A]' : 'text-gray-600'}`}>
+                        {fmtTHB(newTotal)} / {fmtTHB(budgetAmt)}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-200 overflow-hidden flex">
+                      <div className="h-full bg-[#1D9E75] transition-all duration-300" style={{ width: `${usedPct}%` }} />
+                      <div className="h-full bg-[#1D9E75]/40 transition-all duration-300" style={{ width: `${pendingPct}%` }} />
+                      {newAmt > 0 && (
+                        <div className={`h-full transition-all duration-300 ${overrun ? 'bg-[#E24B4A]/70' : 'bg-[#378ADD]/60'}`} style={{ width: `${newPct}%` }} />
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                      <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#1D9E75] inline-block" />Paid {fmtTHB(paid)}</span>
+                      <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#1D9E75]/40 inline-block" />Pending {fmtTHB(pending)}</span>
+                      {newAmt > 0 && (
+                        <span className={`flex items-center gap-1.5 ${overrun ? 'text-[#E24B4A] font-medium' : ''}`}>
+                          <span className={`w-2 h-2 rounded-sm inline-block ${overrun ? 'bg-[#E24B4A]/70' : 'bg-[#378ADD]/60'}`} />
+                          This PO {fmtTHB(newAmt)}
+                        </span>
+                      )}
+                      <span className={`flex items-center gap-1.5 ml-auto font-medium ${overrun ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                        {overrun ? `Over by ${fmtTHB(Math.abs(remaining))}` : `Remaining ${fmtTHB(remaining)}`}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {(() => {
                 const overrun = computeOverrun();
                 const withinBudget = !overrun ? computeWithinBudget() : null;
@@ -631,12 +828,15 @@ export default function OrdersTab() {
               {formError && <p className="text-xs text-[#E24B4A]">{formError}</p>}
             </div>
             <div className="px-5 py-4 border-t border-[rgba(0,0,0,0.08)] flex justify-end gap-2">
-              <button onClick={() => { setShowNewPO(false); setFormError(''); setOverrunAcknowledged(false); }} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+              <button
+                onClick={() => { setShowNewPO(false); setFormError(''); setOverrunAcknowledged(false); }}
+                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >Cancel</button>
               <button
                 onClick={submitPO}
                 disabled={!!(computeOverrun() && !overrunAcknowledged)}
-                className="px-4 py-2 bg-[#1D9E75] text-white text-sm rounded hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed"
-              >Save</button>
+                className="px-4 py-2 bg-[#1D9E75] text-white text-sm font-medium rounded-lg hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >Save as Draft</button>
             </div>
           </div>
         </div>

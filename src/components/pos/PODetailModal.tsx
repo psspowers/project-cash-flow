@@ -387,42 +387,85 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               </div>
 
               {/* Milestones */}
-              {po.has_supplier_milestones && milestones.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-2">{milestones.length} Milestones</p>
-                  <div className="border border-gray-100 rounded-lg overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-gray-50 border-b border-gray-100">
-                          <th className="text-left px-3 py-2 font-medium text-gray-500">#</th>
-                          <th className="text-left px-3 py-2 font-medium text-gray-500">Description</th>
-                          <th className="text-right px-3 py-2 font-medium text-gray-500">%</th>
-                          <th className="text-right px-3 py-2 font-medium text-gray-500">Amount</th>
-                          <th className="text-left px-3 py-2 font-medium text-gray-500">Planned</th>
-                          <th className="text-left px-3 py-2 font-medium text-gray-500">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {milestones.map(m => (
-                          <tr key={m.id} className="border-b border-gray-50">
-                            <td className="px-3 py-2 font-semibold text-gray-700">MS{m.milestone_number}</td>
-                            <td className="px-3 py-2 text-gray-600">{m.notes ?? '—'}</td>
-                            <td className="px-3 py-2 text-right text-gray-700">{m.milestone_pct != null ? `${(m.milestone_pct * 100).toFixed(0)}%` : '—'}</td>
-                            <td className="px-3 py-2 text-right font-medium text-gray-800">{fmtTHB(m.amount_due)}</td>
-                            <td className="px-3 py-2 text-gray-500">{formatDate(m.planned_payment_date)}</td>
-                            <td className="px-3 py-2">
-                              <Badge
-                                label={m.status}
-                                variant={m.status === 'paid' ? 'green' : m.status === 'invoiced' ? 'amber' : 'gray'}
-                              />
-                            </td>
+              {po.has_supplier_milestones && milestones.length > 0 && (() => {
+                const paidCount = milestones.filter(m => m.status === 'paid').length;
+                const invoicedCount = milestones.filter(m => m.status === 'invoiced').length;
+                const paidAmt = milestones.filter(m => m.status === 'paid').reduce((s, m) => s + m.amount_due, 0);
+                const totalAmt = milestones.reduce((s, m) => s + m.amount_due, 0);
+                const paidPct = totalAmt > 0 ? (paidAmt / totalAmt) * 100 : 0;
+                return (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-gray-600">{milestones.length} Milestones</p>
+                      <span className="text-xs text-gray-400">
+                        {paidCount} paid · {invoicedCount} invoiced · {milestones.length - paidCount - invoicedCount} pending
+                      </span>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="mb-3 space-y-1">
+                      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-full bg-[#1D9E75] rounded-full transition-all duration-500"
+                          style={{ width: `${paidPct}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-400">
+                        <span className="text-[#1D9E75] font-medium">{fmtTHB(paidAmt)} paid</span>
+                        <span>{fmtTHB(totalAmt - paidAmt)} remaining</span>
+                      </div>
+                    </div>
+                    <div className="border border-gray-100 rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            <th className="text-left px-3 py-2 font-medium text-gray-500">#</th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-500">Description</th>
+                            <th className="text-right px-3 py-2 font-medium text-gray-500">%</th>
+                            <th className="text-right px-3 py-2 font-medium text-gray-500">Amount</th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-500">Planned</th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-500">Status</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {milestones.map(m => (
+                            <tr
+                              key={m.id}
+                              className={`border-b border-gray-50 ${m.status === 'paid' ? 'bg-[#1D9E75]/[0.03]' : ''}`}
+                            >
+                              <td className="px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                  {m.status === 'paid'
+                                    ? <CheckCircle size={12} className="text-[#1D9E75] shrink-0" />
+                                    : <span className="w-3 h-3 rounded-full border-2 border-gray-200 shrink-0 inline-block" />
+                                  }
+                                  <span className="font-semibold text-gray-700">MS{m.milestone_number}</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5 text-gray-600">{m.notes ?? '—'}</td>
+                              <td className="px-3 py-2.5 text-right text-gray-700">{m.milestone_pct != null && m.milestone_pct > 0 ? `${(m.milestone_pct * 100).toFixed(0)}%` : '—'}</td>
+                              <td className="px-3 py-2.5 text-right font-medium text-gray-800 tabular-nums">{fmtTHB(m.amount_due)}</td>
+                              <td className="px-3 py-2.5 text-gray-500">{formatDate(m.planned_payment_date) || '—'}</td>
+                              <td className="px-3 py-2.5">
+                                <Badge
+                                  label={m.status}
+                                  variant={m.status === 'paid' ? 'green' : m.status === 'invoiced' ? 'amber' : 'gray'}
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-gray-100 bg-gray-50">
+                            <td colSpan={3} className="px-3 py-2 text-xs font-semibold text-gray-600">Total</td>
+                            <td className="px-3 py-2 text-right text-xs font-bold text-gray-900 tabular-nums">{fmtTHB(totalAmt)}</td>
+                            <td colSpan={2} />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Simple payment schedule */}
               {!po.has_supplier_milestones && payments.length > 0 && (
