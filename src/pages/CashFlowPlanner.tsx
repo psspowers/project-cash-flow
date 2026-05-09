@@ -46,7 +46,6 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
   CartesianGrid,
-  Legend,
   ReferenceLine,
 } from 'recharts';
 import { supabase } from '../lib/supabase';
@@ -397,7 +396,7 @@ function WeekColumnDropZone({
   const balStyle = getClosingBalanceStyle(col.closingBalance);
 
   return (
-    <div className="w-56 flex-shrink-0">
+    <div className="w-64 shrink-0 flex flex-col">
       <div
         className={`rounded-t-lg px-3 py-2.5 ${
           isNegative ? 'bg-[#E24B4A] text-white' : 'bg-[#0f1923] text-white'
@@ -478,7 +477,7 @@ function WeekColumnDropZone({
 
       <div
         ref={setNodeRef}
-        className={`min-h-[120px] rounded-lg transition-colors ${
+        className={`flex-1 min-h-[150px] rounded-lg transition-colors ${
           isOver ? 'bg-[#1D9E75]/8 ring-2 ring-[#1D9E75]/40 ring-inset' : ''
         }`}
       >
@@ -507,7 +506,7 @@ function WeekColumnDropZone({
         )}
 
         {col.incomeCards.length === 0 && col.paymentCards.length === 0 && (
-          <div className={`border-2 border-dashed rounded-lg h-20 flex items-center justify-center transition-colors ${isOver ? 'border-[#1D9E75]/50' : 'border-gray-200'}`}>
+          <div className={`border-2 border-dashed rounded-lg h-full min-h-[150px] flex items-center justify-center transition-colors ${isOver ? 'border-[#1D9E75]/50' : 'border-gray-200'}`}>
             <p className={`text-xs ${isOver ? 'text-[#1D9E75]' : 'text-gray-300'}`}>
               {isOver ? 'Release to schedule here' : 'Drop here'}
             </p>
@@ -1191,13 +1190,7 @@ export default function CashFlowPlanner() {
   ]);
   const sortedKeys = [...allKeys].sort();
 
-  const historicalOpeningBalance = (() => {
-    let totalIn = 0;
-    let totalOut = 0;
-    for (const v of historicalInByMonth.values()) totalIn += v;
-    for (const v of historicalOutByMonth.values()) totalOut += v;
-    return (totalIn - totalOut) / 1_000_000;
-  })();
+  const historicalOpeningBalance = (totalReceipts - totalVouchersPaid) / 1_000_000;
 
   function buildChartData(mode: ChartMode): ChartBar[] {
     const hasForecast = (k: string) =>
@@ -1337,7 +1330,7 @@ export default function CashFlowPlanner() {
       weekStart: ws,
       weekEnd: addDays(ws, 6),
       weekIndex: i,
-      label: `Week ${i + 1} · ${format(ws, 'EEE dd MMM')} – ${format(addDays(ws, 6), 'EEE dd MMM')}`,
+      label: `Wk ${i + 1} · ${format(ws, 'd')}–${format(addDays(ws, 6), 'd MMM')}`,
       incomeCards: [],
       paymentCards: [],
       openingBalance: 0,
@@ -1705,17 +1698,7 @@ export default function CashFlowPlanner() {
                   contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
                   cursor={{ fill: 'rgba(0,0,0,0.03)' }}
                 />
-                <Legend
-                  formatter={(value: string) =>
-                    value === 'cashIn' ? 'Cash In'
-                    : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                    : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                    : value === 'openingBal' ? 'Net Project Cash Position'
-                    : 'Cumulative Net'
-                  }
-                  iconType="square"
-                  wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
-                />
+
                 {chartMode === 'combined' && (
                   <ReferenceLine
                     yAxisId="bars"
@@ -1791,7 +1774,7 @@ export default function CashFlowPlanner() {
       >
         <div className="flex mt-4 mx-6 mb-8 gap-4 items-start">
           {/* Left panel — Unscheduled */}
-          <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+          <div className="w-64 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
             style={{ maxHeight: 'calc(100vh - 280px)', position: 'sticky', top: '80px', display: 'flex', flexDirection: 'column' }}>
             <UnscheduledPanel
               cards={unscheduledAndBeyond}
@@ -1801,7 +1784,7 @@ export default function CashFlowPlanner() {
 
           {/* Right panel — Kanban scrollable */}
           <div className="flex-1 overflow-x-auto pb-4 min-w-0">
-            <div className="flex gap-3 min-w-max">
+            <div className="flex flex-nowrap gap-3">
               {weekColumns.map((col) => {
                 const weekKey = format(col.weekStart, 'yyyy-MM-dd');
                 const isNegative = col.closingBalance < 0;
