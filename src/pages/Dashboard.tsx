@@ -2317,38 +2317,31 @@ export default function Dashboard() {
               {loansReceived.length === 0 ? (
                 <p className="text-xs text-gray-300 py-4 text-center">None</p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {loansReceived.map((loan) => {
-                    const isOverdue =
-                      !!loan.due_date && new Date(loan.due_date) < now;
+                    const isOverdue = !!loan.due_date && new Date(loan.due_date) < now;
                     const balance = calcNetLiability(loan);
+                    const displayName = loan.name ?? loan.counterparty?.name ?? '—';
                     return (
                       <div
                         key={loan.id}
-                        className={`flex items-center justify-between p-2.5 rounded-lg border ${
-                          isOverdue
-                            ? 'border-[#E24B4A]/30 bg-[#E24B4A]/5'
-                            : 'border-gray-100'
-                        }`}
+                        className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border ${
+                          isOverdue ? 'border-[#E24B4A]/30 bg-[#E24B4A]/5' : 'border-gray-100 hover:bg-gray-50'
+                        } transition-colors`}
                       >
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-gray-700 truncate max-w-[140px]">
-                            {loan.name ?? loan.counterparty?.name ?? '—'}
-                          </p>
+                        <div className="min-w-0 flex-1">
                           <p
-                            className={`text-xs mt-0.5 ${
-                              isOverdue ? 'text-[#E24B4A]' : 'text-gray-400'
-                            }`}
+                            className="text-[13px] font-medium text-gray-700 truncate"
+                            title={displayName}
                           >
+                            {displayName}
+                          </p>
+                          <p className={`text-[11px] mt-0.5 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-400'}`}>
                             {loan.due_date ? formatDate(loan.due_date) : 'No due date'}
                             {isOverdue && ' · Overdue'}
                           </p>
                         </div>
-                        <span
-                          className={`text-[13px] font-semibold ${
-                            isOverdue ? 'text-[#E24B4A]' : 'text-gray-700'
-                          }`}
-                        >
+                        <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${isOverdue ? 'text-[#E24B4A]' : 'text-gray-700'}`}>
                           {fmtTHBCompact(balance)}
                         </span>
                       </div>
@@ -2366,29 +2359,28 @@ export default function Dashboard() {
               {loansGiven.length === 0 ? (
                 <p className="text-xs text-gray-300 py-4 text-center">None</p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {loansGiven.map((loan) => {
                     const balance = calcNetAsset(loan);
+                    const displayName = loan.name ?? loan.counterparty?.name ?? '—';
+                    const amountColor = balance > 0 ? 'text-[#1D9E75]' : balance < 0 ? 'text-[#E24B4A]' : 'text-gray-400';
                     return (
                       <div
                         key={loan.id}
-                        className="flex items-center justify-between p-2.5 border border-gray-100 rounded-lg"
+                        className="flex items-center justify-between gap-3 px-3 py-2.5 border border-gray-100 rounded-lg hover:bg-gray-50 transition-colors"
                       >
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-gray-700 truncate max-w-[140px]">
-                            {loan.name ?? loan.counterparty?.name ?? '—'}
+                        <div className="min-w-0 flex-1">
+                          <p
+                            className="text-[13px] font-medium text-gray-700 truncate"
+                            title={displayName}
+                          >
+                            {displayName}
                           </p>
-                          {loan.due_date && (
-                            <p className="text-xs text-gray-400 mt-0.5">
-                              Due {formatDate(loan.due_date)}
-                            </p>
-                          )}
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            {loan.due_date ? `Due ${formatDate(loan.due_date)}` : 'No due date'}
+                          </p>
                         </div>
-                        <span
-                          className={`text-[13px] font-semibold ${
-                            balance > 0 ? 'text-[#1D9E75]' : 'text-gray-400'
-                          }`}
-                        >
+                        <span className={`text-[13px] font-semibold tabular-nums shrink-0 ${amountColor}`}>
                           {fmtTHBCompact(balance)}
                         </span>
                       </div>
