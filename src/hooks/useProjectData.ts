@@ -91,7 +91,7 @@ export function useProjectData(id: string | undefined): ProjectData {
     if (!id) return;
     setLoading(true);
 
-    const [projRes, costRes, voRes, poRes, vendorRes, profilesRes, cmRes, ciRes, pvRes, pmRes] = await Promise.all([
+    const [projRes, costRes, voRes, poRes, vendorRes, profilesRes, cmRes, ciRes, pvRes] = await Promise.all([
       supabase.from('projects').select('*, client:entities!client_entity_id(*)').eq('id', id).maybeSingle(),
       supabase.from('project_costings').select('*').eq('project_id', id),
       supabase.from('variation_orders').select('*').eq('project_id', id).order('created_at'),
@@ -101,7 +101,6 @@ export function useProjectData(id: string | undefined): ProjectData {
       supabase.from('client_milestones').select('id, milestone_number, milestone_description, milestone_pct, payment_plan_amount, planned_receive_date, status').eq('project_id', id).order('milestone_number'),
       supabase.from('client_invoices').select('id, client_milestone_id, invoice_no, invoice_date, receipt_date, invoice_amount, received_amount, status').eq('project_id', id),
       supabase.from('payment_vouchers').select('id, project_id, voucher_date, net_paid, status').eq('project_id', id).eq('status', 'issued'),
-      supabase.from('po_milestones').select('id, purchase_order_id, milestone_number, milestone_pct, amount_due, paid_amount, invoice_date, planned_payment_date, status, purchase_orders!inner(project_id)').eq('purchase_orders.project_id', id),
     ]);
 
     if (projRes.data) setProject(projRes.data as Project);
@@ -112,7 +111,6 @@ export function useProjectData(id: string | undefined): ProjectData {
     setClientMilestones((cmRes.data ?? []) as ClientMilestoneRow[]);
     setClientInvoices((ciRes.data ?? []) as ClientInvoiceRow[]);
     setPaymentVouchers((pvRes.data ?? []) as PaymentVoucherRow[]);
-    setPoMilestones((pmRes.data ?? []) as PoMilestoneRow[]);
 
     if (poRes.data) {
       const pos = poRes.data as PurchaseOrder[];
@@ -126,6 +124,12 @@ export function useProjectData(id: string | undefined): ProjectData {
         invoiceMap[inv.po_id].push(inv);
       });
       setOrders(pos.map(p => ({ ...p, invoices: invoiceMap[p.id] ?? [] })));
+
+      const pmRes = await supabase
+        .from('po_milestones')
+        .select('id, purchase_order_id, milestone_number, milestone_pct, amount_due, paid_amount, invoice_date, planned_payment_date, status')
+        .in('purchase_order_id', pos.map(p => p.id));
+      setPoMilestones((pmRes.data ?? []) as PoMilestoneRow[]);
     }
 
     const orphanRes = await supabase
