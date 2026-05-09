@@ -835,8 +835,8 @@ export default function Dashboard() {
     return map;
   })();
 
-  // ── Forecast chart: previous month (backlog bucket) through end of all forecast data ─
-  const prevMonthKey = format(chartPrevMonthDate, 'yyyy-MM');
+  // ── Forecast chart: current month (backlog bucket) through end of all forecast data ─
+  const prevMonthKey = format(chartCurrentMonthStart, 'yyyy-MM');
   // Include all keys from Cash In + Cash Out maps
   const allForecastKeys = new Set([
     ...forecastCashInByMonth.keys(),
