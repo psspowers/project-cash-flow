@@ -58,12 +58,6 @@ interface ProjectCashPosition {
   margin: number;
 }
 
-interface MonthlyBar {
-  month: string;
-  inflow: number;
-  outflow: number;
-}
-
 interface SgaActual {
   id: string;
   year: number;
@@ -80,13 +74,6 @@ interface TreasuryAdjustment {
   fiscal_year: number;
   created_by: string | null;
   created_at: string | null;
-}
-
-interface ChartPaidInvoice {
-  po_id: string | null;
-  invoice_date: string | null;
-  invoice_amount_incl_vat: number;
-  milestones: { amount_due: number; planned_payment_date: string | null }[];
 }
 
 interface ChartReceivedInvoice {
@@ -135,14 +122,6 @@ function TableRowSkeleton({ cols }: { cols: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tooltip type helpers for Recharts
-// ---------------------------------------------------------------------------
-
-type RechartsTooltipFormatter = (
-  value: number,
-  name: string,
-) => [string, string];
-
 // ---------------------------------------------------------------------------
 // Role-specific helpers
 // ---------------------------------------------------------------------------
@@ -386,7 +365,6 @@ export default function Dashboard() {
   const [projectViewCounts, setProjectViewCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [chartMode, setChartMode] = useState<'historical' | 'forecast' | 'combined'>('historical');
   const [clientMilestonesAll, setClientMilestonesAll] = useState<
     { id: string; project_id: string; payment_plan_amount: number; planned_receive_date: string | null; status: string }[]
   >([]);
@@ -406,7 +384,6 @@ export default function Dashboard() {
   const [sgaEditValues, setSgaEditValues] = useState<Record<string, string>>({});
 
   // Chart-specific state — uses the same pivot-table data model
-  const [chartPaidInvoices, setChartPaidInvoices] = useState<ChartPaidInvoice[]>([]);
   const [chartReceivedInvoices, setChartReceivedInvoices] = useState<ChartReceivedInvoice[]>([]);
   const [chartUninvoicedMilestones, setChartUninvoicedMilestones] = useState<ChartUninvoicedMilestone[]>([]);
 
@@ -443,7 +420,6 @@ export default function Dashboard() {
         { data: costings, error: e6 },
         { data: viewRows },
         { data: cmAll, error: e7 },
-        { data: chartPaidRaw },
         { data: chartReceivedRaw },
         { data: chartMilestonesRaw },
         { data: chartAllInvoicesRaw },
@@ -490,11 +466,6 @@ export default function Dashboard() {
           .from('client_milestones')
           .select('id, project_id, payment_plan_amount, planned_receive_date, status')
           .neq('status', 'received'),
-        // Chart-specific: paid invoices with milestone relations (mirrors MonthlyAnalysis pivot)
-        supabase
-          .from('vendor_invoices')
-          .select('po_id, invoice_date, invoice_amount_incl_vat, purchase_order:purchase_orders(milestones:po_milestones(amount_due, planned_payment_date))')
-          .in('status', VENDOR_INVOICE_PAID_STATUSES),
         // Chart-specific: unpaid invoices (full pipeline) with milestone relations (mirrors MonthlyAnalysisBalance pivot)
         supabase
           .from('vendor_invoices')
@@ -582,14 +553,6 @@ export default function Dashboard() {
       );
 
       // Chart data — normalize nested milestone arrays
-      setChartPaidInvoices(
-        (chartPaidRaw ?? []).map((vi: any) => ({
-          po_id: vi.po_id,
-          invoice_date: vi.invoice_date,
-          invoice_amount_incl_vat: vi.invoice_amount_incl_vat,
-          milestones: vi.purchase_order?.milestones ?? [],
-        }))
-      );
       setChartReceivedInvoices(
         (chartReceivedRaw ?? []).map((vi: any) => ({
           po_id: vi.po_id,
@@ -708,47 +671,6 @@ export default function Dashboard() {
     return format(effective, 'yyyy-MM');
   }
 
-  // ── 1:1 milestone matching for paid invoices (Historical Cash Out) ────────
-  // Mirrors MonthlyAnalysis.tsx exactly.
-  const chartHistoricalByMonth = useMemo(() => {
-    const pool = new Map<string, Map<string, { planned_payment_date: string | null }[]>>();
-    for (const inv of chartPaidInvoices) {
-      if (!inv.po_id) continue;
-      if (!pool.has(inv.po_id)) pool.set(inv.po_id, new Map());
-      const poPool = pool.get(inv.po_id)!;
-      const sorted = [...inv.milestones].sort((a, b) => {
-        if (!a.planned_payment_date) return 1;
-        if (!b.planned_payment_date) return -1;
-        return a.planned_payment_date.localeCompare(b.planned_payment_date);
-      });
-      for (const m of sorted) {
-        const k = Number(m.amount_due).toFixed(2);
-        if (!poPool.has(k)) poPool.set(k, []);
-        poPool.get(k)!.push({ planned_payment_date: m.planned_payment_date });
-      }
-    }
-    const byMonth = new Map<string, number>();
-    for (const inv of chartPaidInvoices) {
-      let assignedDate: string | null = inv.invoice_date;
-      if (inv.po_id) {
-        const poPool = pool.get(inv.po_id);
-        if (poPool) {
-          const k = Number(inv.invoice_amount_incl_vat).toFixed(2);
-          const cands = poPool.get(k);
-          if (cands && cands.length > 0) {
-            const matched = cands.shift()!;
-            // Cap future-dated milestones to invoice_date for historical paid
-            const isFuture = matched.planned_payment_date && new Date(matched.planned_payment_date) > now;
-            assignedDate = isFuture ? inv.invoice_date : (matched.planned_payment_date ?? inv.invoice_date);
-          }
-        }
-      }
-      if (!assignedDate) continue;
-      const mk = assignedDate.slice(0, 7);
-      byMonth.set(mk, (byMonth.get(mk) ?? 0) + Number(inv.invoice_amount_incl_vat));
-    }
-    return byMonth;
-  }, [chartPaidInvoices, now]);
 
   // ── 1:1 milestone matching for received invoices (Forecast Balance / Col O) ─
   // Mirrors MonthlyAnalysisBalance.tsx with roll-forward.
@@ -799,31 +721,6 @@ export default function Dashboard() {
     return byMonth;
   }, [chartUninvoicedMilestones, now]);
 
-  // ── Build unified month key list (all months that appear in any dataset) ──
-  const allChartKeys = new Set<string>([
-    ...chartHistoricalByMonth.keys(),
-    ...chartBalanceByMonth.keys(),
-    ...chartUninvoicedByMonth.keys(),
-    ...clientMilestonesAll
-      .filter(m => m.planned_receive_date)
-      .map(m => m.planned_receive_date!.slice(0, 7)),
-  ]);
-  const sortedChartKeys = [...allChartKeys].sort();
-
-  // ── Historical chart: all months that have paid invoice data ─────────────
-  const historicalKeys = [...chartHistoricalByMonth.keys()].sort();
-  const chartData: MonthlyBar[] = historicalKeys.map(key => {
-    const inflow = clientInvoiceReceipts
-      .filter(r => r.receipt_date?.startsWith(key))
-      .reduce((s, r) => s + r.received_amount / 1_000_000, 0);
-    const outflow = (chartHistoricalByMonth.get(key) ?? 0) / 1_000_000;
-    return {
-      month: format(new Date(key + '-15'), 'MMM yy'),
-      inflow: +inflow.toFixed(2),
-      outflow: +outflow.toFixed(2),
-    };
-  });
-
   // ── Forecast Cash In by month — apply same overdue sweep as Cash Out ─────
   const forecastCashInByMonth = (() => {
     const map = new Map<string, number>();
@@ -835,92 +732,12 @@ export default function Dashboard() {
     return map;
   })();
 
-  // ── Forecast chart: current month (backlog bucket) through end of all forecast data ─
-  const prevMonthKey = format(chartCurrentMonthStart, 'yyyy-MM');
-  // Include all keys from Cash In + Cash Out maps
-  const allForecastKeys = new Set([
-    ...forecastCashInByMonth.keys(),
-    ...chartBalanceByMonth.keys(),
-    ...chartUninvoicedByMonth.keys(),
-  ]);
-  const forecastRangeKeys = [...new Set([prevMonthKey, ...sortedChartKeys, ...allForecastKeys])].sort();
-
-  // Historical cash totals — needed to seed the cumulative net line
+  // Historical cash totals
   const historicalCashIn = clientInvoiceReceipts
     .reduce((s, r) => s + Number(r.received_amount), 0);
   const historicalCashOut = vendorInvoicePaid
     .reduce((s, v) => s + Number(v.net_paid), 0);
   const historicalProjectNet = historicalCashIn - historicalCashOut;
-
-  const forecastChartDataWithCum = (() => {
-    let cumNet = historicalProjectNet / 1_000_000;
-    return forecastRangeKeys.map(key => {
-      const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
-      const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
-      const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
-      const totalOut = outflowBalance + outflowUninvoiced;
-      cumNet += inflow - totalOut;
-      return {
-        month: format(new Date(key + '-15'), 'MMM yy'),
-        key,
-        inflow: +inflow.toFixed(2),
-        outflowBalance: +outflowBalance.toFixed(2),
-        outflowUninvoiced: +outflowUninvoiced.toFixed(2),
-        cumNet: +cumNet.toFixed(2),
-      };
-    }).filter(d => d.inflow > 0 || d.outflowBalance > 0 || d.outflowUninvoiced > 0);
-  })();
-
-  // ── Combined chart: historical months + forecast months ──────────────────
-  const combinedHistoricalKeys = historicalKeys.filter(k => k < format(now, 'yyyy-MM'));
-  const combinedForecastKeys = forecastRangeKeys;
-
-  // Historical Cash In by month (actual receipts)
-  const historicalCashInByMonth = (() => {
-    const map = new Map<string, number>();
-    for (const r of clientInvoiceReceipts) {
-      if (!r.receipt_date) continue;
-      const mk = r.receipt_date.slice(0, 7);
-      map.set(mk, (map.get(mk) ?? 0) + r.received_amount);
-    }
-    return map;
-  })();
-
-  const combinedChartData = (() => {
-    let cumNet = 0;
-    const rows = [
-      ...combinedHistoricalKeys.map(key => {
-        const inflow = (historicalCashInByMonth.get(key) ?? 0) / 1_000_000;
-        const outflowBalance = (chartHistoricalByMonth.get(key) ?? 0) / 1_000_000;
-        cumNet += inflow - outflowBalance;
-        return {
-          month: format(new Date(key + '-15'), 'MMM yy'),
-          key,
-          inflow: +inflow.toFixed(2),
-          outflowBalance: +outflowBalance.toFixed(2),
-          outflowUninvoiced: 0,
-          cumNet: +cumNet.toFixed(2),
-          isForecast: false,
-        };
-      }),
-      ...combinedForecastKeys.map(key => {
-        const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
-        const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
-        const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
-        cumNet += inflow - outflowBalance - outflowUninvoiced;
-        return {
-          month: format(new Date(key + '-15'), 'MMM yy'),
-          key,
-          inflow: +inflow.toFixed(2),
-          outflowBalance: +outflowBalance.toFixed(2),
-          outflowUninvoiced: +outflowUninvoiced.toFixed(2),
-          cumNet: +cumNet.toFixed(2),
-          isForecast: true,
-        };
-      }),
-    ];
-    return rows.filter(d => d.inflow > 0 || d.outflowBalance > 0 || d.outflowUninvoiced > 0);
-  })();
 
   // ── 90-day net position ───────────────────────────────────────────────
   const ninetyDaysFromNow = new Date(now);
@@ -1895,141 +1712,6 @@ export default function Dashboard() {
           </div>
         </div>
       )}
-
-      {/* Monthly cash flow chart */}
-      <div className="bg-white rounded-lg border border-black/[0.08] p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[13px] font-semibold text-gray-800">
-            {chartMode === 'historical' && 'Monthly Cash Flow — by Expected Payment Month (฿M)'}
-            {chartMode === 'forecast' && 'Cash Flow Forecast — Balances + Yet-to-Invoice by Expected Month (฿M)'}
-            {chartMode === 'combined' && 'Cash Flow — Historical + Forecast (฿M)'}
-          </h2>
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-            {(['historical', 'forecast', 'combined'] as const).map(mode => (
-              <button
-                key={mode}
-                onClick={() => setChartMode(mode)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                  chartMode === mode
-                    ? 'bg-white text-[#0f1923] shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {mode.charAt(0).toUpperCase() + mode.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="h-[220px] flex items-center justify-center">
-            <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <>
-            {/* HISTORICAL MODE */}
-            {chartMode === 'historical' && (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={chartData} barGap={2} barCategoryGap="30%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
-                  <Tooltip
-                    formatter={((value: number, name: string): [string, string] => [`฿${value.toFixed(1)}M`, name === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)']) as RechartsTooltipFormatter}
-                    contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
-                  />
-                  <Bar dataKey="inflow" fill="#1D9E75" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="outflow" fill="#E24B4A" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-
-            {/* FORECAST MODE */}
-            {chartMode === 'forecast' && (
-              <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={forecastChartDataWithCum} barGap={2} barCategoryGap="30%">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
-                  <Tooltip
-                    formatter={((value: number, name: string): [string, string] => [
-                      `฿${value.toFixed(1)}M`,
-                      name === 'inflow' ? 'Planned Cash In'
-                      : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                      : name === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                      : 'Cumulative Net',
-                    ]) as RechartsTooltipFormatter}
-                    contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
-                  />
-                  <Bar dataKey="inflow" fill="#1D9E75" radius={[2, 2, 0, 0]} opacity={0.9} />
-                  <Bar dataKey="outflowBalance" stackId="out" fill="#E24B4A" opacity={0.9} radius={[0, 0, 0, 0]} name="outflowBalance" />
-                  <Bar dataKey="outflowUninvoiced" stackId="out" fill="#E24B4A" opacity={0.45} radius={[2, 2, 0, 0]} name="outflowUninvoiced" />
-                  <Line type="monotone" dataKey="cumNet" stroke="#3B82F6" strokeWidth={2} dot={false} name="cumNet" />
-                  <ReferenceLine y={0} stroke="#E24B4A" strokeDasharray="4 2" strokeWidth={1} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            )}
-
-            {/* COMBINED MODE */}
-            {chartMode === 'combined' && (
-              <>
-                <ResponsiveContainer width="100%" height={220}>
-                  <ComposedChart data={combinedChartData} barGap={2} barCategoryGap="30%">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `฿${v}M`} />
-                    <Tooltip
-                      formatter={((value: number, name: string): [string, string] => [
-                        `฿${value.toFixed(1)}M`,
-                        name === 'inflow' ? 'Cash In / Planned In'
-                        : name === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                        : 'Yet to Invoice (Col P)',
-                      ]) as RechartsTooltipFormatter}
-                      contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
-                    />
-                    <ReferenceLine
-                      x={format(now, 'MMM yy')}
-                      stroke="#9ca3af"
-                      strokeDasharray="4 2"
-                      label={{ value: 'Today', position: 'top', fontSize: 10, fill: '#9ca3af' }}
-                    />
-                    <Bar
-                      dataKey="inflow"
-                      radius={[2, 2, 0, 0]}
-                      shape={(props: { x?: number; y?: number; width?: number; height?: number; isForecast?: boolean }) => {
-                        const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
-                        return <rect x={x} y={y} width={width} height={height} fill="#1D9E75" opacity={isForecast ? 0.5 : 1} rx={2} />;
-                      }}
-                    />
-                    <Bar
-                      dataKey="outflowBalance"
-                      stackId="out"
-                      shape={(props: { x?: number; y?: number; width?: number; height?: number; isForecast?: boolean }) => {
-                        const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
-                        return <rect x={x} y={y} width={width} height={height} fill="#E24B4A" opacity={isForecast ? 0.9 : 1} />;
-                      }}
-                    />
-                    <Bar
-                      dataKey="outflowUninvoiced"
-                      stackId="out"
-                      radius={[2, 2, 0, 0]}
-                      shape={(props: { x?: number; y?: number; width?: number; height?: number; isForecast?: boolean }) => {
-                        const { x = 0, y = 0, width = 0, height = 0, isForecast } = props;
-                        return <rect x={x} y={y} width={width} height={height} fill="#E24B4A" opacity={isForecast ? 0.45 : 0.35} rx={2} />;
-                      }}
-                    />
-                    <Line type="monotone" dataKey="cumNet" stroke="#3B82F6" strokeWidth={2} dot={false} name="cumNet" />
-                    <ReferenceLine y={0} stroke="#E24B4A" strokeDasharray="4 2" strokeWidth={1} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-                <p className="text-[11px] text-gray-400 mt-2 px-1">
-                  Solid bars = actual · Faded bars = forecast based on planned milestone dates
-                </p>
-              </>
-            )}
-          </>
-        )}
-      </div>
 
       {/* Project cash positions + Approval queue */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
