@@ -118,7 +118,7 @@ export default function Approvals() {
     const [{ data: reps }, { data: purchaseOrders }, { data: invs }, { data: proj }, { data: costingData }, { data: profileData }, { data: pendingPOData }, { data: completedPOData }] = await Promise.all([
       supabase.from('progress_reports').select('*, project:projects(*), purchase_order:purchase_orders(*, vendor:entities!vendor_id(*))').order('created_at', { ascending: false }),
       supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').in('status', ['approved', 'partially_paid']),
-      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, project:projects(name))').in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
+      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, vendor:entities!vendor_id(name), project:projects(name))').in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
       supabase.from('projects').select('id, name, status, last_rejected_stage').order('name'),
       supabase.from('project_costings').select('*').in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
       supabase.from('user_profiles').select('*'),

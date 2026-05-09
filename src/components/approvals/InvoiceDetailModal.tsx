@@ -86,8 +86,9 @@ export default function InvoiceDetailModal({ invoice, role, onApprove, onReject,
   const [rejectComment, setRejectComment] = useState('');
   const [rejecting, setRejecting] = useState(false);
 
-  const po = invoice.purchase_order as { pss_po_no?: string; description?: string; project?: { name: string } } | undefined;
+  const po = invoice.purchase_order as { pss_po_no?: string; description?: string; vendor?: { name: string }; project?: { name: string } } | undefined;
   const vendor = invoice.vendor as { name: string } | undefined;
+  const vendorName = vendor?.name ?? po?.vendor?.name;
   const projectName = po?.project?.name ?? invoice.project?.name ?? '—';
   const poNo = po?.pss_po_no ?? '—';
 
@@ -202,7 +203,7 @@ export default function InvoiceDetailModal({ invoice, role, onApprove, onReject,
               {projectName}
               <ExternalLink size={13} className="opacity-0 group-hover:opacity-50 transition-opacity" />
             </a>
-            <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {poDetail?.description ?? po?.description ?? '—'}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{vendorName ?? '—'} · {poDetail?.description ?? po?.description ?? '—'}</p>
           </div>
           <button onClick={onClose} className="ml-4 p-1 rounded-lg hover:bg-gray-100 transition-colors">
             <X size={16} className="text-gray-400" />
