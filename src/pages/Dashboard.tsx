@@ -9,7 +9,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
-  Legend,
   ComposedChart,
   Line,
   ReferenceLine,
@@ -691,12 +690,11 @@ export default function Dashboard() {
 
   // ── Shared chart helpers — mirrors pivot table roll-forward logic ─────────
   const chartCurrentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const chartPrevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 15);
 
   function chartRollForwardKey(dateStr: string | null): string {
     const fallback = dateStr ?? now.toISOString().slice(0, 10);
     const d = new Date(fallback);
-    const effective = d < chartCurrentMonthStart ? chartPrevMonthDate : d;
+    const effective = d < chartCurrentMonthStart ? chartCurrentMonthStart : d;
     return format(effective, 'yyyy-MM');
   }
 
@@ -837,8 +835,15 @@ export default function Dashboard() {
   ]);
   const forecastRangeKeys = [...new Set([prevMonthKey, ...sortedChartKeys, ...allForecastKeys])].sort();
 
+  // Historical cash totals — needed to seed the cumulative net line
+  const historicalCashIn = clientInvoiceReceipts
+    .reduce((s, r) => s + Number(r.received_amount), 0);
+  const historicalCashOut = vendorInvoicePaid
+    .reduce((s, v) => s + Number(v.net_paid), 0);
+  const historicalProjectNet = historicalCashIn - historicalCashOut;
+
   const forecastChartDataWithCum = (() => {
-    let cumNet = 0;
+    let cumNet = historicalProjectNet / 1_000_000;
     return forecastRangeKeys.map(key => {
       const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
       const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
@@ -871,29 +876,41 @@ export default function Dashboard() {
     return map;
   })();
 
-  const combinedChartData = [
-    ...combinedHistoricalKeys.map(key => ({
-      month: format(new Date(key + '-15'), 'MMM yy'),
-      key,
-      inflow: +((historicalCashInByMonth.get(key) ?? 0) / 1_000_000).toFixed(2),
-      outflowBalance: +((chartHistoricalByMonth.get(key) ?? 0) / 1_000_000).toFixed(2),
-      outflowUninvoiced: 0,
-      isForecast: false,
-    })),
-    ...combinedForecastKeys.map(key => {
-      const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
-      const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
-      const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
-      return {
-        month: format(new Date(key + '-15'), 'MMM yy'),
-        key,
-        inflow: +inflow.toFixed(2),
-        outflowBalance: +outflowBalance.toFixed(2),
-        outflowUninvoiced: +outflowUninvoiced.toFixed(2),
-        isForecast: true,
-      };
-    }),
-  ].filter(d => d.inflow > 0 || d.outflowBalance > 0 || d.outflowUninvoiced > 0);
+  const combinedChartData = (() => {
+    let cumNet = 0;
+    const rows = [
+      ...combinedHistoricalKeys.map(key => {
+        const inflow = (historicalCashInByMonth.get(key) ?? 0) / 1_000_000;
+        const outflowBalance = (chartHistoricalByMonth.get(key) ?? 0) / 1_000_000;
+        cumNet += inflow - outflowBalance;
+        return {
+          month: format(new Date(key + '-15'), 'MMM yy'),
+          key,
+          inflow: +inflow.toFixed(2),
+          outflowBalance: +outflowBalance.toFixed(2),
+          outflowUninvoiced: 0,
+          cumNet: +cumNet.toFixed(2),
+          isForecast: false,
+        };
+      }),
+      ...combinedForecastKeys.map(key => {
+        const inflow = (forecastCashInByMonth.get(key) ?? 0) / 1_000_000;
+        const outflowBalance = (chartBalanceByMonth.get(key) ?? 0) / 1_000_000;
+        const outflowUninvoiced = (chartUninvoicedByMonth.get(key) ?? 0) / 1_000_000;
+        cumNet += inflow - outflowBalance - outflowUninvoiced;
+        return {
+          month: format(new Date(key + '-15'), 'MMM yy'),
+          key,
+          inflow: +inflow.toFixed(2),
+          outflowBalance: +outflowBalance.toFixed(2),
+          outflowUninvoiced: +outflowUninvoiced.toFixed(2),
+          cumNet: +cumNet.toFixed(2),
+          isForecast: true,
+        };
+      }),
+    ];
+    return rows.filter(d => d.inflow > 0 || d.outflowBalance > 0 || d.outflowUninvoiced > 0);
+  })();
 
   // ── 90-day net position ───────────────────────────────────────────────
   const ninetyDaysFromNow = new Date(now);
@@ -1016,16 +1033,6 @@ export default function Dashboard() {
   // ---------------------------------------------------------------------------
   // Treasury Waterfall calculations
   // ---------------------------------------------------------------------------
-
-  // Historical cash — all-time total actually received from clients
-  const historicalCashIn = clientInvoiceReceipts
-    .reduce((s, r) => s + Number(r.received_amount), 0);
-
-  // Historical cash out — all-time issued payment vouchers
-  const historicalCashOut = vendorInvoicePaid
-    .reduce((s, v) => s + Number(v.net_paid), 0);
-
-  const historicalProjectNet = historicalCashIn - historicalCashOut;
 
   // Future net = outstanding receivable minus outstanding payable
   const futureProjectNet = totalOutstandingReceivable - totalOutstandingPayable;
@@ -1885,7 +1892,6 @@ export default function Dashboard() {
                     formatter={((value: number, name: string): [string, string] => [`฿${value.toFixed(1)}M`, name === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)']) as RechartsTooltipFormatter}
                     contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
                   />
-                  <Legend formatter={(value: string) => value === 'inflow' ? 'Cash In' : 'Cash Out (Expected Month)'} iconType="square" wrapperStyle={{ fontSize: 12 }} />
                   <Bar dataKey="inflow" fill="#1D9E75" radius={[2, 2, 0, 0]} />
                   <Bar dataKey="outflow" fill="#E24B4A" radius={[2, 2, 0, 0]} />
                 </BarChart>
@@ -1908,16 +1914,6 @@ export default function Dashboard() {
                       : 'Cumulative Net',
                     ]) as RechartsTooltipFormatter}
                     contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
-                  />
-                  <Legend
-                    formatter={(value: string) =>
-                      value === 'inflow' ? 'Planned Cash In'
-                      : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                      : value === 'outflowUninvoiced' ? 'Yet to Invoice (Col P)'
-                      : 'Cumulative Net'
-                    }
-                    iconType="square"
-                    wrapperStyle={{ fontSize: 12 }}
                   />
                   <Bar dataKey="inflow" fill="#1D9E75" radius={[2, 2, 0, 0]} opacity={0.9} />
                   <Bar dataKey="outflowBalance" stackId="out" fill="#E24B4A" opacity={0.9} radius={[0, 0, 0, 0]} name="outflowBalance" />
@@ -1944,15 +1940,6 @@ export default function Dashboard() {
                         : 'Yet to Invoice (Col P)',
                       ]) as RechartsTooltipFormatter}
                       contentStyle={{ fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: 'none' }}
-                    />
-                    <Legend
-                      formatter={(value: string) =>
-                        value === 'inflow' ? 'Cash In / Planned In'
-                        : value === 'outflowBalance' ? 'Invoice Balance (Col O)'
-                        : 'Yet to Invoice (Col P)'
-                      }
-                      iconType="square"
-                      wrapperStyle={{ fontSize: 12 }}
                     />
                     <ReferenceLine
                       x={format(now, 'MMM yy')}
@@ -1985,6 +1972,8 @@ export default function Dashboard() {
                         return <rect x={x} y={y} width={width} height={height} fill="#E24B4A" opacity={isForecast ? 0.45 : 0.35} rx={2} />;
                       }}
                     />
+                    <Line type="monotone" dataKey="cumNet" stroke="#3B82F6" strokeWidth={2} dot={false} name="cumNet" />
+                    <ReferenceLine y={0} stroke="#E24B4A" strokeDasharray="4 2" strokeWidth={1} />
                   </ComposedChart>
                 </ResponsiveContainer>
                 <p className="text-[11px] text-gray-400 mt-2 px-1">
