@@ -1,0 +1,12 @@
+Project,Capacity,Item No.,PO Number,Description,Supplier,Milestone,Milestone %,Amount Due (Commitment),Contract (ex-VAT),VAT 7%,Contract (incl. VAT),Invoice No.,Invoice Date,Invoice Value,Paid,Invoice Balance,Not Yet Invoiced,Paid Date,Planned Date,Payment Amount
+RCP,0.788MW,1,PSS2025-150/M1,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M1,10.00%,"2,024,816.64","18,923,520.00","1,324,646.40","20,248,166.40",IV6811013,19/11/2025,"2,024,816.64","2,024,816.64",,,03/01/2026,,"2,024,816.64"
+RCP,0.788MW,1,PSS2025-150/M2,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M2,10.00%,"2,024,816.64",,,,BI6903002,16/03/2026,"2,024,816.64",,"2,024,816.64",,,04/02/2026,"2,024,816.64"
+RCP,0.788MW,1,PSS2025-150/M3,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M3,30.00%,"6,074,449.92",,,,BI6904014,20/04/2026,"6,074,449.92",,"6,074,449.92",,,06/20/2026,"6,074,449.92"
+RCP,0.788MW,1,PSS2025-150/M4,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M4,15.00%,"3,037,224.96",,,,BI6904015,20/04/2026,"3,037,224.96",,"3,037,224.96",,,05/04/2026,"3,037,224.96"
+RCP,0.788MW,1,PSS2025-150/M5,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M5,25.00%,"5,062,041.60",,,,,,,,,"5,062,041.60",,05/04/2026,"5,062,041.60"
+RCP,0.788MW,1,PSS2025-150/M6,PSS2025-150 Solar Rooftop and Battery Installation Systems forRung Charoenphon_Solar World_1st payment,Solar World,M6,10.00%,"2,024,816.64",,,,,,,,,"2,024,816.64",,06/05/2026,"2,024,816.64"
+RCP,0.788MW,2,,Site Management,,Expense,,"100,000.00","500,000.00",,"500,000.00",,,,,,"100,000.00",,04/02/2026,"100,000.00"
+RCP,0.788MW,2,,Site Management,,Expense,,"100,000.00",,,,,,,,,"100,000.00",,05/02/2026,"100,000.00"
+RCP,0.788MW,2,,Site Management,,Expense,,"100,000.00",,,,,,,,,"100,000.00",,06/02/2026,"100,000.00"
+RCP,0.788MW,2,,Site Management,,Expense,,"100,000.00",,,,,,,,,"100,000.00",,07/02/2026,"100,000.00"
+RCP,0.788MW,2,,Site Management,,Expense,,"100,000.00",,,,,,,,,"100,000.00",,08/02/2026,"100,000.00"
