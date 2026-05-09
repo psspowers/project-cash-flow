@@ -42,7 +42,7 @@ function notifHref(entityType: string | null | undefined, entityId: string | nul
 }
 
 export default function Topbar({ notifications, onNotificationRead, onMarkAllRead, title }: TopbarProps) {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [showNotifs, setShowNotifs] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -64,7 +64,7 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
     } else {
       sessionStorage.setItem('dev_role_override', newRole);
     }
-    window.location.reload();
+    refreshProfile();
   };
 
   const initials = profile?.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
