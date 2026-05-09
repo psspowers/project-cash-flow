@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, FolderOpen, PlusCircle, X, MoreVertical, Trash2, AlertTriangle } from 'lucide-react';
+import { Search, FolderOpen, PlusCircle, X, MoreVertical, Trash2, AlertTriangle, TrendingUp, TrendingDown, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -40,11 +40,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'completed', label: 'Completed' },
 ];
 
-// Map project status to the badge variant required by the spec.
-// active → green
-// estimation_* → gray
-// budget_* → blue
-// completed → gray
 function projectBadgeVariant(
   status: ProjectStatus,
 ): 'green' | 'amber' | 'red' | 'gray' | 'blue' {
@@ -55,8 +50,7 @@ function projectBadgeVariant(
     status === 'estimation_submitted' ||
     status === 'estimation_cm_approved' ||
     status === 'estimation_approved'
-  )
-    return 'gray';
+  ) return 'gray';
   if (
     status === 'budget_draft' ||
     status === 'budget_submitted' ||
@@ -69,44 +63,25 @@ function projectBadgeVariant(
 // Skeleton helpers
 // ---------------------------------------------------------------------------
 
-function SkeletonLine({ w = 'w-full', h = 'h-3' }: { w?: string; h?: string }) {
-  return <div className={`${w} ${h} bg-gray-100 rounded animate-pulse`} />;
-}
-
-function TableBodySkeleton({ rows = 5, cols = 8 }: { rows?: number; cols?: number }) {
+function CardSkeleton() {
   return (
-    <>
-      {Array.from({ length: rows }).map((_, i) => (
-        <tr key={i} className="border-b border-gray-50">
-          {/* Project cell */}
-          <td className="px-4 py-3.5">
-            <SkeletonLine w="w-3/4" />
-            <div className="mt-2 w-full bg-gray-100 rounded-full h-1.5 animate-pulse" />
-            <SkeletonLine w="w-1/3" h="h-2" />
-          </td>
-          {Array.from({ length: cols - 1 }).map((_, j) => (
-            <td key={j} className="px-4 py-3.5">
-              <SkeletonLine w="w-full" />
-            </td>
-          ))}
-        </tr>
-      ))}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Mini progress bar
-// ---------------------------------------------------------------------------
-
-function ProgressBar({ pct }: { pct: number }) {
-  const clamped = Math.min(100, Math.max(0, pct));
-  return (
-    <div className="mt-1.5 w-full bg-gray-100 rounded-full h-1.5">
-      <div
-        className="h-1.5 rounded-full bg-[#1D9E75] transition-all duration-500"
-        style={{ width: `${clamped}%` }}
-      />
+    <div className="bg-white rounded-xl border border-black/[0.07] p-5 space-y-4 animate-pulse">
+      <div className="flex items-start justify-between">
+        <div className="space-y-2 flex-1">
+          <div className="h-4 bg-gray-100 rounded w-3/4" />
+          <div className="h-3 bg-gray-100 rounded w-1/2" />
+        </div>
+        <div className="h-5 w-16 bg-gray-100 rounded-full" />
+      </div>
+      <div className="h-1.5 bg-gray-100 rounded-full w-full" />
+      <div className="grid grid-cols-4 gap-3">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="space-y-1.5">
+            <div className="h-2.5 bg-gray-100 rounded w-2/3" />
+            <div className="h-4 bg-gray-100 rounded w-full" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -132,7 +107,6 @@ export default function Projects() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [clients, setClients] = useState<Entity[]>([]);
 
-  // Delete state
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -158,23 +132,11 @@ export default function Projects() {
           .from('projects')
           .select('*, client:entities!client_entity_id(*)')
           .order('created_at', { ascending: false }),
-        supabase
-          .from('client_invoices')
-          .select('project_id, received_amount'),
-        supabase
-          .from('payment_vouchers')
-          .select('project_id, net_paid')
-          .eq('status', 'issued'),
-        supabase
-          .from('entities')
-          .select('*')
-          .eq('type', 'client')
-          .order('name'),
+        supabase.from('client_invoices').select('project_id, received_amount'),
+        supabase.from('payment_vouchers').select('project_id, net_paid').eq('status', 'issued'),
+        supabase.from('entities').select('*').eq('type', 'client').order('name'),
         userId
-          ? supabase
-              .from('project_views')
-              .select('project_id, view_count')
-              .eq('user_id', userId)
+          ? supabase.from('project_views').select('project_id, view_count').eq('user_id', userId)
           : Promise.resolve({ data: [], error: null }),
       ]);
 
@@ -192,9 +154,7 @@ export default function Projects() {
       setClients(clientList ?? []);
       setViewCounts(viewMap);
     } catch (err: unknown) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load projects',
-      );
+      setError(err instanceof Error ? err.message : 'Failed to load projects');
     } finally {
       setLoading(false);
     }
@@ -206,23 +166,12 @@ export default function Projects() {
     setDeleteError(null);
     const { error: rpcError } = await supabase.rpc('delete_project_cascade', { p_id: deleteTarget.id });
     setDeleting(false);
-    if (rpcError) {
-      setDeleteError(rpcError.message);
-      return;
-    }
+    if (rpcError) { setDeleteError(rpcError.message); return; }
     setProjects((prev) => prev.filter((p) => p.id !== deleteTarget.id));
     setDeleteTarget(null);
   }
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-
-  function getMetrics(projectId: string): {
-    received: number;
-    paid: number;
-    margin: number;
-  } {
+  function getMetrics(projectId: string) {
     const received = clientInvoices
       .filter((ci) => ci.project_id === projectId)
       .reduce((s, ci) => s + Number(ci.received_amount || 0), 0);
@@ -232,54 +181,41 @@ export default function Projects() {
     return { received, paid, margin: received - paid };
   }
 
-  // ---------------------------------------------------------------------------
-  // Filtered & counted projects
-  // ---------------------------------------------------------------------------
-
-  const tabCounts: Record<TabKey, number> = useMemo(
-    () => ({
-      active: projects.filter((p) => projectStatusGroup(p.status) === 'active')
-        .length,
-      estimation: projects.filter(
-        (p) => projectStatusGroup(p.status) === 'estimation',
-      ).length,
-      budget: projects.filter((p) => projectStatusGroup(p.status) === 'budget')
-        .length,
-      completed: projects.filter(
-        (p) => projectStatusGroup(p.status) === 'completed',
-      ).length,
-    }),
-    [projects],
-  );
+  const tabCounts: Record<TabKey, number> = useMemo(() => ({
+    active: projects.filter((p) => projectStatusGroup(p.status) === 'active').length,
+    estimation: projects.filter((p) => projectStatusGroup(p.status) === 'estimation').length,
+    budget: projects.filter((p) => projectStatusGroup(p.status) === 'budget').length,
+    completed: projects.filter((p) => projectStatusGroup(p.status) === 'completed').length,
+  }), [projects]);
 
   const filteredProjects: Project[] = useMemo(() => {
     const q = search.toLowerCase();
     return projects
       .filter((p) => projectStatusGroup(p.status) === tab)
-      .filter(
-        (p) =>
-          !q ||
-          p.name.toLowerCase().includes(q) ||
-          (p.client as unknown as { name?: string })?.name
-            ?.toLowerCase()
-            .includes(q),
+      .filter((p) =>
+        !q ||
+        p.name.toLowerCase().includes(q) ||
+        (p.client as unknown as { name?: string })?.name?.toLowerCase().includes(q),
       )
       .sort((a, b) => (viewCounts[b.id] ?? 0) - (viewCounts[a.id] ?? 0));
   }, [projects, tab, search, viewCounts]);
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
+  // Portfolio totals for active tab
+  const portfolioTotals = useMemo(() => {
+    if (tab !== 'active') return null;
+    const list = filteredProjects;
+    const contract = list.reduce((s, p) => s + (p.contract_incl_vat ?? 0), 0);
+    const received = list.reduce((s, p) => s + getMetrics(p.id).received, 0);
+    const paid = list.reduce((s, p) => s + getMetrics(p.id).paid, 0);
+    return { contract, received, paid, margin: received - paid };
+  }, [filteredProjects, clientInvoices, paymentVouchers, tab]);
 
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <FolderOpen size={32} className="text-gray-300" />
         <p className="text-[13px] text-gray-500">{error}</p>
-        <button
-          onClick={loadData}
-          className="text-sm px-4 py-2 bg-[#0f1923] text-white rounded-lg hover:bg-gray-800 transition-colors"
-        >
+        <button onClick={loadData} className="text-sm px-4 py-2 bg-[#0f1923] text-white rounded-lg hover:bg-gray-800 transition-colors">
           Retry
         </button>
       </div>
@@ -287,47 +223,53 @@ export default function Projects() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Page header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Projects</h1>
-          <p className="text-[13px] text-gray-500 mt-0.5">
-            PSS Power Solutions — solar EPC portfolio
-          </p>
+          <p className="text-[13px] text-gray-500 mt-0.5">PSS Power Solutions — solar EPC portfolio</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowNewProject(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#0f1923] text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            <PlusCircle size={15} />
-            New Project
-          </button>
-        </div>
+        <button
+          onClick={() => setShowNewProject(true)}
+          className="flex items-center gap-1.5 px-4 py-2 bg-[#0f1923] text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+        >
+          <PlusCircle size={15} />
+          New Project
+        </button>
       </div>
+
+      {/* Portfolio summary bar — active tab only */}
+      {tab === 'active' && !loading && portfolioTotals && filteredProjects.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Portfolio Contract', value: portfolioTotals.contract, color: 'text-gray-900' },
+            { label: 'Total Received', value: portfolioTotals.received, color: 'text-[#1D9E75]' },
+            { label: 'Cost Paid', value: portfolioTotals.paid, color: 'text-gray-600' },
+            { label: 'Net Cash Balance', value: portfolioTotals.margin, color: portfolioTotals.margin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]' },
+          ].map(m => (
+            <div key={m.label} className="bg-white rounded-xl border border-black/[0.07] px-4 py-3">
+              <p className="text-xs text-gray-400 mb-1">{m.label}</p>
+              <p className={`text-base font-bold tabular-nums ${m.color}`}>{fmtTHBCompact(m.value)}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Toolbar: tabs + search */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        {/* Tab bar */}
         <div className="flex gap-1 bg-white border border-black/[0.08] rounded-lg p-1">
           {TABS.map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
               className={`px-3.5 py-1.5 rounded-md text-[13px] font-medium transition-colors whitespace-nowrap ${
-                tab === key
-                  ? 'bg-[#0f1923] text-white'
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                tab === key ? 'bg-[#0f1923] text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
               }`}
             >
               {label}
               {!loading && (
-                <span
-                  className={`ml-1.5 text-xs font-normal ${
-                    tab === key ? 'opacity-60' : 'opacity-40'
-                  }`}
-                >
+                <span className={`ml-1.5 text-xs font-normal ${tab === key ? 'opacity-60' : 'opacity-40'}`}>
                   ({tabCounts[key]})
                 </span>
               )}
@@ -335,12 +277,8 @@ export default function Projects() {
           ))}
         </div>
 
-        {/* Search */}
         <div className="relative">
-          <Search
-            size={14}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
-          />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input
             type="text"
             placeholder="Search project or client..."
@@ -351,166 +289,55 @@ export default function Projects() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-lg border border-black/[0.08] overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-gray-100 bg-[#F8F8F7]">
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Project
-              </th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Client
-              </th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Contract ฿
-              </th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Received ฿
-              </th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Cost Paid ฿
-              </th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Cash Balance ฿
-              </th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Completion %
-              </th>
-              <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Status
-              </th>
-              {canDelete && (
-                <th className="px-4 py-3 w-10" />
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <TableBodySkeleton rows={6} cols={canDelete ? 9 : 8} />
-            ) : filteredProjects.length === 0 ? (
-              <tr>
-                <td colSpan={canDelete ? 9 : 8}>
-                  <EmptyState
-                    tab={tab}
-                    hasSearch={search.length > 0}
-                    onClearSearch={() => setSearch('')}
-                    onNewProject={() => setShowNewProject(true)}
-                  />
-                </td>
-              </tr>
-            ) : (
-              filteredProjects.map((project) => {
-                const { received, paid, margin } = getMetrics(project.id);
-                const completionPct =
-                  project.contract_incl_vat > 0
-                    ? (received / project.contract_incl_vat) * 100
-                    : 0;
+      {/* Cards grid */}
+      {loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+        </div>
+      ) : filteredProjects.length === 0 ? (
+        <EmptyState
+          tab={tab}
+          hasSearch={search.length > 0}
+          onClearSearch={() => setSearch('')}
+          onNewProject={() => setShowNewProject(true)}
+        />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {filteredProjects.map((project) => {
+              const { received, paid, margin } = getMetrics(project.id);
+              const completionPct = project.contract_incl_vat > 0
+                ? Math.min(100, (received / project.contract_incl_vat) * 100)
+                : 0;
+              const clientName = (project.client as unknown as { name?: string } | null)?.name ?? null;
 
-                return (
-                  <tr
-                    key={project.id}
-                    className="border-b border-gray-50 last:border-0 hover:bg-[#F8F8F7] cursor-pointer transition-colors"
-                    onClick={() => navigate(`/projects/${project.id}`)}
-                  >
-                    {/* Project name + mini progress bar */}
-                    <td className="px-4 py-3.5 max-w-[220px]">
-                      <p className="text-[13px] font-medium text-gray-900 truncate">
-                        {project.name}
-                      </p>
-                      <ProgressBar pct={completionPct} />
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {completionPct.toFixed(0)}% received
-                      </p>
-                    </td>
-
-                    {/* Client */}
-                    <td className="px-4 py-3.5 text-[13px] text-gray-600 max-w-[160px]">
-                      <span className="truncate block">
-                        {(
-                          project.client as unknown as {
-                            name?: string;
-                          } | null
-                        )?.name ?? '—'}
-                      </span>
-                    </td>
-
-                    {/* Contract */}
-                    <td className="px-4 py-3.5 text-right text-[13px] font-medium text-gray-800 tabular-nums">
-                      {fmtTHBCompact(project.contract_incl_vat)}
-                    </td>
-
-                    {/* Received */}
-                    <td className="px-4 py-3.5 text-right text-[13px] text-[#1D9E75] font-medium tabular-nums">
-                      {fmtTHBCompact(received)}
-                    </td>
-
-                    {/* Cost paid */}
-                    <td className="px-4 py-3.5 text-right text-[13px] text-gray-600 tabular-nums">
-                      {fmtTHBCompact(paid)}
-                    </td>
-
-                    {/* Cash Balance */}
-                    <td className="px-4 py-3.5 text-right tabular-nums">
-                      <span
-                        className={`text-[13px] font-semibold ${
-                          margin >= 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'
-                        }`}
-                      >
-                        {fmtTHBCompact(margin)}
-                      </span>
-                    </td>
-
-                    {/* Completion % — same as progress but numeric */}
-                    <td className="px-4 py-3.5 text-right text-[13px] text-gray-500 tabular-nums">
-                      {completionPct.toFixed(1)}%
-                    </td>
-
-                    {/* Status badge */}
-                    <td className="px-4 py-3.5 text-center">
-                      <Badge
-                        label={PROJECT_STATUS_LABELS[project.status]}
-                        variant={projectBadgeVariant(project.status)}
-                      />
-                    </td>
-
-                    {/* Actions kebab — CEO/EVP only */}
-                    {canDelete && (
-                      <td
-                        className="px-2 py-3.5 text-center"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <ProjectRowMenu
-                          project={project}
-                          isOpen={openMenuId === project.id}
-                          onOpen={() => setOpenMenuId(project.id)}
-                          onClose={() => setOpenMenuId(null)}
-                          onDeleteClick={() => {
-                            setOpenMenuId(null);
-                            setDeleteError(null);
-                            setDeleteTarget(project);
-                          }}
-                        />
-                      </td>
-                    )}
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-
-        {/* Footer row — project count */}
-        {!loading && filteredProjects.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-gray-100 bg-[#F8F8F7]">
-            <p className="text-xs text-gray-400">
-              {filteredProjects.length} project
-              {filteredProjects.length !== 1 ? 's' : ''}
-              {search && ` matching "${search}"`}
-            </p>
+              return (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  clientName={clientName}
+                  received={received}
+                  paid={paid}
+                  margin={margin}
+                  completionPct={completionPct}
+                  canDelete={canDelete}
+                  isMenuOpen={openMenuId === project.id}
+                  onMenuOpen={() => setOpenMenuId(project.id)}
+                  onMenuClose={() => setOpenMenuId(null)}
+                  onDeleteClick={() => { setOpenMenuId(null); setDeleteError(null); setDeleteTarget(project); }}
+                  onClick={() => navigate(`/projects/${project.id}`)}
+                />
+              );
+            })}
           </div>
-        )}
-      </div>
+
+          {/* Footer count */}
+          <p className="text-xs text-gray-400 pb-1">
+            {filteredProjects.length} project{filteredProjects.length !== 1 ? 's' : ''}
+            {search && ` matching "${search}"`}
+          </p>
+        </>
+      )}
 
       {showNewProject && (
         <NewProjectModal
@@ -529,6 +356,116 @@ export default function Projects() {
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         />
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Project card
+// ---------------------------------------------------------------------------
+
+interface ProjectCardProps {
+  project: Project;
+  clientName: string | null;
+  received: number;
+  paid: number;
+  margin: number;
+  completionPct: number;
+  canDelete: boolean;
+  isMenuOpen: boolean;
+  onMenuOpen: () => void;
+  onMenuClose: () => void;
+  onDeleteClick: () => void;
+  onClick: () => void;
+}
+
+function ProjectCard({
+  project, clientName, received, paid, margin, completionPct,
+  canDelete, isMenuOpen, onMenuOpen, onMenuClose, onDeleteClick, onClick,
+}: ProjectCardProps) {
+  const isNegative = margin < 0;
+
+  return (
+    <div
+      onClick={onClick}
+      className="group bg-white rounded-xl border border-black/[0.07] hover:border-[#1D9E75]/40 hover:shadow-md transition-all duration-200 cursor-pointer overflow-hidden"
+    >
+      {/* Top accent bar */}
+      <div className={`h-0.5 w-full ${project.status === 'active' ? 'bg-[#1D9E75]' : project.status === 'completed' ? 'bg-gray-300' : 'bg-[#378ADD]'}`} />
+
+      <div className="p-5">
+        {/* Header row */}
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-[14px] font-semibold text-gray-900 leading-snug truncate max-w-[260px]">
+                {project.name}
+              </h3>
+              <Badge
+                label={PROJECT_STATUS_LABELS[project.status]}
+                variant={projectBadgeVariant(project.status)}
+              />
+            </div>
+            {clientName && (
+              <p className="text-xs text-gray-400 mt-0.5 truncate">{clientName}</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+            {canDelete && (
+              <ProjectRowMenu
+                project={project}
+                isOpen={isMenuOpen}
+                onOpen={onMenuOpen}
+                onClose={onMenuClose}
+                onDeleteClick={onDeleteClick}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="mb-1">
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="text-gray-400">Revenue received</span>
+            <span className="font-medium text-gray-700 tabular-nums">{completionPct.toFixed(1)}%</span>
+          </div>
+          <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[#1D9E75] transition-all duration-500"
+              style={{ width: `${completionPct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Metrics grid */}
+        <div className="mt-4 grid grid-cols-4 gap-3 pt-3 border-t border-gray-50">
+          <div>
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Contract</p>
+            <p className="text-[13px] font-semibold text-gray-800 tabular-nums">{fmtTHBCompact(project.contract_incl_vat)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Received</p>
+            <p className="text-[13px] font-semibold text-[#1D9E75] tabular-nums">{fmtTHBCompact(received)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Cost Paid</p>
+            <p className="text-[13px] font-semibold text-gray-600 tabular-nums">{fmtTHBCompact(paid)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Cash Balance</p>
+            <div className="flex items-center gap-1">
+              {isNegative
+                ? <TrendingDown size={11} className="text-[#E24B4A] shrink-0" />
+                : <TrendingUp size={11} className="text-[#1D9E75] shrink-0" />
+              }
+              <p className={`text-[13px] font-bold tabular-nums ${isNegative ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                {fmtTHBCompact(margin)}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -554,9 +491,7 @@ function ProjectRowMenu({ project, isOpen, onOpen, onClose, onDeleteClick }: Pro
   useEffect(() => {
     if (!isOpen) return;
     function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
     }
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
@@ -595,9 +530,7 @@ function ProjectRowMenu({ project, isOpen, onOpen, onClose, onDeleteClick }: Pro
                 <Trash2 size={14} />
                 Delete Project
               </div>
-              <p className="text-xs text-gray-400 mt-1 leading-snug">
-                Cannot delete an Active or Completed project.
-              </p>
+              <p className="text-xs text-gray-400 mt-1 leading-snug">Cannot delete an Active or Completed project.</p>
             </div>
           )}
         </div>
@@ -622,27 +555,19 @@ function DeleteConfirmModal({ project, deleting, error, onConfirm, onCancel }: D
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl">
-        {/* Header */}
         <div className="px-6 pt-6 pb-4 flex items-start gap-4">
           <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#E24B4A]/10 flex items-center justify-center">
             <AlertTriangle size={18} className="text-[#E24B4A]" />
           </div>
           <div>
             <h2 className="text-base font-semibold text-gray-900">Delete Project</h2>
-            <p className="text-[13px] text-gray-500 mt-0.5">
-              This action cannot be undone.
-            </p>
+            <p className="text-[13px] text-gray-500 mt-0.5">This action cannot be undone.</p>
           </div>
-          <button
-            onClick={onCancel}
-            disabled={deleting}
-            className="ml-auto text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
-          >
+          <button onClick={onCancel} disabled={deleting} className="ml-auto text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0">
             <X size={18} />
           </button>
         </div>
 
-        {/* Body */}
         <div className="px-6 pb-5 space-y-3">
           <p className="text-[13px] text-gray-700">
             You are about to permanently delete{' '}
@@ -661,38 +586,20 @@ function DeleteConfirmModal({ project, deleting, error, onConfirm, onCancel }: D
               <li>Progress reports</li>
             </ul>
           </div>
-
           {error && (
-            <p className="text-xs text-[#E24B4A] bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">
-              {error}
-            </p>
+            <p className="text-xs text-[#E24B4A] bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">{error}</p>
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            disabled={deleting}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-          >
+          <button onClick={onCancel} disabled={deleting} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50">
             Cancel
           </button>
-          <button
-            onClick={onConfirm}
-            disabled={deleting}
-            className="px-4 py-2 text-sm bg-[#E24B4A] text-white rounded-lg hover:bg-[#c73c3c] transition-colors disabled:opacity-60 flex items-center gap-2 min-w-[120px] justify-center"
-          >
+          <button onClick={onConfirm} disabled={deleting} className="px-4 py-2 text-sm bg-[#E24B4A] text-white rounded-lg hover:bg-[#c73c3c] transition-colors disabled:opacity-60 flex items-center gap-2 min-w-[120px] justify-center">
             {deleting ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                Deleting...
-              </>
+              <><span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />Deleting...</>
             ) : (
-              <>
-                <Trash2 size={13} />
-                Delete Project
-              </>
+              <><Trash2 size={13} />Delete Project</>
             )}
           </button>
         </div>
@@ -728,11 +635,9 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
   const [savingClient, setSavingClient] = useState(false);
 
   const selectedClient = clients.find(c => c.id === clientId);
-
   const filteredClients = clientSearch.trim()
     ? clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
     : clients;
-
   const contractIncl = (parseFloat(contractExcl) || 0) * 1.07;
 
   function validate() {
@@ -779,7 +684,6 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
       status: 'estimation_draft',
       currency: 'THB',
     }).select('id').maybeSingle();
-
     setSaving(false);
     if (error) { setErrors({ form: error.message }); return; }
     if (data) onSaved(data.id);
@@ -817,24 +721,14 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
               <input
                 type="text"
                 value={clientSearch || (selectedClient ? selectedClient.name : '')}
-                onChange={e => {
-                  setClientSearch(e.target.value);
-                  setClientId('');
-                  setClientDropdownOpen(true);
-                  setCreatingClient(false);
-                  setErrors(p => ({ ...p, clientId: '' }));
-                }}
+                onChange={e => { setClientSearch(e.target.value); setClientId(''); setClientDropdownOpen(true); setCreatingClient(false); setErrors(p => ({ ...p, clientId: '' })); }}
                 onFocus={() => setClientDropdownOpen(true)}
                 onBlur={() => setTimeout(() => setClientDropdownOpen(false), 150)}
                 placeholder="Search or select client..."
                 className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] pr-8 ${errors.clientId ? 'border-[#E24B4A]' : 'border-gray-200'}`}
               />
               {clientId && (
-                <button
-                  type="button"
-                  onMouseDown={e => { e.preventDefault(); setClientId(''); setClientSearch(''); }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
-                >
+                <button type="button" onMouseDown={e => { e.preventDefault(); setClientId(''); setClientSearch(''); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
                   <X size={13} />
                 </button>
               )}
@@ -851,11 +745,7 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
                     <button
                       key={c.id}
                       type="button"
-                      onMouseDown={() => {
-                        setClientId(c.id);
-                        setClientSearch('');
-                        setClientDropdownOpen(false);
-                      }}
+                      onMouseDown={() => { setClientId(c.id); setClientSearch(''); setClientDropdownOpen(false); }}
                       className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${clientId === c.id ? 'bg-[#1D9E75]/5 text-[#1D9E75] font-medium' : 'text-gray-700'}`}
                     >
                       {c.name}
@@ -865,11 +755,7 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
                 <div className="border-t border-gray-100">
                   <button
                     type="button"
-                    onMouseDown={() => {
-                      setCreatingClient(true);
-                      setNewClientName(clientSearch);
-                      setClientDropdownOpen(false);
-                    }}
+                    onMouseDown={() => { setCreatingClient(true); setNewClientName(clientSearch); setClientDropdownOpen(false); }}
                     className="w-full text-left px-3 py-2 text-sm text-[#1D9E75] font-medium hover:bg-[#1D9E75]/5 flex items-center gap-1.5 transition-colors"
                   >
                     <PlusCircle size={13} />
@@ -892,19 +778,8 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
                   className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 focus:border-[#1D9E75] bg-white"
                 />
                 <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setCreatingClient(false); setNewClientName(''); }}
-                    className="flex-1 border border-gray-200 text-gray-600 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCreateClient}
-                    disabled={!newClientName.trim() || savingClient}
-                    className="flex-1 bg-[#1D9E75] text-white py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] disabled:opacity-60 flex items-center justify-center gap-1"
-                  >
+                  <button type="button" onClick={() => { setCreatingClient(false); setNewClientName(''); }} className="flex-1 border border-gray-200 text-gray-600 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50">Cancel</button>
+                  <button type="button" onClick={handleCreateClient} disabled={!newClientName.trim() || savingClient} className="flex-1 bg-[#1D9E75] text-white py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] disabled:opacity-60 flex items-center justify-center gap-1">
                     {savingClient ? 'Saving...' : 'Save Client'}
                   </button>
                 </div>
@@ -953,17 +828,8 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
         </div>
 
         <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-2 text-sm bg-[#1D9E75] text-white rounded-lg hover:bg-[#178a64] transition-colors disabled:opacity-60"
-          >
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-4 py-2 text-sm bg-[#1D9E75] text-white rounded-lg hover:bg-[#178a64] transition-colors disabled:opacity-60">
             {saving ? 'Creating...' : 'Create Project'}
           </button>
         </div>
@@ -973,14 +839,11 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
 }
 
 // ---------------------------------------------------------------------------
-// Empty state component
+// Empty state
 // ---------------------------------------------------------------------------
 
 function EmptyState({
-  tab,
-  hasSearch,
-  onClearSearch,
-  onNewProject,
+  tab, hasSearch, onClearSearch, onNewProject,
 }: {
   tab: TabKey;
   hasSearch: boolean;
@@ -989,13 +852,10 @@ function EmptyState({
 }) {
   if (hasSearch) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 space-y-3">
+      <div className="flex flex-col items-center justify-center py-20 space-y-3">
         <Search size={28} className="text-gray-200" />
         <p className="text-[13px] text-gray-400">No projects match your search</p>
-        <button
-          onClick={onClearSearch}
-          className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors"
-        >
+        <button onClick={onClearSearch} className="text-xs px-3 py-1.5 border border-gray-200 rounded-md text-gray-500 hover:bg-gray-50 transition-colors">
           Clear search
         </button>
       </div>
@@ -1003,36 +863,22 @@ function EmptyState({
   }
 
   const messages: Record<TabKey, { heading: string; sub: string }> = {
-    active: {
-      heading: 'No active projects',
-      sub: 'Projects move here once a budget is approved and construction begins.',
-    },
-    estimation: {
-      heading: 'No estimation-stage projects',
-      sub: 'Create a new project to start building your sales estimation.',
-    },
-    budget: {
-      heading: 'No budget-stage projects',
-      sub: 'Projects appear here once an estimation is approved and a budget is drafted.',
-    },
-    completed: {
-      heading: 'No completed projects yet',
-      sub: 'Finished projects will be archived here for reference.',
-    },
+    active: { heading: 'No active projects', sub: 'Projects move here once a budget is approved and construction begins.' },
+    estimation: { heading: 'No estimation-stage projects', sub: 'Create a new project to start building your sales estimation.' },
+    budget: { heading: 'No budget-stage projects', sub: 'Projects appear here once an estimation is approved and a budget is drafted.' },
+    completed: { heading: 'No completed projects yet', sub: 'Finished projects will be archived here for reference.' },
   };
 
   const { heading, sub } = messages[tab];
-
   return (
-    <div className="flex flex-col items-center justify-center py-16 space-y-3">
-      <FolderOpen size={32} className="text-gray-200" />
+    <div className="flex flex-col items-center justify-center py-20 space-y-3">
+      <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center">
+        <Zap size={22} className="text-gray-300" />
+      </div>
       <p className="text-[13px] font-medium text-gray-500">{heading}</p>
       <p className="text-xs text-gray-400 text-center max-w-xs">{sub}</p>
       {tab === 'estimation' && (
-        <button
-          onClick={onNewProject}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#0f1923] text-white rounded-md hover:bg-gray-800 transition-colors"
-        >
+        <button onClick={onNewProject} className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#0f1923] text-white rounded-md hover:bg-gray-800 transition-colors">
           <PlusCircle size={13} />
           New Project
         </button>
