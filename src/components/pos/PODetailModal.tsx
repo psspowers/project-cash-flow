@@ -537,7 +537,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
               {/* ── RIGHT: Chat panel ──────────────────────────────────────── */}
               <div className="w-full lg:w-[340px] shrink-0 flex flex-col border-t lg:border-t-0 lg:border-l border-gray-100 min-h-[420px] lg:min-h-0">
-                <CommentThread entityType="purchase_order" entityId={po.id} />
+                <CommentThread entityType="purchase_order" entityId={po.id} entityLabel={po.pss_po_no ?? undefined} />
               </div>
 
             </div>
