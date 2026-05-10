@@ -196,7 +196,7 @@ export default function VarianceTab() {
       </div>
 
       {/* ── RIGHT: Project Discussion panel ──────────────────────────── */}
-      <div className="w-full lg:w-[400px] shrink-0 flex flex-col border border-[rgba(0,0,0,0.08)] lg:border-l-0 rounded-lg lg:rounded-l-none mt-3 lg:mt-0 bg-white overflow-hidden">
+      <div className="w-full lg:w-[400px] shrink-0 flex flex-col min-h-[420px] lg:min-h-0 border-t lg:border-t-0 lg:border-l border-[rgba(0,0,0,0.08)] bg-gray-50/50 relative overflow-hidden">
         {project && (
           <CommentThread
             key={project.id}
