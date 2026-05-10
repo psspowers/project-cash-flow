@@ -1,15 +1,13 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { differenceInDays } from 'date-fns';
 import {
   ShoppingCart, FileText, BarChart2, TrendingUp, CreditCard,
-  ChevronRight, RefreshCw, CheckCircle, Filter,
+  RefreshCw, CheckCircle, Filter, ChevronRight, AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
-import {
-  VendorInvoice, PurchaseOrder, Project, Entity,
-} from '../types';
+import { VendorInvoice, PurchaseOrder, Project, Entity } from '../types';
 import { formatTHBCompact, formatDate } from '../utils/formatters';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import PODetailModal from '../components/pos/PODetailModal';
@@ -23,39 +21,66 @@ import {
 // ---------------------------------------------------------------------------
 
 type AgingLevel = 'fresh' | 'amber' | 'red';
-
 type CardType = 'po' | 'invoice' | 'costing' | 'progress_report' | 'voucher';
 
-interface KanbanCard {
+interface WorkItem {
   id: string;
   type: CardType;
   label: string;
   projectName: string;
   projectId: string;
   amount: number;
-  updatedAt: string;
   daysWaiting: number;
   aging: AgingLevel;
-  // Raw objects needed for modals
   rawInvoice?: VendorInvoice;
   rawPO?: PurchaseOrder;
 }
 
-interface DeskColumn {
-  key: string;
-  title: string;
-  roleOwner?: string; // matches UserRole
-  borderColor: string;
-  headerBg: string;
+interface DeskDef {
+  role: string;
+  label: string;
+  accent: string;
   headerText: string;
-  cards: KanbanCard[];
+  cardBg: string;
+  items: WorkItem[];
 }
 
-interface Swimlane {
-  title: string;
-  subtitle: string;
-  columns: DeskColumn[];
-}
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const ROLE_DISPLAY: Record<string, string> = {
+  procurement: 'Procurement',
+  cost_controller: 'Cost Controller',
+  construction_manager: 'Construction Mgr',
+  evp: 'EVP',
+  ceo: 'CEO',
+  accounts_supervisor: 'Accounts Supervisor',
+  accounts_manager: 'Accounts Manager',
+  banking_finance_officer: 'Banking & Finance',
+};
+
+const ROLE_ORDER = [
+  'procurement',
+  'cost_controller',
+  'construction_manager',
+  'evp',
+  'ceo',
+  'accounts_supervisor',
+  'accounts_manager',
+  'banking_finance_officer',
+];
+
+const DESK_STYLE: Record<string, { accent: string; headerText: string; cardBg: string }> = {
+  procurement:             { accent: 'bg-slate-500',   headerText: 'text-slate-700',   cardBg: 'bg-white' },
+  cost_controller:         { accent: 'bg-gray-500',    headerText: 'text-gray-700',    cardBg: 'bg-white' },
+  construction_manager:    { accent: 'bg-blue-500',    headerText: 'text-blue-700',    cardBg: 'bg-blue-50/30' },
+  evp:                     { accent: 'bg-[#1D9E75]',   headerText: 'text-[#1D9E75]',   cardBg: 'bg-[#1D9E75]/[0.03]' },
+  ceo:                     { accent: 'bg-blue-700',    headerText: 'text-blue-800',    cardBg: 'bg-blue-50/40' },
+  accounts_supervisor:     { accent: 'bg-amber-500',   headerText: 'text-amber-700',   cardBg: 'bg-amber-50/30' },
+  accounts_manager:        { accent: 'bg-orange-500',  headerText: 'text-orange-700',  cardBg: 'bg-orange-50/30' },
+  banking_finance_officer: { accent: 'bg-teal-600',    headerText: 'text-teal-700',    cardBg: 'bg-teal-50/30' },
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,76 +92,64 @@ function agingLevel(days: number): AgingLevel {
   return 'fresh';
 }
 
-function agingStyle(aging: AgingLevel) {
-  if (aging === 'red') return { border: 'border-[#E24B4A]/25 bg-[#E24B4A]/[0.04]', strip: 'bg-[#E24B4A]', text: 'text-[#E24B4A]' };
-  if (aging === 'amber') return { border: 'border-[#EF9F27]/25 bg-[#EF9F27]/[0.04]', strip: 'bg-[#EF9F27]', text: 'text-[#EF9F27]' };
-  return { border: 'border-gray-100 bg-white', strip: 'bg-gray-200', text: 'text-gray-400' };
-}
-
-function typeIcon(type: CardType, size = 12) {
+function typeIcon(type: CardType, size = 11) {
   switch (type) {
-    case 'po': return <ShoppingCart size={size} />;
-    case 'invoice': return <FileText size={size} />;
-    case 'costing': return <BarChart2 size={size} />;
+    case 'po':              return <ShoppingCart size={size} />;
+    case 'invoice':         return <FileText size={size} />;
+    case 'costing':         return <BarChart2 size={size} />;
     case 'progress_report': return <TrendingUp size={size} />;
-    case 'voucher': return <CreditCard size={size} />;
+    case 'voucher':         return <CreditCard size={size} />;
   }
 }
 
 function typeLabel(type: CardType) {
   switch (type) {
-    case 'po': return 'Purchase Order';
-    case 'invoice': return 'Vendor Invoice';
-    case 'costing': return 'Project Costing';
+    case 'po':              return 'Purchase Order';
+    case 'invoice':         return 'Vendor Invoice';
+    case 'costing':         return 'Costing';
     case 'progress_report': return 'Progress Report';
-    case 'voucher': return 'Payment Voucher';
+    case 'voucher':         return 'Voucher';
   }
 }
 
 // ---------------------------------------------------------------------------
-// Card Component
+// Work Item Row
 // ---------------------------------------------------------------------------
 
-function KanbanCardItem({
-  card,
+function WorkItemRow({
+  item,
   isMyDesk,
   onClick,
 }: {
-  card: KanbanCard;
+  item: WorkItem;
   isMyDesk: boolean;
-  onClick: (card: KanbanCard) => void;
+  onClick: (item: WorkItem) => void;
 }) {
-  const s = agingStyle(card.aging);
+  const stripColor = item.aging === 'red' ? 'bg-[#E24B4A]' : item.aging === 'amber' ? 'bg-[#EF9F27]' : 'bg-gray-200';
+  const borderColor = item.aging === 'red' ? 'border-[#E24B4A]/20 bg-[#E24B4A]/[0.03]' : item.aging === 'amber' ? 'border-[#EF9F27]/20 bg-[#EF9F27]/[0.03]' : 'border-gray-100 bg-white';
+  const ageText = item.aging === 'red' ? 'text-[#E24B4A]' : item.aging === 'amber' ? 'text-[#EF9F27]' : 'text-gray-400';
+
   return (
     <div
-      onClick={() => onClick(card)}
-      className={`relative rounded-lg border cursor-pointer group transition-all duration-150 hover:shadow-md hover:-translate-y-0.5 ${s.border} ${isMyDesk ? 'ring-1 ring-[#1D9E75]/20' : ''}`}
+      onClick={() => onClick(item)}
+      className={`relative rounded-lg border cursor-pointer transition-all duration-150 hover:shadow-sm hover:-translate-y-px group ${borderColor} ${isMyDesk ? 'hover:ring-1 hover:ring-[#1D9E75]/30' : ''}`}
     >
-      {/* Aging strip */}
-      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${s.strip}`} />
-
-      <div className="pl-3 pr-2.5 pt-2.5 pb-2 ml-1">
-        {/* Type badge + icon */}
-        <div className="flex items-center gap-1 mb-1.5">
-          <span className={`${s.text} opacity-70`}>{typeIcon(card.type)}</span>
-          <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{typeLabel(card.type)}</span>
+      <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg ${stripColor}`} />
+      <div className="pl-3 pr-2.5 py-2">
+        <div className="flex items-center gap-1 mb-0.5">
+          <span className="text-gray-400">{typeIcon(item.type)}</span>
+          <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{typeLabel(item.type)}</span>
         </div>
-
-        {/* Identifier */}
-        <p className="text-[12px] font-semibold text-gray-800 leading-tight truncate group-hover:text-[#1D9E75] transition-colors">
-          {card.label}
+        <p className="text-[12px] font-semibold text-gray-800 truncate group-hover:text-[#1D9E75] transition-colors leading-tight">
+          {item.label}
         </p>
-
-        {/* Project */}
-        <p className="text-[11px] text-gray-400 truncate mt-0.5">{card.projectName}</p>
-
-        {/* Footer: amount + aging */}
-        <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-gray-100">
+        <p className="text-[11px] text-gray-400 truncate mt-0.5">{item.projectName}</p>
+        <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-gray-100/80">
           <span className="text-[11px] font-semibold text-gray-600">
-            {card.amount > 0 ? formatTHBCompact(card.amount) : '—'}
+            {item.amount > 0 ? formatTHBCompact(item.amount) : '—'}
           </span>
-          <span className={`text-[10px] font-semibold ${s.text}`}>
-            {card.daysWaiting === 0 ? 'Today' : `${card.daysWaiting}d waiting`}
+          <span className={`text-[10px] font-semibold ${ageText}`}>
+            {item.daysWaiting === 0 ? 'Today' : `${item.daysWaiting}d`}
           </span>
         </div>
       </div>
@@ -145,145 +158,160 @@ function KanbanCardItem({
 }
 
 // ---------------------------------------------------------------------------
-// Desk Column Component
+// Desk Card
 // ---------------------------------------------------------------------------
 
-function DeskColumnView({
-  col,
+function DeskCard({
+  desk,
   isMyDesk,
-  showArrowAfter,
-  onCardClick,
+  onItemClick,
+  cardRef,
 }: {
-  col: DeskColumn;
+  desk: DeskDef;
   isMyDesk: boolean;
-  showArrowAfter: boolean;
-  onCardClick: (card: KanbanCard) => void;
+  onItemClick: (item: WorkItem) => void;
+  cardRef?: (el: HTMLDivElement | null) => void;
 }) {
-  const totalValue = col.cards.reduce((s, c) => s + c.amount, 0);
-  const redCount = col.cards.filter(c => c.aging === 'red').length;
+  const totalValue = desk.items.reduce((s, i) => s + i.amount, 0);
+  const overdueCount = desk.items.filter(i => i.aging === 'red').length;
+  const amberCount = desk.items.filter(i => i.aging === 'amber').length;
 
   return (
-    <div className="flex items-start gap-0 shrink-0">
-      {/* Column */}
-      <div className={`w-[240px] shrink-0 rounded-xl border ${isMyDesk ? 'border-[#1D9E75]/30 shadow-sm shadow-[#1D9E75]/10' : 'border-gray-200'} overflow-hidden`}>
-        {/* Column header */}
-        <div className={`${col.headerBg} px-3 py-2.5 border-b ${isMyDesk ? 'border-[#1D9E75]/20' : 'border-gray-200'}`}>
-          {/* Top accent bar */}
-          <div className={`-mx-3 -mt-2.5 mb-2 h-0.5 ${col.borderColor}`} />
+    <div
+      ref={cardRef}
+      className={`rounded-xl border overflow-hidden flex flex-col h-full transition-shadow duration-200 ${
+        isMyDesk
+          ? 'border-[#1D9E75]/30 shadow-md shadow-[#1D9E75]/10 ring-2 ring-[#1D9E75]/20'
+          : 'border-gray-200 shadow-sm'
+      } ${desk.cardBg}`}
+    >
+      {/* Accent bar */}
+      <div className={`h-[3px] ${desk.accent}`} />
 
-          <div className="flex items-start justify-between gap-1">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <p className={`text-[12px] font-bold truncate ${col.headerText}`}>{col.title}</p>
-                {isMyDesk && (
-                  <span className="text-[9px] font-bold bg-[#1D9E75] text-white px-1.5 py-0.5 rounded-full uppercase tracking-wide shrink-0">
-                    Your Desk
-                  </span>
-                )}
-              </div>
-              {/* Financial gravity */}
-              <p className="text-[13px] font-extrabold text-gray-800 mt-0.5">
-                {totalValue > 0 ? formatTHBCompact(totalValue) : '—'}
-              </p>
-              {totalValue > 0 && (
-                <p className="text-[10px] text-gray-400">blocked</p>
-              )}
-            </div>
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full ${
-                col.cards.length > 0
-                  ? 'bg-gray-200 text-gray-700'
-                  : 'bg-[#1D9E75]/10 text-[#1D9E75]'
-              }`}>
-                {col.cards.length}
-              </span>
-              {redCount > 0 && (
-                <span className="text-[9px] font-bold text-[#E24B4A] bg-[#E24B4A]/10 px-1 py-0.5 rounded">
-                  {redCount} overdue
+      {/* Header */}
+      <div className={`px-3.5 py-3 border-b ${isMyDesk ? 'border-[#1D9E75]/15' : 'border-gray-100'}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap mb-1">
+              <p className={`text-[12px] font-bold ${desk.headerText}`}>{desk.label}</p>
+              {isMyDesk && (
+                <span className="text-[9px] font-bold bg-[#1D9E75] text-white px-1.5 py-0.5 rounded-full uppercase tracking-wide shrink-0">
+                  Your Desk
                 </span>
               )}
             </div>
+            <p className={`text-[20px] font-extrabold leading-none ${totalValue > 0 ? 'text-gray-900' : 'text-gray-300'}`}>
+              {totalValue > 0 ? formatTHBCompact(totalValue) : '—'}
+            </p>
+            {totalValue > 0 && (
+              <p className="text-[10px] text-gray-400 mt-0.5">total blocked</p>
+            )}
           </div>
-        </div>
-
-        {/* Cards body */}
-        <div className="bg-gray-50 p-2 min-h-[120px] space-y-2 max-h-[calc(100vh-340px)] overflow-y-auto">
-          {col.cards.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-6 text-center">
-              <div className="w-8 h-8 rounded-full bg-[#1D9E75]/10 flex items-center justify-center mb-2">
-                <CheckCircle size={16} className="text-[#1D9E75]" />
-              </div>
-              <p className="text-[11px] font-semibold text-[#1D9E75]">Desk Clear</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">No items waiting</p>
-            </div>
-          ) : (
-            col.cards.map(card => (
-              <KanbanCardItem
-                key={`${card.type}-${card.id}`}
-                card={card}
-                isMyDesk={isMyDesk}
-                onClick={onCardClick}
-              />
-            ))
-          )}
+          <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
+            <span className={`text-[12px] font-bold px-2 py-0.5 rounded-full min-w-[24px] text-center ${
+              desk.items.length > 0 ? 'bg-gray-100 text-gray-700' : 'bg-[#1D9E75]/10 text-[#1D9E75]'
+            }`}>
+              {desk.items.length}
+            </span>
+            {overdueCount > 0 && (
+              <span className="flex items-center gap-0.5 text-[9px] font-bold text-[#E24B4A] bg-[#E24B4A]/10 px-1.5 py-0.5 rounded-full">
+                <AlertTriangle size={8} />
+                {overdueCount} late
+              </span>
+            )}
+            {overdueCount === 0 && amberCount > 0 && (
+              <span className="text-[9px] font-medium text-[#EF9F27] bg-[#EF9F27]/10 px-1.5 py-0.5 rounded-full">
+                {amberCount} aging
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Arrow connector */}
-      {showArrowAfter && (
-        <div className="flex items-start pt-[38px] px-1 shrink-0">
-          <ChevronRight size={16} className="text-gray-300" />
-        </div>
-      )}
+      {/* Items list */}
+      <div
+        className="flex-1 p-2.5 space-y-1.5 overflow-y-auto"
+        style={{ maxHeight: 320, minHeight: 100 }}
+      >
+        {desk.items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-7 text-center">
+            <div className="w-9 h-9 rounded-full bg-[#1D9E75]/10 flex items-center justify-center mb-2">
+              <CheckCircle size={17} className="text-[#1D9E75]" />
+            </div>
+            <p className="text-[11px] font-semibold text-[#1D9E75]">Desk Clear</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">No items waiting</p>
+          </div>
+        ) : (
+          desk.items.map(item => (
+            <WorkItemRow
+              key={`${item.type}-${item.id}`}
+              item={item}
+              isMyDesk={isMyDesk}
+              onClick={onItemClick}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Swimlane Component
+// Flow Strip
 // ---------------------------------------------------------------------------
 
-function SwimlaneView({
-  lane,
+function FlowStrip({
+  desksInOrder,
   myRole,
-  onCardClick,
+  onPillClick,
 }: {
-  lane: Swimlane;
+  desksInOrder: DeskDef[];
   myRole: string | undefined;
-  onCardClick: (card: KanbanCard) => void;
+  onPillClick: (role: string) => void;
 }) {
-  const totalItems = lane.columns.reduce((s, c) => s + c.cards.length, 0);
-  const totalValue = lane.columns.reduce((s, c) => s + c.cards.reduce((cs, card) => cs + card.amount, 0), 0);
-
   return (
-    <div>
-      {/* Swimlane header */}
-      <div className="flex items-center gap-3 mb-3">
-        <div>
-          <h2 className="text-[15px] font-bold text-gray-900">{lane.title}</h2>
-          <p className="text-[12px] text-gray-400">{lane.subtitle}</p>
-        </div>
-        <div className="h-px flex-1 bg-gray-200" />
-        <div className="text-right shrink-0">
-          <p className="text-[13px] font-bold text-gray-700">{formatTHBCompact(totalValue)}</p>
-          <p className="text-[10px] text-gray-400">{totalItems} items in motion</p>
-        </div>
-      </div>
+    <div className="bg-white border border-gray-200 rounded-xl px-4 py-3">
+      <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest mb-2">Approval Flow — click to jump to desk</p>
+      <div className="flex items-center gap-0 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
+        {desksInOrder.map((desk, idx) => {
+          const isMe = desk.role === myRole;
+          const hasItems = desk.items.length > 0;
+          const hasOverdue = desk.items.some(i => i.aging === 'red');
+          const hasAmber = !hasOverdue && desk.items.some(i => i.aging === 'amber');
 
-      {/* Horizontally scrollable columns */}
-      <div className="overflow-x-auto pb-2" style={{ scrollSnapType: 'x mandatory' }}>
-        <div className="flex items-start gap-0 w-max">
-          {lane.columns.map((col, idx) => (
-            <div key={col.key} style={{ scrollSnapAlign: 'start' }}>
-              <DeskColumnView
-                col={col}
-                isMyDesk={col.roleOwner === myRole}
-                showArrowAfter={idx < lane.columns.length - 1}
-                onCardClick={onCardClick}
-              />
+          return (
+            <div key={desk.role} className="flex items-center gap-0 shrink-0">
+              <button
+                onClick={() => onPillClick(desk.role)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all duration-150 whitespace-nowrap ${
+                  isMe
+                    ? 'bg-[#1D9E75] text-white shadow-sm'
+                    : hasItems
+                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-gray-50 text-gray-400 hover:bg-gray-100'
+                }`}
+              >
+                <span>{desk.label}</span>
+                {desk.items.length > 0 && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                    isMe
+                      ? 'bg-white/30 text-white'
+                      : hasOverdue
+                        ? 'bg-[#E24B4A]/15 text-[#E24B4A]'
+                        : hasAmber
+                          ? 'bg-[#EF9F27]/15 text-[#EF9F27]'
+                          : 'bg-white text-gray-600'
+                  }`}>
+                    {desk.items.length}
+                  </span>
+                )}
+              </button>
+              {idx < desksInOrder.length - 1 && (
+                <ChevronRight size={13} className="text-gray-300 mx-0.5 shrink-0" />
+              )}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -300,7 +328,6 @@ export default function WorkflowEfficiency() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
 
-  // Raw data
   const [allPos, setAllPos] = useState<any[]>([]);
   const [allInvoices, setAllInvoices] = useState<any[]>([]);
   const [allCostings, setAllCostings] = useState<any[]>([]);
@@ -308,15 +335,15 @@ export default function WorkflowEfficiency() {
   const [allVouchers, setAllVouchers] = useState<any[]>([]);
   const [allProjects, setAllProjects] = useState<{ id: string; name: string }[]>([]);
 
-  // Filter
   const [projectFilter, setProjectFilter] = useState<string>('');
 
-  // Modal state
   const [invoiceModal, setInvoiceModal] = useState<VendorInvoice | null>(null);
   const [approvingInvoice, setApprovingInvoice] = useState(false);
   const [poModal, setPoModal] = useState<PurchaseOrder | null>(null);
   const [poProjects, setPoProjects] = useState<Project[]>([]);
   const [poVendors, setPoVendors] = useState<Entity[]>([]);
+
+  const deskRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => { loadData(); }, []);
 
@@ -328,7 +355,7 @@ export default function WorkflowEfficiency() {
       supabase
         .from('purchase_orders')
         .select('id, pss_po_no, description, po_amount_incl_vat, status, updated_at, supplier_name_raw, project_id, vendor_id, vendor:entities!vendor_id(id,name), project:projects!project_id(id,name)')
-        .in('status', ['draft', 'draft_revision', 'pending_cm', 'pending_evp', 'pending_revision_approval', 'pending_ceo']),
+        .in('status', ['draft', 'draft_revision', 'pending_cc', 'pending_cm', 'pending_evp', 'pending_revision_approval', 'pending_ceo']),
       supabase
         .from('vendor_invoices')
         .select('*, project:projects!project_id(id,name), purchase_order:purchase_orders!po_id(id,pss_po_no,description,supplier_name_raw,vendor:entities!vendor_id(id,name))')
@@ -345,255 +372,172 @@ export default function WorkflowEfficiency() {
         .from('payment_vouchers')
         .select('id, voucher_no, net_paid, status, updated_at, project:projects!project_id(id,name)')
         .in('status', ['pending_manager', 'approved']),
-      supabase
-        .from('projects')
-        .select('id, name')
-        .order('name'),
+      supabase.from('projects').select('id, name').order('name'),
     ]);
 
-    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
-    setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
-    setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
-    setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
-    setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: differenceInDays(now, new Date(r.updated_at)) })));
+    const days = (r: any) => differenceInDays(now, new Date(r.updated_at));
+    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
+    setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
+    setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
+    setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
+    setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
     setAllProjects(projRes.data ?? []);
     setLastRefresh(now);
     setLoading(false);
   }
 
   // ---------------------------------------------------------------------------
-  // Card builders
+  // Item builders
   // ---------------------------------------------------------------------------
 
-  function poCard(po: any): KanbanCard {
-    const vendorName = po.vendor?.name ?? po.supplier_name_raw ?? '—';
+  function mkPO(po: any): WorkItem {
     return {
-      id: po.id,
-      type: 'po',
+      id: po.id, type: 'po',
       label: po.pss_po_no ?? po.description ?? 'Draft PO',
       projectName: po.project?.name ?? '—',
       projectId: po.project_id,
       amount: po.po_amount_incl_vat ?? 0,
-      updatedAt: po.updated_at,
-      daysWaiting: po._days,
-      aging: agingLevel(po._days),
+      daysWaiting: po._days, aging: agingLevel(po._days),
       rawPO: po as PurchaseOrder,
     };
   }
 
-  function invoiceCard(inv: any): KanbanCard {
+  function mkInv(inv: any): WorkItem {
     const po = inv.purchase_order;
-    const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
     return {
-      id: inv.id,
-      type: 'invoice',
+      id: inv.id, type: 'invoice',
       label: inv.vendor_invoice_no ?? `Invoice (${po?.pss_po_no ?? '—'})`,
       projectName: inv.project?.name ?? '—',
       projectId: inv.project_id,
       amount: inv.invoice_amount_incl_vat ?? 0,
-      updatedAt: inv.updated_at,
-      daysWaiting: inv._days,
-      aging: agingLevel(inv._days),
+      daysWaiting: inv._days, aging: agingLevel(inv._days),
       rawInvoice: inv as VendorInvoice,
     };
   }
 
-  function costingCard(c: any): KanbanCard {
+  function mkCosting(c: any): WorkItem {
     return {
-      id: c.id,
-      type: 'costing',
+      id: c.id, type: 'costing',
       label: `${c.stage === 'estimation' ? 'Estimation' : 'Budget'} Costing`,
       projectName: c.project?.name ?? '—',
       projectId: c.project?.id ?? '',
       amount: c.project?.contract_incl_vat ?? 0,
-      updatedAt: c.updated_at,
-      daysWaiting: c._days,
-      aging: agingLevel(c._days),
+      daysWaiting: c._days, aging: agingLevel(c._days),
     };
   }
 
-  function reportCard(r: any): KanbanCard {
+  function mkReport(r: any): WorkItem {
     return {
-      id: r.id,
-      type: 'progress_report',
+      id: r.id, type: 'progress_report',
       label: `Progress Report${r.vendor_invoice?.vendor_invoice_no ? ` · ${r.vendor_invoice.vendor_invoice_no}` : ''}`,
       projectName: r.project?.name ?? '—',
       projectId: r.project?.id ?? '',
       amount: r.vendor_invoice?.invoice_amount_incl_vat ?? 0,
-      updatedAt: r.updated_at,
-      daysWaiting: r._days,
-      aging: agingLevel(r._days),
+      daysWaiting: r._days, aging: agingLevel(r._days),
     };
   }
 
-  function voucherCard(v: any): KanbanCard {
+  function mkVoucher(v: any): WorkItem {
     return {
-      id: v.id,
-      type: 'voucher',
+      id: v.id, type: 'voucher',
       label: v.voucher_no,
       projectName: v.project?.name ?? '—',
       projectId: v.project?.id ?? '',
       amount: v.net_paid ?? 0,
-      updatedAt: v.updated_at,
-      daysWaiting: v._days,
-      aging: agingLevel(v._days),
+      daysWaiting: v._days, aging: agingLevel(v._days),
     };
   }
 
   // ---------------------------------------------------------------------------
-  // Build swimlanes (memoized, recalculated on filter change)
+  // Build desks
   // ---------------------------------------------------------------------------
 
-  const swimlanes: Swimlane[] = useMemo(() => {
-    const filterFn = (projectId: string) =>
-      !projectFilter || projectId === projectFilter;
+  const desks: DeskDef[] = useMemo(() => {
+    const f = (pid: string) => !projectFilter || pid === projectFilter;
+    const byAge = (a: WorkItem, b: WorkItem) => b.daysWaiting - a.daysWaiting;
 
-    const pos = allPos.filter(p => filterFn(p.project_id));
-    const invs = allInvoices.filter(i => filterFn(i.project_id));
-    const costings = allCostings.filter(c => filterFn(c.project?.id ?? ''));
-    const reports = allReports.filter(r => filterFn(r.project?.id ?? ''));
-    const vouchers = allVouchers.filter(v => filterFn(v.project?.id ?? ''));
+    const pos     = allPos.filter(p => f(p.project_id));
+    const invs    = allInvoices.filter(i => f(i.project_id));
+    const costs   = allCostings.filter(c => f(c.project?.id ?? ''));
+    const reports = allReports.filter(r => f(r.project?.id ?? ''));
+    const vouchers = allVouchers.filter(v => f(v.project?.id ?? ''));
 
-    const sortByAge = (a: KanbanCard, b: KanbanCard) => b.daysWaiting - a.daysWaiting;
+    const deskMap: Record<string, WorkItem[]> = {
+      procurement: [
+        ...pos.filter(p => ['draft', 'draft_revision'].includes(p.status)).map(mkPO),
+      ].sort(byAge),
 
-    // ── Swimlane 1: Project Budgeting Pipeline ──
-    const budgetingCols: DeskColumn[] = [
-      {
-        key: 'cc_costing',
-        title: 'Cost Controller',
-        roleOwner: 'cost_controller',
-        borderColor: 'bg-gray-400',
-        headerBg: 'bg-white',
-        headerText: 'text-gray-700',
-        cards: costings
-          .filter(c => ['draft', 'cm_rejected', 'evp_rejected'].includes(c.status))
-          .map(costingCard)
-          .sort(sortByAge),
-      },
-      {
-        key: 'cm_costing',
-        title: 'Construction Manager',
-        roleOwner: 'construction_manager',
-        borderColor: 'bg-blue-400',
-        headerBg: 'bg-blue-50/50',
-        headerText: 'text-blue-700',
-        cards: costings
-          .filter(c => c.status === 'submitted')
-          .map(costingCard)
-          .sort(sortByAge),
-      },
-      {
-        key: 'evp_costing',
-        title: 'EVP',
-        roleOwner: 'evp',
-        borderColor: 'bg-[#1D9E75]',
-        headerBg: 'bg-[#1D9E75]/5',
-        headerText: 'text-[#1D9E75]',
-        cards: costings
-          .filter(c => c.status === 'cm_approved')
-          .map(costingCard)
-          .sort(sortByAge),
-      },
-    ];
+      cost_controller: [
+        ...pos.filter(p => p.status === 'pending_cc').map(mkPO),
+        ...invs.filter(i => i.status === 'rejected').map(mkInv),
+        ...costs.filter(c => ['draft', 'cm_rejected', 'evp_rejected'].includes(c.status)).map(mkCosting),
+      ].sort(byAge),
 
-    // ── Swimlane 2: Execution & Payments Pipeline ──
-    const executionCols: DeskColumn[] = [
-      {
-        key: 'cc_exec',
-        title: 'Procurement / CC',
-        roleOwner: 'cost_controller',
-        borderColor: 'bg-gray-400',
-        headerBg: 'bg-white',
-        headerText: 'text-gray-700',
-        cards: [
-          ...pos.filter(p => ['draft', 'draft_revision'].includes(p.status)).map(poCard),
-          ...invs.filter(i => i.status === 'rejected').map(invoiceCard),
-        ].sort(sortByAge),
-      },
-      {
-        key: 'cm_exec',
-        title: 'Construction Manager',
-        roleOwner: 'construction_manager',
-        borderColor: 'bg-blue-400',
-        headerBg: 'bg-blue-50/50',
-        headerText: 'text-blue-700',
-        cards: [
-          ...pos.filter(p => p.status === 'pending_cm').map(poCard),
-          ...invs.filter(i => i.status === 'received').map(invoiceCard),
-          ...reports.filter(r => r.status === 'submitted').map(reportCard),
-        ].sort(sortByAge),
-      },
-      {
-        key: 'evp_exec',
-        title: 'EVP',
-        roleOwner: 'evp',
-        borderColor: 'bg-[#1D9E75]',
-        headerBg: 'bg-[#1D9E75]/5',
-        headerText: 'text-[#1D9E75]',
-        cards: [
-          ...pos.filter(p => ['pending_evp', 'pending_revision_approval'].includes(p.status)).map(poCard),
-          ...invs.filter(i => i.status === 'approved_cm').map(invoiceCard),
-          ...reports.filter(r => r.status === 'cm_approved').map(reportCard),
-        ].sort(sortByAge),
-      },
-      {
-        key: 'ceo_exec',
-        title: 'CEO',
-        roleOwner: 'ceo',
-        borderColor: 'bg-[#2563EB]',
-        headerBg: 'bg-blue-50/70',
-        headerText: 'text-blue-800',
-        cards: [
-          ...pos.filter(p => p.status === 'pending_ceo').map(poCard),
-          ...invs.filter(i => i.status === 'approved_evp').map(invoiceCard),
-        ].sort(sortByAge),
-      },
-      {
-        key: 'finance_exec',
-        title: 'Finance / Accounts',
-        roleOwner: 'accounts_supervisor',
-        borderColor: 'bg-[#EF9F27]',
-        headerBg: 'bg-[#EF9F27]/5',
-        headerText: 'text-[#EF9F27]',
-        cards: [
-          ...invs.filter(i => i.status === 'released').map(invoiceCard),
-          ...vouchers.map(voucherCard),
-        ].sort(sortByAge),
-      },
-    ];
+      construction_manager: [
+        ...pos.filter(p => p.status === 'pending_cm').map(mkPO),
+        ...invs.filter(i => i.status === 'received').map(mkInv),
+        ...reports.filter(r => r.status === 'submitted').map(mkReport),
+        ...costs.filter(c => c.status === 'submitted').map(mkCosting),
+      ].sort(byAge),
 
-    return [
-      {
-        title: 'Project Budgeting Pipeline',
-        subtitle: 'Estimation & budget costings flowing from Cost Controller → CM → EVP',
-        columns: budgetingCols,
-      },
-      {
-        title: 'Execution & Payments Pipeline',
-        subtitle: 'POs, vendor invoices, and payment vouchers from procurement to finance',
-        columns: executionCols,
-      },
-    ];
+      evp: [
+        ...pos.filter(p => ['pending_evp', 'pending_revision_approval'].includes(p.status)).map(mkPO),
+        ...invs.filter(i => i.status === 'approved_cm').map(mkInv),
+        ...reports.filter(r => r.status === 'cm_approved').map(mkReport),
+        ...costs.filter(c => c.status === 'cm_approved').map(mkCosting),
+      ].sort(byAge),
+
+      ceo: [
+        ...pos.filter(p => p.status === 'pending_ceo').map(mkPO),
+        ...invs.filter(i => i.status === 'approved_evp').map(mkInv),
+      ].sort(byAge),
+
+      accounts_supervisor: [
+        ...invs.filter(i => i.status === 'released').map(mkInv),
+      ].sort(byAge),
+
+      accounts_manager: [
+        ...vouchers.filter(v => v.status === 'pending_manager').map(mkVoucher),
+      ].sort(byAge),
+
+      banking_finance_officer: [
+        ...vouchers.filter(v => v.status === 'approved').map(mkVoucher),
+      ].sort(byAge),
+    };
+
+    return ROLE_ORDER.map(role => {
+      const s = DESK_STYLE[role] ?? DESK_STYLE['cost_controller'];
+      return {
+        role,
+        label: ROLE_DISPLAY[role] ?? role,
+        accent: s.accent,
+        headerText: s.headerText,
+        cardBg: s.cardBg,
+        items: deskMap[role] ?? [],
+      };
+    });
   }, [allPos, allInvoices, allCostings, allReports, allVouchers, projectFilter]);
 
   // ---------------------------------------------------------------------------
-  // Card click handler
+  // Scroll to desk from flow strip
   // ---------------------------------------------------------------------------
 
-  async function handleCardClick(card: KanbanCard) {
-    if (card.type === 'invoice' && card.rawInvoice) {
-      setInvoiceModal(card.rawInvoice);
+  function scrollToDesk(role: string) {
+    deskRefs.current[role]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Click handlers
+  // ---------------------------------------------------------------------------
+
+  async function handleItemClick(item: WorkItem) {
+    if (item.type === 'invoice' && item.rawInvoice) {
+      setInvoiceModal(item.rawInvoice);
       return;
     }
-
-    if (card.type === 'po') {
-      // Fetch full PO + supporting data for modal
+    if (item.type === 'po') {
       const [poRes, projectsRes, vendorsRes] = await Promise.all([
-        supabase
-          .from('purchase_orders')
-          .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects!project_id(*)')
-          .eq('id', card.id)
-          .maybeSingle(),
+        supabase.from('purchase_orders').select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects!project_id(*)').eq('id', item.id).maybeSingle(),
         supabase.from('projects').select('*'),
         supabase.from('entities').select('*').eq('type', 'vendor'),
       ]);
@@ -602,77 +546,66 @@ export default function WorkflowEfficiency() {
       setPoVendors((vendorsRes.data ?? []) as Entity[]);
       return;
     }
-
-    if (card.type === 'costing' || card.type === 'progress_report') {
-      navigate(`/projects/${card.projectId}`);
+    if (item.type === 'costing' || item.type === 'progress_report') {
+      navigate(`/projects/${item.projectId}`);
       return;
     }
-
-    if (card.type === 'voucher') {
+    if (item.type === 'voucher') {
       navigate('/payment-queue');
-      return;
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Invoice modal approve/reject
-  // ---------------------------------------------------------------------------
 
   async function handleInvoiceApprove() {
     if (!invoiceModal || !user) return;
     setApprovingInvoice(true);
     const inv = invoiceModal;
-    const projectName = (inv as any).project?.name ?? '';
-    const invoiceNo = inv.vendor_invoice_no ?? '';
-    const projectId = inv.project_id;
+    const pName = (inv as any).project?.name ?? '';
+    const iNo = inv.vendor_invoice_no ?? '';
+    const pid = inv.project_id;
 
     let err: string | null = null;
     if (profile?.role === 'construction_manager') {
-      const res = await approveInvoiceCM(inv.id, user.id, projectName, invoiceNo, projectId);
+      const res = await approveInvoiceCM(inv.id, user.id, pName, iNo, pid);
       err = res.error;
     } else if (profile?.role === 'evp') {
-      const res = await approveInvoiceEVP(inv.id, user.id, inv.invoice_amount_incl_vat, projectName, invoiceNo, projectId);
+      const res = await approveInvoiceEVP(inv.id, user.id, inv.invoice_amount_incl_vat, pName, iNo, pid);
       err = res.error;
     } else if (profile?.role === 'ceo') {
-      const res = await approveInvoiceCEO(inv.id, user.id, projectName, invoiceNo, inv.invoice_amount_incl_vat, projectId);
+      const res = await approveInvoiceCEO(inv.id, user.id, pName, iNo, inv.invoice_amount_incl_vat, pid);
       err = res.error;
     }
-
     setApprovingInvoice(false);
-    if (!err) {
-      setInvoiceModal(null);
-      loadData();
-    }
+    if (!err) { setInvoiceModal(null); loadData(); }
   }
 
   async function handleInvoiceReject(comment: string) {
     if (!invoiceModal || !user) return;
     setApprovingInvoice(true);
     const inv = invoiceModal;
-    const projectName = (inv as any).project?.name ?? '';
-    const invoiceNo = inv.vendor_invoice_no ?? '';
-    const projectId = inv.project_id;
-
+    const pName = (inv as any).project?.name ?? '';
+    const iNo = inv.vendor_invoice_no ?? '';
+    const pid = inv.project_id;
     if (profile?.role === 'construction_manager') {
-      await rejectInvoiceCM(inv.id, user.id, comment, projectName, invoiceNo, projectId);
+      await rejectInvoiceCM(inv.id, user.id, comment, pName, iNo, pid);
     } else {
-      await rejectInvoice(inv.id, user.id, comment, projectName, invoiceNo, projectId);
+      await rejectInvoice(inv.id, user.id, comment, pName, iNo, pid);
     }
-
     setApprovingInvoice(false);
     setInvoiceModal(null);
     loadData();
   }
 
   // ---------------------------------------------------------------------------
-  // Derived stats for top bar
+  // Stats
   // ---------------------------------------------------------------------------
 
-  const totalItems = swimlanes.reduce((s, l) => s + l.columns.reduce((cs, c) => cs + c.cards.length, 0), 0);
-  const overdueItems = swimlanes.reduce(
-    (s, l) => s + l.columns.reduce((cs, c) => cs + c.cards.filter(card => card.aging === 'red').length, 0),
-    0,
-  );
+  const totalItems   = desks.reduce((s, d) => s + d.items.length, 0);
+  const overdueItems = desks.reduce((s, d) => s + d.items.filter(i => i.aging === 'red').length, 0);
+  const totalBlocked = desks.reduce((s, d) => s + d.items.reduce((ds, i) => ds + i.amount, 0), 0);
+
+  // Split desks: user's desk featured first, rest in canonical order
+  const myDesk    = desks.find(d => d.role === profile?.role);
+  const otherDesks = desks.filter(d => d.role !== profile?.role);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -687,22 +620,23 @@ export default function WorkflowEfficiency() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
-      {/* Page header */}
+      {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Workflow Efficiency</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Live value stream map · {totalItems} items in motion
+            {totalItems} items in motion
+            {totalBlocked > 0 && (
+              <span className="ml-2 text-gray-600 font-medium">· {formatTHBCompact(totalBlocked)} blocked</span>
+            )}
             {overdueItems > 0 && (
               <span className="ml-2 text-[#E24B4A] font-semibold">· {overdueItems} overdue</span>
             )}
           </p>
         </div>
-
         <div className="flex items-center gap-3">
-          {/* Project filter */}
           <div className="relative">
             <Filter size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <select
@@ -716,8 +650,6 @@ export default function WorkflowEfficiency() {
               ))}
             </select>
           </div>
-
-          {/* Refresh */}
           <button
             onClick={loadData}
             className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 transition-colors"
@@ -728,39 +660,55 @@ export default function WorkflowEfficiency() {
         </div>
       </div>
 
+      {/* Flow strip */}
+      <FlowStrip desksInOrder={desks} myRole={profile?.role} onPillClick={scrollToDesk} />
+
       {/* Legend */}
-      <div className="flex items-center gap-5 text-[11px] text-gray-500">
+      <div className="flex items-center gap-5 text-[11px] text-gray-400">
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-gray-200 border border-gray-300 inline-block" />
+          <span className="w-2 h-2 rounded-full bg-gray-200 border border-gray-300 inline-block" />
           0–3 days
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#EF9F27]/40 border border-[#EF9F27]/60 inline-block" />
+          <span className="w-2 h-2 rounded-full bg-[#EF9F27]/40 border border-[#EF9F27]/60 inline-block" />
           4–7 days
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#E24B4A]/40 border border-[#E24B4A]/60 inline-block" />
-          &gt;7 days overdue
+          <span className="w-2 h-2 rounded-full bg-[#E24B4A]/40 border border-[#E24B4A]/60 inline-block" />
+          &gt;7 days
         </span>
         {projectFilter && (
-          <button
-            onClick={() => setProjectFilter('')}
-            className="ml-auto text-[#1D9E75] font-medium hover:underline"
-          >
+          <button onClick={() => setProjectFilter('')} className="ml-auto text-[#1D9E75] font-medium hover:underline">
             Clear filter
           </button>
         )}
       </div>
 
-      {/* Swimlanes */}
-      {swimlanes.map(lane => (
-        <SwimlaneView
-          key={lane.title}
-          lane={lane}
-          myRole={profile?.role}
-          onCardClick={handleCardClick}
-        />
-      ))}
+      {/* Desk grid */}
+      <div className="space-y-4">
+        {/* Current user's desk — featured row */}
+        {myDesk && (
+          <div
+            ref={el => { deskRefs.current[myDesk.role] = el; }}
+            className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+          >
+            <DeskCard desk={myDesk} isMyDesk={true} onItemClick={handleItemClick} />
+          </div>
+        )}
+
+        {/* All other desks — 4-col grid on large screens */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {otherDesks.map(desk => (
+            <DeskCard
+              key={desk.role}
+              desk={desk}
+              isMyDesk={false}
+              onItemClick={handleItemClick}
+              cardRef={el => { deskRefs.current[desk.role] = el; }}
+            />
+          ))}
+        </div>
+      </div>
 
       {/* Invoice Modal */}
       {invoiceModal && (
