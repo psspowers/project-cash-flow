@@ -1130,6 +1130,7 @@ export default function PaymentQueue() {
       {/* PO Drill-Down Modal */}
       {selectedPO && (
         <PODetailModal
+          key={selectedPO.id}
           po={selectedPO}
           projects={poProjects}
           vendors={poVendors}

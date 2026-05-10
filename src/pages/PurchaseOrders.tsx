@@ -205,6 +205,7 @@ export default function PurchaseOrders() {
 
       {selectedPO && (
         <PODetailModal
+          key={selectedPO.id}
           po={selectedPO}
           projects={projects}
           vendors={vendors}

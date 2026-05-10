@@ -645,6 +645,7 @@ export default function OrdersTab() {
 
       {detailPO && project && (
         <PODetailModal
+          key={detailPO.id}
           po={detailPO}
           projects={[project]}
           vendors={vendors}

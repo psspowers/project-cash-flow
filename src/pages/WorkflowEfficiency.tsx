@@ -765,6 +765,7 @@ export default function WorkflowEfficiency() {
       {/* PO Modal */}
       {poModal && (
         <PODetailModal
+          key={poModal.id}
           po={poModal}
           projects={poProjects}
           vendors={poVendors}
