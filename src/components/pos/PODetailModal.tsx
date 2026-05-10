@@ -10,6 +10,7 @@ import POCreationWizard from './POCreationWizard';
 import AmendmentChoiceModal from './AmendmentChoiceModal';
 import NonCommercialEditModal from './NonCommercialEditModal';
 import { logPOAction } from '../../services/workflow';
+import CommentThread from '../ui/CommentThread';
 
 interface Props {
   po: PurchaseOrder;
@@ -224,10 +225,10 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
-        <div className="bg-white rounded-xl w-full max-w-2xl border border-gray-200 my-4">
+        <div className="bg-white rounded-xl w-full max-w-5xl border border-gray-200 my-4 flex flex-col" style={{ maxHeight: 'calc(100vh - 2rem)' }}>
 
           {/* Header */}
-          <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 shrink-0">
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h2 className="text-base font-semibold text-gray-900">
@@ -277,256 +278,266 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
             </div>
           ) : (
-            <div className="p-6 space-y-6">
+            /* 2-col grid: details left, chat right */
+            <div className="flex flex-col lg:flex-row flex-1 min-h-0 overflow-hidden">
 
-              {/* Active revision warning */}
-              {isIssued && activeRevisionId && (
-                <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
-                  <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
-                  <p className="text-xs text-[#92650a]">
-                    A commercial amendment is currently in progress. Commercial edits are locked until the active revision is resolved (approved, voided, or cancelled).
-                  </p>
-                </div>
-              )}
+              {/* ── LEFT: PO details (scrollable) ─────────────────────────── */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 lg:border-r lg:border-gray-100">
 
-              {/* Warning for pending_cc + can edit */}
-              {canEdit && po.status === 'pending_cc' && (
-                <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
-                  <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
-                  <p className="text-xs text-[#92650a]">
-                    This PO is awaiting approval. You may still edit it — doing so will return it to Draft and require re-submission.
-                  </p>
-                </div>
-              )}
-
-              {/* Revision draft notice */}
-              {po.status === 'draft_revision' && po.parent_po_id && (
-                <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <GitBranch size={14} className="text-blue-500 mt-0.5 shrink-0" />
-                  <p className="text-xs text-blue-700">
-                    This is a commercial amendment draft. Edit and resubmit through the approval chain.
-                  </p>
-                </div>
-              )}
-
-              {/* Rejection notice */}
-              {po.rejection_reason && (
-                <div className="flex items-start gap-2 bg-[#E24B4A]/8 border border-[#E24B4A]/20 rounded-lg p-3">
-                  <XCircle size={14} className="text-[#E24B4A] mt-0.5 shrink-0" />
-                  <div>
-                    <p className="text-xs font-semibold text-[#E24B4A] mb-0.5">Rejection reason</p>
-                    <p className="text-xs text-gray-700">{po.rejection_reason}</p>
+                {/* Active revision warning */}
+                {isIssued && activeRevisionId && (
+                  <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
+                    <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
+                    <p className="text-xs text-[#92650a]">
+                      A commercial amendment is currently in progress. Commercial edits are locked until the active revision is resolved (approved, voided, or cancelled).
+                    </p>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Amendment error */}
-              {amendError && (
-                <div className="flex items-start gap-2 bg-[#E24B4A]/8 border border-[#E24B4A]/20 rounded-lg p-3">
-                  <XCircle size={14} className="text-[#E24B4A] mt-0.5 shrink-0" />
-                  <p className="text-xs text-[#E24B4A]">{amendError}</p>
-                </div>
-              )}
+                {/* Warning for pending_cc + can edit */}
+                {canEdit && po.status === 'pending_cc' && (
+                  <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
+                    <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
+                    <p className="text-xs text-[#92650a]">
+                      This PO is awaiting approval. You may still edit it — doing so will return it to Draft and require re-submission.
+                    </p>
+                  </div>
+                )}
 
-              {/* Core details — two columns */}
-              <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
-                <div>
-                  <p className="text-xs font-medium text-gray-400 mb-0.5">Supplier</p>
-                  <p className="text-gray-800">{supplierName}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-400 mb-0.5">Cost Category</p>
-                  <p className="text-gray-800">{COST_CATEGORY_LABELS[po.cost_category] ?? po.cost_category}</p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-xs font-medium text-gray-400 mb-0.5">Description</p>
-                  <p className="text-gray-800">{po.description || '—'}</p>
-                </div>
-                {po.notes && (
+                {/* Revision draft notice */}
+                {po.status === 'draft_revision' && po.parent_po_id && (
+                  <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <GitBranch size={14} className="text-blue-500 mt-0.5 shrink-0" />
+                    <p className="text-xs text-blue-700">
+                      This is a commercial amendment draft. Edit and resubmit through the approval chain.
+                    </p>
+                  </div>
+                )}
+
+                {/* Rejection notice */}
+                {po.rejection_reason && (
+                  <div className="flex items-start gap-2 bg-[#E24B4A]/8 border border-[#E24B4A]/20 rounded-lg p-3">
+                    <XCircle size={14} className="text-[#E24B4A] mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-[#E24B4A] mb-0.5">Rejection reason</p>
+                      <p className="text-xs text-gray-700">{po.rejection_reason}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Amendment error */}
+                {amendError && (
+                  <div className="flex items-start gap-2 bg-[#E24B4A]/8 border border-[#E24B4A]/20 rounded-lg p-3">
+                    <XCircle size={14} className="text-[#E24B4A] mt-0.5 shrink-0" />
+                    <p className="text-xs text-[#E24B4A]">{amendError}</p>
+                  </div>
+                )}
+
+                {/* Core details */}
+                <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+                  <div>
+                    <p className="text-xs font-medium text-gray-400 mb-0.5">Supplier</p>
+                    <p className="text-gray-800">{supplierName}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-400 mb-0.5">Cost Category</p>
+                    <p className="text-gray-800">{COST_CATEGORY_LABELS[po.cost_category] ?? po.cost_category}</p>
+                  </div>
                   <div className="col-span-2">
-                    <p className="text-xs font-medium text-gray-400 mb-0.5">Notes</p>
-                    <p className="text-gray-700 text-sm">{po.notes}</p>
+                    <p className="text-xs font-medium text-gray-400 mb-0.5">Description</p>
+                    <p className="text-gray-800">{po.description || '—'}</p>
                   </div>
-                )}
-                <div>
-                  <p className="text-xs font-medium text-gray-400 mb-0.5">PO Type</p>
-                  <p className="text-gray-800">{po.has_supplier_milestones ? 'Milestone PO' : 'Simple PO'}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-gray-400 mb-0.5">WHT 3%</p>
-                  <p className="text-gray-800">{po.wht_applies ? 'Applies' : 'Not applicable'}</p>
-                </div>
-              </div>
-
-              {/* Financials */}
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 space-y-2">
-                <div className="flex justify-between text-sm text-gray-600">
-                  <span>Contract excl. VAT</span>
-                  <span className="font-medium text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</span>
-                </div>
-                <div className="flex justify-between text-sm text-gray-500">
-                  <span>VAT 7%</span>
-                  <span>{fmtTHB(po.vat_7pct)}</span>
-                </div>
-                {po.wht_applies && (
-                  <div className="flex justify-between text-sm text-[#EF9F27]">
-                    <span>WHT 3% (withheld)</span>
-                    <span>{fmtTHB(po.wht_3pct)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between font-bold text-gray-900 pt-2 border-t border-gray-200 text-base">
-                  <span>Total incl. VAT</span>
-                  <span>{fmtTHB(po.po_amount_incl_vat)}</span>
-                </div>
-                {po.wht_applies && (
-                  <div className="flex justify-between text-xs text-gray-400 border-t border-gray-100 pt-1">
-                    <span>Net payable after WHT</span>
-                    <span>{fmtTHB(po.po_amount_incl_vat - po.wht_3pct)}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Milestones */}
-              {po.has_supplier_milestones && milestones.length > 0 && (() => {
-                const paidCount = milestones.filter(m => m.status === 'paid').length;
-                const invoicedCount = milestones.filter(m => m.status === 'invoiced').length;
-                const paidAmt = milestones.filter(m => m.status === 'paid').reduce((s, m) => s + m.amount_due, 0);
-                const totalAmt = milestones.reduce((s, m) => s + m.amount_due, 0);
-                const paidPct = totalAmt > 0 ? (paidAmt / totalAmt) * 100 : 0;
-                return (
+                  {po.notes && (
+                    <div className="col-span-2">
+                      <p className="text-xs font-medium text-gray-400 mb-0.5">Notes</p>
+                      <p className="text-gray-700 text-sm">{po.notes}</p>
+                    </div>
+                  )}
                   <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold text-gray-600">{milestones.length} Milestones</p>
-                      <span className="text-xs text-gray-400">
-                        {paidCount} paid · {invoicedCount} invoiced · {milestones.length - paidCount - invoicedCount} pending
-                      </span>
+                    <p className="text-xs font-medium text-gray-400 mb-0.5">PO Type</p>
+                    <p className="text-gray-800">{po.has_supplier_milestones ? 'Milestone PO' : 'Simple PO'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-400 mb-0.5">WHT 3%</p>
+                    <p className="text-gray-800">{po.wht_applies ? 'Applies' : 'Not applicable'}</p>
+                  </div>
+                </div>
+
+                {/* Financials */}
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 space-y-2">
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Contract excl. VAT</span>
+                    <span className="font-medium text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-gray-500">
+                    <span>VAT 7%</span>
+                    <span>{fmtTHB(po.vat_7pct)}</span>
+                  </div>
+                  {po.wht_applies && (
+                    <div className="flex justify-between text-sm text-[#EF9F27]">
+                      <span>WHT 3% (withheld)</span>
+                      <span>{fmtTHB(po.wht_3pct)}</span>
                     </div>
-                    {/* Progress bar */}
-                    <div className="mb-3 space-y-1">
-                      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className="h-full bg-[#1D9E75] rounded-full transition-all duration-500"
-                          style={{ width: `${paidPct}%` }}
-                        />
+                  )}
+                  <div className="flex justify-between font-bold text-gray-900 pt-2 border-t border-gray-200 text-base">
+                    <span>Total incl. VAT</span>
+                    <span>{fmtTHB(po.po_amount_incl_vat)}</span>
+                  </div>
+                  {po.wht_applies && (
+                    <div className="flex justify-between text-xs text-gray-400 border-t border-gray-100 pt-1">
+                      <span>Net payable after WHT</span>
+                      <span>{fmtTHB(po.po_amount_incl_vat - po.wht_3pct)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Milestones */}
+                {po.has_supplier_milestones && milestones.length > 0 && (() => {
+                  const paidCount = milestones.filter(m => m.status === 'paid').length;
+                  const invoicedCount = milestones.filter(m => m.status === 'invoiced').length;
+                  const paidAmt = milestones.filter(m => m.status === 'paid').reduce((s, m) => s + m.amount_due, 0);
+                  const totalAmt = milestones.reduce((s, m) => s + m.amount_due, 0);
+                  const paidPct = totalAmt > 0 ? (paidAmt / totalAmt) * 100 : 0;
+                  return (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-gray-600">{milestones.length} Milestones</p>
+                        <span className="text-xs text-gray-400">
+                          {paidCount} paid · {invoicedCount} invoiced · {milestones.length - paidCount - invoicedCount} pending
+                        </span>
                       </div>
-                      <div className="flex justify-between text-xs text-gray-400">
-                        <span className="text-[#1D9E75] font-medium">{fmtTHB(paidAmt)} paid</span>
-                        <span>{fmtTHB(totalAmt - paidAmt)} remaining</span>
+                      <div className="mb-3 space-y-1">
+                        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                          <div
+                            className="h-full bg-[#1D9E75] rounded-full transition-all duration-500"
+                            style={{ width: `${paidPct}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs text-gray-400">
+                          <span className="text-[#1D9E75] font-medium">{fmtTHB(paidAmt)} paid</span>
+                          <span>{fmtTHB(totalAmt - paidAmt)} remaining</span>
+                        </div>
+                      </div>
+                      <div className="border border-gray-100 rounded-lg overflow-hidden">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 border-b border-gray-100">
+                              <th className="text-left px-3 py-2 font-medium text-gray-500">#</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-500">Description</th>
+                              <th className="text-right px-3 py-2 font-medium text-gray-500">%</th>
+                              <th className="text-right px-3 py-2 font-medium text-gray-500">Amount</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-500">Planned</th>
+                              <th className="text-left px-3 py-2 font-medium text-gray-500">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {milestones.map(m => (
+                              <tr
+                                key={m.id}
+                                className={`border-b border-gray-50 ${m.status === 'paid' ? 'bg-[#1D9E75]/[0.03]' : ''}`}
+                              >
+                                <td className="px-3 py-2.5">
+                                  <div className="flex items-center gap-1.5">
+                                    {m.status === 'paid'
+                                      ? <CheckCircle size={12} className="text-[#1D9E75] shrink-0" />
+                                      : <span className="w-3 h-3 rounded-full border-2 border-gray-200 shrink-0 inline-block" />
+                                    }
+                                    <span className="font-semibold text-gray-700">MS{m.milestone_number}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2.5 text-gray-600">{m.notes ?? '—'}</td>
+                                <td className="px-3 py-2.5 text-right text-gray-700">{m.milestone_pct != null && m.milestone_pct > 0 ? `${(m.milestone_pct * 100).toFixed(0)}%` : '—'}</td>
+                                <td className="px-3 py-2.5 text-right font-medium text-gray-800 tabular-nums">{fmtTHB(m.amount_due)}</td>
+                                <td className="px-3 py-2.5 text-gray-500">{formatDate(m.planned_payment_date) || '—'}</td>
+                                <td className="px-3 py-2.5">
+                                  <Badge
+                                    label={m.status}
+                                    variant={m.status === 'paid' ? 'green' : m.status === 'invoiced' ? 'amber' : 'gray'}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-gray-100 bg-gray-50">
+                              <td colSpan={3} className="px-3 py-2 text-xs font-semibold text-gray-600">Total</td>
+                              <td className="px-3 py-2 text-right text-xs font-bold text-gray-900 tabular-nums">{fmtTHB(totalAmt)}</td>
+                              <td colSpan={2} />
+                            </tr>
+                          </tfoot>
+                        </table>
                       </div>
                     </div>
+                  );
+                })()}
+
+                {/* Simple payment schedule */}
+                {!po.has_supplier_milestones && payments.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-600 mb-2">Payment Schedule</p>
                     <div className="border border-gray-100 rounded-lg overflow-hidden">
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="bg-gray-50 border-b border-gray-100">
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">#</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Description</th>
-                            <th className="text-right px-3 py-2 font-medium text-gray-500">%</th>
-                            <th className="text-right px-3 py-2 font-medium text-gray-500">Amount</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Planned</th>
-                            <th className="text-left px-3 py-2 font-medium text-gray-500">Status</th>
+                            <th className="text-left px-3 py-2 font-medium text-gray-500">Payment Month</th>
+                            <th className="text-right px-3 py-2 font-medium text-gray-500">Amount (incl VAT)</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {milestones.map(m => (
-                            <tr
-                              key={m.id}
-                              className={`border-b border-gray-50 ${m.status === 'paid' ? 'bg-[#1D9E75]/[0.03]' : ''}`}
-                            >
-                              <td className="px-3 py-2.5">
-                                <div className="flex items-center gap-1.5">
-                                  {m.status === 'paid'
-                                    ? <CheckCircle size={12} className="text-[#1D9E75] shrink-0" />
-                                    : <span className="w-3 h-3 rounded-full border-2 border-gray-200 shrink-0 inline-block" />
-                                  }
-                                  <span className="font-semibold text-gray-700">MS{m.milestone_number}</span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-2.5 text-gray-600">{m.notes ?? '—'}</td>
-                              <td className="px-3 py-2.5 text-right text-gray-700">{m.milestone_pct != null && m.milestone_pct > 0 ? `${(m.milestone_pct * 100).toFixed(0)}%` : '—'}</td>
-                              <td className="px-3 py-2.5 text-right font-medium text-gray-800 tabular-nums">{fmtTHB(m.amount_due)}</td>
-                              <td className="px-3 py-2.5 text-gray-500">{formatDate(m.planned_payment_date) || '—'}</td>
-                              <td className="px-3 py-2.5">
-                                <Badge
-                                  label={m.status}
-                                  variant={m.status === 'paid' ? 'green' : m.status === 'invoiced' ? 'amber' : 'gray'}
-                                />
-                              </td>
+                          {payments.map(p => (
+                            <tr key={p.id} className="border-b border-gray-50">
+                              <td className="px-3 py-2 text-gray-600">{p.payment_month ? p.payment_month.substring(0, 7) : '—'}</td>
+                              <td className="px-3 py-2 text-right font-medium text-gray-800">{fmtTHB(p.amount)}</td>
                             </tr>
                           ))}
                         </tbody>
-                        <tfoot>
-                          <tr className="border-t-2 border-gray-100 bg-gray-50">
-                            <td colSpan={3} className="px-3 py-2 text-xs font-semibold text-gray-600">Total</td>
-                            <td className="px-3 py-2 text-right text-xs font-bold text-gray-900 tabular-nums">{fmtTHB(totalAmt)}</td>
-                            <td colSpan={2} />
-                          </tr>
-                        </tfoot>
                       </table>
                     </div>
                   </div>
-                );
-              })()}
+                )}
 
-              {/* Simple payment schedule */}
-              {!po.has_supplier_milestones && payments.length > 0 && (
+                {/* Audit trail */}
                 <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-2">Payment Schedule</p>
-                  <div className="border border-gray-100 rounded-lg overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-gray-50 border-b border-gray-100">
-                          <th className="text-left px-3 py-2 font-medium text-gray-500">Payment Month</th>
-                          <th className="text-right px-3 py-2 font-medium text-gray-500">Amount (incl VAT)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {payments.map(p => (
-                          <tr key={p.id} className="border-b border-gray-50">
-                            <td className="px-3 py-2 text-gray-600">{p.payment_month ? p.payment_month.substring(0, 7) : '—'}</td>
-                            <td className="px-3 py-2 text-right font-medium text-gray-800">{fmtTHB(p.amount)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <p className="text-xs font-semibold text-gray-600 mb-3">Audit Trail</p>
+                  <div className="space-y-2">
+                    <AuditRow
+                      icon={<Clock size={13} className="text-gray-400" />}
+                      label="Created"
+                      name={null}
+                      date={po.created_at}
+                    />
+                    {po.submitted_at && (
+                      <AuditRow
+                        icon={<Clock size={13} className="text-[#EF9F27]" />}
+                        label="Submitted for approval"
+                        name={submittedBy?.full_name ?? null}
+                        date={po.submitted_at}
+                      />
+                    )}
+                    {po.approved_at && (
+                      <AuditRow
+                        icon={<CheckCircle size={13} className="text-[#1D9E75]" />}
+                        label="Approved"
+                        name={approvedBy?.full_name ?? null}
+                        date={po.approved_at}
+                      />
+                    )}
+                    {po.rejected_at && (
+                      <AuditRow
+                        icon={<XCircle size={13} className="text-[#E24B4A]" />}
+                        label="Rejected"
+                        name={rejectedBy?.full_name ?? null}
+                        date={po.rejected_at}
+                      />
+                    )}
                   </div>
                 </div>
-              )}
 
-              {/* Audit trail */}
-              <div>
-                <p className="text-xs font-semibold text-gray-600 mb-3">Audit Trail</p>
-                <div className="space-y-2">
-                  <AuditRow
-                    icon={<Clock size={13} className="text-gray-400" />}
-                    label="Created"
-                    name={null}
-                    date={po.created_at}
-                  />
-                  {po.submitted_at && (
-                    <AuditRow
-                      icon={<Clock size={13} className="text-[#EF9F27]" />}
-                      label="Submitted for approval"
-                      name={submittedBy?.full_name ?? null}
-                      date={po.submitted_at}
-                    />
-                  )}
-                  {po.approved_at && (
-                    <AuditRow
-                      icon={<CheckCircle size={13} className="text-[#1D9E75]" />}
-                      label="Approved"
-                      name={approvedBy?.full_name ?? null}
-                      date={po.approved_at}
-                    />
-                  )}
-                  {po.rejected_at && (
-                    <AuditRow
-                      icon={<XCircle size={13} className="text-[#E24B4A]" />}
-                      label="Rejected"
-                      name={rejectedBy?.full_name ?? null}
-                      date={po.rejected_at}
-                    />
-                  )}
-                </div>
+              </div>
+
+              {/* ── RIGHT: Chat panel ──────────────────────────────────────── */}
+              <div className="w-full lg:w-[340px] shrink-0 flex flex-col border-t lg:border-t-0 lg:border-l border-gray-100 min-h-[420px] lg:min-h-0">
+                <CommentThread entityType="purchase_order" entityId={po.id} />
               </div>
 
             </div>

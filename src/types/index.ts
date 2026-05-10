@@ -458,6 +458,19 @@ export interface TreasuryAdjustment {
   created_at?: string;
 }
 
+export interface EntityComment {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+  user?: {
+    full_name: string;
+    avatar_initials: string;
+  };
+}
+
 export interface Notification {
   id: string;
   user_id: string;
