@@ -1,23 +1,30 @@
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useState, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import ErrorBoundary from '../ui/ErrorBoundary';
+import NotifToast from '../ui/NotifToast';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { Notification } from '../../types';
+
+const HIGH_PRIORITY_TYPES: Array<Notification['type']> = ['warning', 'error', 'alert'];
+const PAYMENT_QUEUE_ROLES = ['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'];
 
 interface AppLayoutProps {
   children: ReactNode;
   title?: string;
 }
 
-const PAYMENT_QUEUE_ROLES = ['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'];
-
 export default function AppLayout({ children, title }: AppLayoutProps) {
   const { user, profile, loading } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [releasedInvoiceCount, setReleasedInvoiceCount] = useState(0);
+  const [toasts, setToasts] = useState<Notification[]>([]);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -31,7 +38,11 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
         table: 'notifications',
         filter: `user_id=eq.${user.id}`,
       }, payload => {
-        setNotifications(prev => [payload.new as Notification, ...prev]);
+        const incoming = payload.new as Notification;
+        setNotifications(prev => [incoming, ...prev]);
+        if (HIGH_PRIORITY_TYPES.includes(incoming.type)) {
+          setToasts(prev => [...prev, incoming]);
+        }
       })
       .subscribe();
 
@@ -123,6 +134,15 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
           </ErrorBoundary>
         </main>
       </div>
+
+      {/* High-priority toast stack */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2 items-end">
+          {toasts.map(t => (
+            <NotifToast key={t.id} notification={t} onDismiss={() => dismissToast(t.id)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

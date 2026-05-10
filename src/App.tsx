@@ -19,6 +19,7 @@ import MonthlyAnalyzer from './pages/MonthlyAnalyzer';
 import CheckManagement from './pages/CheckManagement';
 import WorkflowEfficiency from './pages/WorkflowEfficiency';
 import TreasuryDashboard from './pages/treasury/TreasuryDashboard';
+import Notifications from './pages/Notifications';
 
 function AppRoutes() {
   return (
@@ -42,6 +43,7 @@ function AppRoutes() {
       <Route path="/monthly-analyzer" element={<AppLayout><MonthlyAnalyzer /></AppLayout>} />
       <Route path="/checks" element={<AppLayout><CheckManagement /></AppLayout>} />
       <Route path="/workflow" element={<AppLayout><WorkflowEfficiency /></AppLayout>} />
+      <Route path="/notifications" element={<AppLayout title="Notifications"><Notifications /></AppLayout>} />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
