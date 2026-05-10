@@ -42,14 +42,8 @@ The Supabase client (`src/lib/supabase.ts`) reads these at build time via Vite's
 The shared Supabase project already has all migrations applied. To confirm:
 
 1. Open Supabase Dashboard → Table Editor
-2. You should see tables: `projects`, `purchase_orders`, `user_profiles`, etc.
-3. If tables are missing, apply migrations in order:
-
-```bash
-# Migrations are plain SQL files in supabase/migrations/
-# Apply them in filename-alphabetical order via the Supabase SQL editor
-# or using the Supabase CLI if available
-```
+2. You should see tables: `projects`, `purchase_orders`, `user_profiles`, `notifications`, `loan_transactions`, etc.
+3. If tables are missing, apply migrations in filename-alphabetical order from `supabase/migrations/` via the Supabase SQL editor
 
 ---
 
@@ -66,10 +60,12 @@ VALUES (
   '<your-uuid-here>',
   'Your Name',
   'your@email.com',
-  'evp',            -- or whichever role you need for testing
+  'evp',   -- or whichever role you need for testing
   'YN'
 );
 ```
+
+Valid role values: `cost_controller`, `construction_manager`, `evp`, `accounts_supervisor`, `accounts_manager`, `ceo`, `procurement`, `banking_finance_officer`.
 
 ---
 
@@ -80,6 +76,8 @@ npm run dev
 ```
 
 Navigate to `http://localhost:5173`. Log in with the credentials you created in step 4.
+
+The Topbar includes a **Test Mode** role switcher — use it to switch between role views without logging out.
 
 ---
 
@@ -114,7 +112,10 @@ Check that `.env` exists and that both variables are set. Vite requires a restar
 The `user_profiles` row is missing. Run the INSERT from Step 4.
 
 **Blank page after login**
-Open the browser console. A Supabase RLS error (status 400 or empty data) usually means the user's role doesn't have read access to the queried table. Check that the role value in `user_profiles` matches one of the six valid roles exactly.
+Open the browser console. A Supabase RLS error (status 400 or empty data) usually means the user's role doesn't have read access to the queried table. Check that the role value in `user_profiles` matches one of the eight valid roles exactly.
+
+**Role switcher in Topbar shows wrong role after switch**
+The switcher writes to `sessionStorage`. Clear it with `sessionStorage.removeItem('dev_role_override')` in the browser console, or select "Reset to Actual Role" from the dropdown.
 
 ---
 

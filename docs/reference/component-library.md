@@ -41,8 +41,6 @@ import Badge from '../components/ui/Badge';
 
 ### Mapping status strings to variants
 
-A common pattern is a helper function on the page:
-
 ```typescript
 function statusVariant(status: string): 'green' | 'amber' | 'red' | 'gray' | 'blue' {
   if (status === 'approved' || status === 'evp_approved' || status === 'active') return 'green';
@@ -89,8 +87,6 @@ import { DollarSign } from 'lucide-react';
 
 ### Making a card clickable
 
-Wrap with a `div` with `onClick` and `cursor-pointer`:
-
 ```tsx
 <div onClick={() => navigate('/approvals')} className="cursor-pointer">
   <MetricCard title="Awaiting Action" value="3" accent="amber" />
@@ -130,7 +126,38 @@ const [vendorId, setVendorId] = useState<string | null>(null);
 />
 ```
 
-The component renders the entity's `name` as the display value. Filtering is case-insensitive substring match on the name.
+---
+
+## NotifToast
+
+`src/components/ui/NotifToast.tsx`
+
+Non-blocking toast notification for high-priority real-time events. Rendered by `AppLayout` in a fixed bottom-right stack. Do not render this component manually — it is injected automatically when a `warning`, `error`, or `alert` notification arrives via Supabase Realtime.
+
+### Props
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `notification` | `Notification` | Yes | The notification to display |
+| `onDismiss` | `() => void` | Yes | Called after auto-dismiss (5s) or manual close |
+
+### Behaviour
+
+- Animates in on mount, animates out on dismiss
+- Auto-dismisses after 5 seconds
+- Shows a `×` button for manual early dismissal
+- Displays the notification's `title` and (if present) `message`
+- Uses `NotifTypeIcon` from `Topbar.tsx` for the type indicator
+
+### When toasts fire vs. when they don't
+
+| Type | Toast fires? | Bell updates? |
+|---|---|---|
+| `warning` | Yes | Yes |
+| `error` | Yes | Yes |
+| `alert` | Yes | Yes |
+| `info` | No | Yes |
+| `success` | No | Yes |
 
 ---
 
@@ -140,19 +167,29 @@ The component renders the entity's `name` as the display value. Filtering is cas
 
 `src/components/Layout/AppLayout.tsx`
 
-Shell wrapper for all authenticated pages. Renders Sidebar + Topbar + a main content area. All routes in `App.tsx` are wrapped with `<AppLayout>`.
+Shell wrapper for all authenticated pages. Renders Sidebar + Topbar + a main content area + the toast stack. All routes in `App.tsx` are wrapped with `<AppLayout>`.
+
+Owns:
+- Notification state (full list, loaded once per session, kept up-to-date via Realtime)
+- Released invoice count (for payment badge in sidebar)
+- Toast state (high-priority notifications only)
 
 ### Sidebar
 
 `src/components/Layout/Sidebar.tsx`
 
-Left navigation. Menu items are defined as an array with `to`, `icon`, `label`, and `roles` fields. Items are hidden when the current user's role is not in the `roles` array.
+Left navigation. Menu items are defined as an array with `to`, `icon`, `label`, and `roles` fields. Items are hidden when the current user's role is not in the `roles` array. Receives `badges` prop with `{ approvals, payments, alerts }` counts.
 
 ### Topbar
 
 `src/components/Layout/Topbar.tsx`
 
-Top bar with the current page title derived from the route, and the user's avatar initials with a sign-out option.
+Top bar with optional page title, notification bell, user name/role display, and sign-out button.
+
+- Bell shows a numeric unread count (capped at "9+")
+- Dropdown shows up to 15 most recent notifications with Lucide type icons and coloured left-border stripes
+- "View all notifications" link routes to `/notifications`
+- Exports `notifHref`, `NotifTypeIcon`, and `typeAccent` for reuse in the Notifications inbox page
 
 ---
 

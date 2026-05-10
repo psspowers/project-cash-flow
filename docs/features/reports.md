@@ -22,24 +22,23 @@ Shows Withholding Tax (3%) deducted from vendor payments for a selected period.
 
 ---
 
-## Loan Ledger (`/loan-ledger`)
+## Treasury (`/treasury`)
 
-Tracks all loans the company has received from or given to counterparties.
+Replaces the old `/loan-ledger` route (which now redirects here). Provides a unified view of all treasury positions.
+
+**Sections:**
+- **Loans** — borrowing and lending facilities tracked via `loans` table
+- **Loan transactions** — event-sourced ledger (`loan_transactions`) with drawdown, repayment, interest, and fee events; balances are computed, not stored
+- **SG&A actuals** — monthly actual overhead figures entered by Finance roles via `sga_actuals` table
+- **Treasury adjustments** — one-off fiscal-year adjustments via `treasury_adjustments` table
 
 **Data sources:**
-- `loans` — principal, currency, drawdown date, due date, outstanding balance, counterparty
-- `loan_repayments` — payment events reducing the outstanding balance
+- `loans` — principal, facility type (borrowing/lending), counterparty, due date
+- `loan_transactions` — event type (drawdown, repayment, interest, fee), cash flow direction, amount, date
+- `sga_actuals` — year, month, amount
+- `treasury_adjustments` — label, amount, fiscal_year
 
-**Columns displayed:**
-- Counterparty name
-- Loan type (Received / Given)
-- Principal
-- Currency (THB or USD; USD loans show FX rate used)
-- Drawdown date, due date
-- Outstanding balance
-- Repayment history
-
-**Who can access:** accounts_supervisor, accounts_manager, evp, ceo.
+**Who can access:** accounts_supervisor, accounts_manager, banking_finance_officer, evp, ceo.
 
 ---
 
@@ -49,13 +48,13 @@ Compares budget costing per category against actual PO spend per category across
 
 **Data sources:**
 - `project_costings` (stage = `budget`, status = `evp_approved`) — planned cost per category
-- `purchase_orders` — actual committed cost per category
+- `purchase_orders` — actual committed cost per category (approved POs only)
 
 **Columns per category:**
 - Budget amount
 - Committed amount (sum of approved PO amounts)
 - Variance (budget − committed)
-- Variance % 
+- Variance %
 
 A category is flagged as overrun when committed > budget.
 
@@ -70,6 +69,26 @@ Not a traditional report — this page surfaces payment vouchers ≥ ฿3M that 
 **Data source:** `payment_vouchers` where `net_paid >= 3,000,000`.
 
 **Who can access:** ceo, evp only.
+
+---
+
+## Monthly Analyzer (`/monthly-analyzer`)
+
+Pivot-style financial analysis across all projects for a selected month. Shows cash in, uninvoiced pipeline, and balance summaries. Used by the Finance team and management to assess monthly financial health.
+
+**Data sources:** `milestone_invoices`, `cash_receipts`, `vendor_invoices`, `payment_vouchers`, `purchase_orders`.
+
+**Who can access:** cost_controller, accounts_supervisor, accounts_manager, evp, ceo (ANALYZER_ROLES).
+
+---
+
+## Workflow Efficiency (`/workflow`)
+
+Shows approval cycle time metrics — how long POs and invoices spend at each stage. Identifies bottlenecks in the approval chain.
+
+**Data source:** `po_audit_log` — timestamps of each status transition per PO.
+
+**Who can access:** evp, ceo.
 
 ---
 

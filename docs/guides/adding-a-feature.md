@@ -34,15 +34,14 @@ export const INSPECTION_STATUS_LABELS: Record<string, string> = {
 If the feature needs a new table or column, write a migration file:
 
 - File goes in `supabase/migrations/`
-- Filename format: `YYYYMMDDHHMMSS_NNN_descriptive_name.sql`
+- Filename format: `YYYYMMDDHHMMSS_descriptive_name.sql`
 - Start with a detailed comment block explaining what the migration does
 - Use `IF NOT EXISTS` / `IF EXISTS` guards
 - Always enable RLS on new tables
-- Always create the minimum policies needed
+- Always create the minimum policies needed for legitimate access patterns
+- Never use `DROP`, `DELETE`, or transaction control statements (`BEGIN`/`COMMIT`) in migrations
 
 Apply the migration using the `mcp__supabase__apply_migration` tool (or paste into the Supabase SQL editor).
-
-Never use `DROP`, `DELETE`, or transaction control statements (`BEGIN`/`COMMIT`) in migrations.
 
 ---
 
@@ -97,6 +96,12 @@ import SiteInspections from './pages/SiteInspections';
 <Route path="/site-inspections" element={<AppLayout><SiteInspections /></AppLayout>} />
 ```
 
+To show a page title in the Topbar, pass it as a prop:
+
+```typescript
+<Route path="/site-inspections" element={<AppLayout title="Site Inspections"><SiteInspections /></AppLayout>} />
+```
+
 ---
 
 ## 5. Add the sidebar link
@@ -149,8 +154,9 @@ Check `src/components/ui/` before creating new ones:
 | `Badge` | Status labels with colour coding |
 | `MetricCard` | KPI summary cards |
 | `VendorCombobox` | Searchable vendor/entity selector |
+| `NotifToast` | Do not use directly — fired by AppLayout only |
 
-Check `src/utils/formatters.ts` for `fmtTHB` and `fmtTHBCompact` before writing currency formatting.
+Check `src/utils/formatters.ts` (or import from `src/types/index.ts`) for `fmtTHB` and `fmtTHBCompact` before writing currency formatting.
 
 ---
 
@@ -166,11 +172,37 @@ const { profile } = useAuth();
 )}
 ```
 
+For role groups, use the constants and helper from `src/config/roles.ts`:
+
+```typescript
+import { hasRole, PROCUREMENT_WRITE_ROLES } from '../config/roles';
+{hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) && (
+  <button onClick={handleCreate}>Create PO</button>
+)}
+```
+
 RLS enforces the actual access. The role check in the UI is to avoid confusing users with buttons they cannot use.
 
 ---
 
-## 9. Run build before committing
+## 9. Notification integration
+
+If your feature triggers notifications, use the `notify()` function from `src/services/workflow.ts`:
+
+```typescript
+import { notify } from '../services/workflow';
+
+// Inside an approval action:
+await notify(targetUserId, 'Invoice Approved', 'Invoice #123 has been approved by CM.', 'success', 'vendor_invoice', invoiceId);
+```
+
+Do not insert into `notifications` directly from a page component. Notifications are an audit record and must never be deleted. Only `is_read` may be updated.
+
+**Toast behaviour:** `AppLayout` will automatically show a toast if the new notification's `type` is `warning`, `error`, or `alert`. Use `info` or `success` for routine events that should not interrupt the user.
+
+---
+
+## 10. Run build before committing
 
 ```bash
 npm run build
