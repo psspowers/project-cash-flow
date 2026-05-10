@@ -27,9 +27,11 @@ interface WorkItem {
   id: string;
   type: CardType;
   label: string;
+  supplierName: string;
   projectName: string;
   projectId: string;
   amount: number;
+  itemDate: string | null;   // invoice_date, po date, etc.
   daysWaiting: number;
   aging: AgingLevel;
   rawInvoice?: VendorInvoice;
@@ -87,9 +89,17 @@ const DESK_STYLE: Record<string, { accent: string; headerText: string; cardBg: s
 // ---------------------------------------------------------------------------
 
 function agingLevel(days: number): AgingLevel {
+  if (!isFinite(days) || days < 0) return 'fresh';
   if (days > 7) return 'red';
   if (days > 3) return 'amber';
   return 'fresh';
+}
+
+function safeDays(now: Date, dateStr: string | null | undefined): number {
+  if (!dateStr) return 0;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return 0;
+  return Math.max(0, differenceInDays(now, d));
 }
 
 function typeIcon(type: CardType, size = 11) {
@@ -135,22 +145,39 @@ function WorkItemRow({
       className={`relative rounded-lg border cursor-pointer transition-all duration-150 hover:shadow-sm hover:-translate-y-px group ${borderColor} ${isMyDesk ? 'hover:ring-1 hover:ring-[#1D9E75]/30' : ''}`}
     >
       <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg ${stripColor}`} />
-      <div className="pl-3 pr-2.5 py-2">
-        <div className="flex items-center gap-1 mb-0.5">
+      <div className="pl-3 pr-2.5 py-2.5">
+        {/* Row 1: type badge */}
+        <div className="flex items-center gap-1 mb-1.5">
           <span className="text-gray-400">{typeIcon(item.type)}</span>
           <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{typeLabel(item.type)}</span>
         </div>
-        <p className="text-[12px] font-semibold text-gray-800 truncate group-hover:text-[#1D9E75] transition-colors leading-tight">
-          {item.label}
-        </p>
+
+        {/* Row 2: Supplier | Invoice/PO No */}
+        <div className="flex items-start justify-between gap-2 min-w-0">
+          <p className="text-[12px] font-semibold text-gray-700 truncate leading-tight flex-1 min-w-0">
+            {item.supplierName}
+          </p>
+          <p className="text-[11px] font-semibold text-gray-800 shrink-0 group-hover:text-[#1D9E75] transition-colors leading-tight">
+            {item.label}
+          </p>
+        </div>
+
+        {/* Row 3: Project name */}
         <p className="text-[11px] text-gray-400 truncate mt-0.5">{item.projectName}</p>
-        <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-gray-100/80">
-          <span className="text-[11px] font-semibold text-gray-600">
+
+        {/* Row 4: Amount | Date */}
+        <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-gray-100/80">
+          <span className="text-[12px] font-bold text-gray-700">
             {item.amount > 0 ? formatTHBCompact(item.amount) : '—'}
           </span>
-          <span className={`text-[10px] font-semibold ${ageText}`}>
-            {item.daysWaiting === 0 ? 'Today' : `${item.daysWaiting}d`}
-          </span>
+          <div className="flex items-center gap-2">
+            {item.itemDate && (
+              <span className="text-[10px] text-gray-400">{formatDate(item.itemDate)}</span>
+            )}
+            <span className={`text-[10px] font-semibold ${ageText}`}>
+              {item.daysWaiting === 0 ? 'Today' : `${item.daysWaiting}d`}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -358,7 +385,7 @@ export default function WorkflowEfficiency() {
         .in('status', ['draft', 'draft_revision', 'pending_cc', 'pending_cm', 'pending_evp', 'pending_revision_approval', 'pending_ceo']),
       supabase
         .from('vendor_invoices')
-        .select('*, project:projects!project_id(id,name), purchase_order:purchase_orders!po_id(id,pss_po_no,description,supplier_name_raw,vendor:entities!vendor_id(id,name))')
+        .select('id, po_id, project_id, vendor_id, vendor_invoice_no, invoice_date, invoice_amount_incl_vat, received_amount, wht_3pct, net_payable, status, rejection_comment, rejected_by, planned_payment_date, vendor_notified, created_at, project:projects!project_id(id,name), purchase_order:purchase_orders!po_id(id,pss_po_no,description,supplier_name_raw,vendor:entities!vendor_id(id,name))')
         .in('status', ['rejected', 'received', 'approved_cm', 'approved_evp', 'released']),
       supabase
         .from('project_costings')
@@ -375,12 +402,13 @@ export default function WorkflowEfficiency() {
       supabase.from('projects').select('id, name').order('name'),
     ]);
 
-    const days = (r: any) => differenceInDays(now, new Date(r.updated_at));
-    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
-    setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
-    setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
-    setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
-    setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: days(r) })));
+    // VendorInvoice has no updated_at — fall back to invoice_date then created_at
+    const daysFor = (r: any) => safeDays(now, r.updated_at ?? r.invoice_date ?? r.created_at);
+    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllProjects(projRes.data ?? []);
     setLastRefresh(now);
     setLoading(false);
@@ -391,12 +419,15 @@ export default function WorkflowEfficiency() {
   // ---------------------------------------------------------------------------
 
   function mkPO(po: any): WorkItem {
+    const supplier = po.vendor?.name ?? po.supplier_name_raw ?? '—';
     return {
       id: po.id, type: 'po',
       label: po.pss_po_no ?? po.description ?? 'Draft PO',
+      supplierName: supplier,
       projectName: po.project?.name ?? '—',
       projectId: po.project_id,
       amount: po.po_amount_incl_vat ?? 0,
+      itemDate: po.updated_at ?? null,
       daysWaiting: po._days, aging: agingLevel(po._days),
       rawPO: po as PurchaseOrder,
     };
@@ -404,12 +435,15 @@ export default function WorkflowEfficiency() {
 
   function mkInv(inv: any): WorkItem {
     const po = inv.purchase_order;
+    const supplier = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
     return {
       id: inv.id, type: 'invoice',
       label: inv.vendor_invoice_no ?? `Invoice (${po?.pss_po_no ?? '—'})`,
+      supplierName: supplier,
       projectName: inv.project?.name ?? '—',
       projectId: inv.project_id,
       amount: inv.invoice_amount_incl_vat ?? 0,
+      itemDate: inv.invoice_date ?? inv.created_at ?? null,
       daysWaiting: inv._days, aging: agingLevel(inv._days),
       rawInvoice: inv as VendorInvoice,
     };
@@ -419,9 +453,11 @@ export default function WorkflowEfficiency() {
     return {
       id: c.id, type: 'costing',
       label: `${c.stage === 'estimation' ? 'Estimation' : 'Budget'} Costing`,
+      supplierName: c.project?.name ?? '—',
       projectName: c.project?.name ?? '—',
       projectId: c.project?.id ?? '',
       amount: c.project?.contract_incl_vat ?? 0,
+      itemDate: c.updated_at ?? null,
       daysWaiting: c._days, aging: agingLevel(c._days),
     };
   }
@@ -430,9 +466,11 @@ export default function WorkflowEfficiency() {
     return {
       id: r.id, type: 'progress_report',
       label: `Progress Report${r.vendor_invoice?.vendor_invoice_no ? ` · ${r.vendor_invoice.vendor_invoice_no}` : ''}`,
+      supplierName: '—',
       projectName: r.project?.name ?? '—',
       projectId: r.project?.id ?? '',
       amount: r.vendor_invoice?.invoice_amount_incl_vat ?? 0,
+      itemDate: r.updated_at ?? null,
       daysWaiting: r._days, aging: agingLevel(r._days),
     };
   }
@@ -441,9 +479,11 @@ export default function WorkflowEfficiency() {
     return {
       id: v.id, type: 'voucher',
       label: v.voucher_no,
+      supplierName: '—',
       projectName: v.project?.name ?? '—',
       projectId: v.project?.id ?? '',
       amount: v.net_paid ?? 0,
+      itemDate: v.updated_at ?? null,
       daysWaiting: v._days, aging: agingLevel(v._days),
     };
   }
