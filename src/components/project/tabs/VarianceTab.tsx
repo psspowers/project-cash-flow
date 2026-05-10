@@ -3,12 +3,13 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import { fmtTHB, COSTING_CATEGORY_KEYS } from '../../../types';
 import { CATEGORY_KEY_LABELS, CATEGORY_MAP } from '../projectDetailConstants';
+import CommentThread from '../../ui/CommentThread';
 
 const APPROVED_STATUSES = new Set(['approved', 'partially_paid', 'fully_paid']);
 const DRAFT_STATUSES = new Set(['draft', 'pending_cc']);
 
 export default function VarianceTab() {
-  const { estimation, budget, orders, poMilestones, vos, totalReceived, totalPaid, voTotalCost } = useProjectDetail();
+  const { estimation, budget, orders, poMilestones, vos, totalReceived, totalPaid, voTotalCost, project } = useProjectDetail();
 
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
   const toggleCat = (cat: string) => {
@@ -47,7 +48,9 @@ export default function VarianceTab() {
   const cashMargin = totalReceived - totalPaid;
 
   return (
-    <div className="bg-white border border-[rgba(0,0,0,0.08)] rounded-lg overflow-hidden">
+    <div className="flex flex-col lg:flex-row gap-0 items-stretch">
+      {/* ── LEFT: Variance table ─────────────────────────────────────── */}
+      <div className="flex-1 min-w-0 overflow-x-auto bg-white border border-[rgba(0,0,0,0.08)] rounded-lg lg:rounded-r-none overflow-hidden">
       <table className="w-full text-xs">
         <thead>
           <tr className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.06)]">
@@ -190,6 +193,19 @@ export default function VarianceTab() {
           </tr>
         </tbody>
       </table>
+      </div>
+
+      {/* ── RIGHT: Project Discussion panel ──────────────────────────── */}
+      <div className="w-full lg:w-[400px] shrink-0 flex flex-col border border-[rgba(0,0,0,0.08)] lg:border-l-0 rounded-lg lg:rounded-l-none mt-3 lg:mt-0 bg-white overflow-hidden">
+        {project && (
+          <CommentThread
+            key={project.id}
+            entityType="project"
+            entityId={project.id}
+            entityLabel="Project Discussion"
+          />
+        )}
+      </div>
     </div>
   );
 }

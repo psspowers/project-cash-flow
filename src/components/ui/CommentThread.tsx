@@ -484,7 +484,7 @@ export default function CommentThread({ entityType, entityId, entityLabel }: Pro
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 shrink-0">
         <MessageSquare size={14} className="text-[#1D9E75]" />
-        <span className="text-[12px] font-semibold text-gray-700">Discussion</span>
+        <span className="text-[12px] font-semibold text-gray-700">{entityLabel ?? 'Discussion'}</span>
         {comments.length > 0 && (
           <span className="ml-auto text-[10px] text-gray-400">{comments.length} message{comments.length !== 1 ? 's' : ''}</span>
         )}
