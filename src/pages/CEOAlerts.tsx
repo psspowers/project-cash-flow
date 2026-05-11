@@ -28,15 +28,24 @@ export default function CEOAlerts() {
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [poProjects, setPoProjects] = useState<Project[]>([]);
   const [poVendors, setPoVendors] = useState<Entity[]>([]);
+  const [pendingVouchers, setPendingVouchers] = useState<PaymentVoucher[]>([]);
+  const [rejectingVoucher, setRejectingVoucher] = useState<PaymentVoucher | null>(null);
+  const [rejectComment, setRejectComment] = useState('');
+  const [voucherAction, setVoucherAction] = useState(false);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
-    const [{ data: vouData }, { data: invData }, { data: txData }, { data: profData }, { data: proj }, { data: vend }] = await Promise.all([
+    const [{ data: vouData }, { data: pendVouData }, { data: invData }, { data: txData }, { data: profData }, { data: proj }, { data: vend }] = await Promise.all([
       supabase
         .from('payment_vouchers')
         .select('*, project:projects(*), vendor_invoice:vendor_invoices(po_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, vendor:entities(name)))')
         .eq('ceo_notified', true)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('payment_vouchers')
+        .select('*, project:projects(*), vendor_invoice:vendor_invoices(po_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, vendor:entities(name)))')
+        .eq('status', 'pending_manager')
         .order('created_at', { ascending: false }),
       supabase
         .from('vendor_invoices')
@@ -53,6 +62,7 @@ export default function CEOAlerts() {
       supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
     ]);
     setVouchers(vouData || []);
+    setPendingVouchers((pendVouData ?? []) as PaymentVoucher[]);
     setPendingInvoices((invData ?? []) as VendorInvoice[]);
     setPendingTransfers((txData ?? []) as ProjectCashTransfer[]);
     setProfiles((profData ?? []) as UserProfile[]);
@@ -68,6 +78,34 @@ export default function CEOAlerts() {
       .eq('id', poId)
       .maybeSingle();
     if (data) setSelectedPO(data as PurchaseOrder);
+  }
+
+  async function approveVoucher(voucherId: string) {
+    if (!user) return;
+    setVoucherAction(true);
+    await supabase
+      .from('payment_vouchers')
+      .update({ status: 'approved', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
+      .eq('id', voucherId);
+    await supabase.from('checks').update({ signed_by_manager: user.id }).eq('voucher_id', voucherId);
+    setVoucherAction(false);
+    loadData();
+  }
+
+  async function rejectVoucher() {
+    if (!rejectingVoucher || !user || !rejectComment.trim()) return;
+    setVoucherAction(true);
+    await supabase
+      .from('payment_vouchers')
+      .update({ status: 'rejected', rejection_comment: rejectComment.trim(), rejected_by: user.id, rejected_at: new Date().toISOString() })
+      .eq('id', rejectingVoucher.id);
+    if (rejectingVoucher.vendor_invoice_id) {
+      await supabase.from('vendor_invoices').update({ status: 'released' }).eq('id', rejectingVoucher.vendor_invoice_id);
+    }
+    setRejectingVoucher(null);
+    setRejectComment('');
+    setVoucherAction(false);
+    loadData();
   }
 
   async function handleApproveInvoice(invoice: VendorInvoice) {
@@ -189,9 +227,9 @@ export default function CEOAlerts() {
           <h1 className="text-xl font-bold text-gray-900">CEO Alerts</h1>
           <p className="text-sm text-gray-500 mt-0.5">Payments ≥ ฿3,000,000 and margin transfers pending your approval</p>
         </div>
-        {(vouchers.length + pendingInvoices.length + pendingTransfers.length) > 0 && (
+        {(pendingVouchers.length + pendingInvoices.length + pendingTransfers.length) > 0 && (
           <span className="bg-[#E24B4A] text-white text-xs rounded-full px-2.5 py-1 font-medium">
-            {vouchers.length + pendingInvoices.length + pendingTransfers.length} alerts
+            {pendingVouchers.length + pendingInvoices.length + pendingTransfers.length} alerts
           </span>
         )}
       </div>
@@ -243,6 +281,74 @@ export default function CEOAlerts() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Pending Vouchers — Co-signature Required */}
+      {pendingVouchers.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <FileCheck size={16} className="text-[#EF9F27]" />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Payment Vouchers — Pending Your Co-signature</h2>
+            <span className="bg-[#EF9F27]/10 text-[#EF9F27] text-xs font-semibold px-2 py-0.5 rounded-full">
+              {pendingVouchers.length}
+            </span>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gray-50/50 border-b border-gray-100">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Date</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Voucher No.</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Project</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingVouchers.map(v => {
+                  const vPo = (v as any).vendor_invoice?.purchase_order;
+                  const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                  const poId: string | undefined = vPo?.id;
+                  return (
+                    <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      <td className="px-4 py-3 text-sm text-gray-700">{formatDate(v.voucher_date)}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-gray-800">
+                        {poId ? (
+                          <button onClick={() => openPODrillDown(poId)} className="hover:text-[#1D9E75] transition-colors text-left">
+                            {v.voucher_no}
+                          </button>
+                        ) : v.voucher_no}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{vendorName}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{(v as any).project?.name?.split('–')[0] || '—'}</td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(v.net_paid)}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2 justify-end">
+                          <button
+                            onClick={() => { setRejectingVoucher(v); setRejectComment(''); }}
+                            className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded text-xs font-medium hover:bg-[#E24B4A]/5"
+                          >
+                            <XCircle size={12} /> Reject
+                          </button>
+                          <button
+                            onClick={() => approveVoucher(v.id)}
+                            disabled={voucherAction}
+                            className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] disabled:opacity-60"
+                          >
+                            <CheckCircle size={12} /> Co-sign
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -487,6 +593,50 @@ export default function CEOAlerts() {
           onReject={(comment) => handleRejectInvoiceFromModal(invoiceDetailModal, comment)}
           onClose={() => setInvoiceDetailModal(null)}
         />
+      )}
+
+      {rejectingVoucher && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="text-base font-semibold text-gray-800">Reject Payment Voucher</h2>
+              <button onClick={() => setRejectingVoucher(null)}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-[#F8F8F7] rounded-lg p-3 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Voucher</span>
+                  <span className="font-mono font-medium">{rejectingVoucher.voucher_no}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Amount</span>
+                  <span className="font-bold text-[#E24B4A]">{formatTHB(rejectingVoucher.net_paid)}</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason *</label>
+                <textarea
+                  value={rejectComment}
+                  onChange={e => setRejectComment(e.target.value)}
+                  rows={3}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none"
+                  placeholder="Explain the reason for rejection..."
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setRejectingVoucher(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={rejectVoucher}
+                disabled={!rejectComment.trim() || voucherAction}
+                className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60"
+              >
+                <XCircle size={14} />
+                {voucherAction ? 'Processing...' : 'Confirm Rejection'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {selectedPO && (
