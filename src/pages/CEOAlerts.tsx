@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Bell, AlertTriangle, ArrowRightLeft, CheckCircle, XCircle, X, FileCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { PaymentVoucher, ProjectCashTransfer, Project, VendorInvoice, fmtTHB, UserProfile } from '../types';
+import { PaymentVoucher, ProjectCashTransfer, Project, VendorInvoice, PurchaseOrder, Entity, fmtTHB, UserProfile } from '../types';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
 import { approveInvoiceCEO, rejectInvoice } from '../services/workflow';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
+import PODetailModal from '../components/pos/PODetailModal';
 
 export default function CEOAlerts() {
   const { user } = useAuth();
@@ -24,14 +25,17 @@ export default function CEOAlerts() {
   const [transferRejectReason, setTransferRejectReason] = useState('');
   const [transferAction, setTransferAction] = useState(false);
   const [transferApprovalError, setTransferApprovalError] = useState<string | null>(null);
+  const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
+  const [poProjects, setPoProjects] = useState<Project[]>([]);
+  const [poVendors, setPoVendors] = useState<Entity[]>([]);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
-    const [{ data: vouData }, { data: invData }, { data: txData }, { data: profData }] = await Promise.all([
+    const [{ data: vouData }, { data: invData }, { data: txData }, { data: profData }, { data: proj }, { data: vend }] = await Promise.all([
       supabase
         .from('payment_vouchers')
-        .select('*, project:projects(*), vendor_invoice:vendor_invoices(*, vendor:entities!vendor_id(*))')
+        .select('*, project:projects(*), vendor_invoice:vendor_invoices(po_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, vendor:entities(name)))')
         .eq('ceo_notified', true)
         .order('created_at', { ascending: false }),
       supabase
@@ -45,12 +49,25 @@ export default function CEOAlerts() {
         .eq('status', 'evp_recommended')
         .order('created_at', { ascending: false }),
       supabase.from('user_profiles').select('*'),
+      supabase.from('projects').select('id, name, status').order('name'),
+      supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
     ]);
     setVouchers(vouData || []);
     setPendingInvoices((invData ?? []) as VendorInvoice[]);
     setPendingTransfers((txData ?? []) as ProjectCashTransfer[]);
     setProfiles((profData ?? []) as UserProfile[]);
+    setPoProjects((proj ?? []) as Project[]);
+    setPoVendors((vend ?? []) as Entity[]);
     setLoading(false);
+  }
+
+  async function openPODrillDown(poId: string) {
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects(*)')
+      .eq('id', poId)
+      .maybeSingle();
+    if (data) setSelectedPO(data as PurchaseOrder);
   }
 
   async function handleApproveInvoice(invoice: VendorInvoice) {
@@ -339,21 +356,35 @@ export default function CEOAlerts() {
                   <p className="text-gray-400 text-sm">No large payment alerts</p>
                 </td>
               </tr>
-            ) : vouchers.map(v => (
-              <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                <td className="px-4 py-3 text-sm text-gray-700">{formatDate(v.voucher_date)}</td>
-                <td className="px-4 py-3 text-sm font-mono text-gray-800">{v.voucher_no}</td>
-                <td className="px-4 py-3 text-sm text-gray-700">{(v as any).vendor_invoice?.vendor?.name || '—'}</td>
-                <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{(v as any).project?.name?.split('–')[0] || '—'}</td>
-                <td className="px-4 py-3 text-right">
-                  <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(v.net_paid)}</span>
-                </td>
-                <td className="px-4 py-3 text-center">
-                  <Badge label={v.status.replace(/_/g, ' ')} variant={statusVariant(v.status)} />
-                </td>
-                <td className="px-4 py-3 text-xs text-gray-500">{formatDate(v.ceo_notified_at)}</td>
-              </tr>
-            ))}
+            ) : vouchers.map(v => {
+              const vPo = (v as any).vendor_invoice?.purchase_order;
+              const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+              const poId: string | undefined = vPo?.id;
+              return (
+                <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                  <td className="px-4 py-3 text-sm text-gray-700">{formatDate(v.voucher_date)}</td>
+                  <td className="px-4 py-3 text-sm font-mono text-gray-800">
+                    {poId ? (
+                      <button
+                        onClick={() => openPODrillDown(poId)}
+                        className="hover:text-[#1D9E75] transition-colors text-left"
+                      >
+                        {v.voucher_no}
+                      </button>
+                    ) : v.voucher_no}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{vendorName}</td>
+                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{(v as any).project?.name?.split('–')[0] || '—'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(v.net_paid)}</span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <Badge label={v.status.replace(/_/g, ' ')} variant={statusVariant(v.status)} />
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{formatDate(v.ceo_notified_at)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -455,6 +486,17 @@ export default function CEOAlerts() {
           onApprove={() => handleApproveInvoice(invoiceDetailModal)}
           onReject={(comment) => handleRejectInvoiceFromModal(invoiceDetailModal, comment)}
           onClose={() => setInvoiceDetailModal(null)}
+        />
+      )}
+
+      {selectedPO && (
+        <PODetailModal
+          key={selectedPO.id}
+          po={selectedPO}
+          projects={poProjects}
+          vendors={poVendors}
+          onClose={() => setSelectedPO(null)}
+          onSuccess={() => { setSelectedPO(null); loadData(); }}
         />
       )}
     </div>
