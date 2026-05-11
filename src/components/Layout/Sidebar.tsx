@@ -134,8 +134,8 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
         {/* Dashboard */}
         <NavItem to="/dashboard" label="Dashboard" icon={<LayoutDashboard size={16} />} />
 
-        {/* ── Executive section (EVP + CEO only) ── */}
-        {['evp', 'ceo'].includes(role) && (
+        {/* ── Executive section (EVP, CEO, Cost Controller) ── */}
+        {['evp', 'ceo', 'cost_controller'].includes(role) && (
           <>
             <Divider />
             <SectionLabel label="Executive" />
