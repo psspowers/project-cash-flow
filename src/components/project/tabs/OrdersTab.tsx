@@ -612,14 +612,14 @@ export default function OrdersTab() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">Invoice Amount (incl VAT) <span className="text-[#E24B4A]">*</span></label>
+                <label className="text-xs text-gray-500 mb-1 block">Invoice Amount (excl VAT) <span className="text-[#E24B4A]">*</span></label>
                 <input
                   type="text"
-                  inputMode="numeric"
-                  value={logInvoiceAmount ? Number(logInvoiceAmount).toLocaleString('en-US', { maximumFractionDigits: 0 }) : ''}
+                  inputMode="decimal"
+                  value={logInvoiceAmount ? Number(logInvoiceAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
                   onChange={e => {
                     const raw = e.target.value.replace(/,/g, '');
-                    if (raw === '' || /^\d+$/.test(raw)) setLogInvoiceAmount(raw);
+                    if (raw === '' || /^\d*\.?\d{0,2}$/.test(raw)) setLogInvoiceAmount(raw);
                   }}
                   className="w-full border border-[rgba(0,0,0,0.12)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#378ADD] transition-colors"
                   placeholder="0"
