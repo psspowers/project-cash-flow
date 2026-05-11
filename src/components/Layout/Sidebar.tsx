@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, FolderKanban, ShoppingCart, CheckCircle,
   CreditCard, Receipt, FileText, Bell, CalendarRange,
-  BarChart3, Zap, ChevronDown, ChevronRight,
+  BarChart3, ChevronDown, ChevronRight,
   CheckCircle2, Clock, CalendarClock, TrendingUp, Building2, GitPullRequest,
   Landmark,
 } from 'lucide-react';
@@ -117,16 +117,8 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
     <aside className="fixed top-0 left-0 w-[220px] h-screen bg-[#0f1923] flex flex-col shrink-0 border-r border-white/5 z-40">
 
       {/* Logo */}
-      <div className="px-5 py-5 border-b border-white/10">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-[#1D9E75] rounded-lg flex items-center justify-center shrink-0">
-            <Zap size={15} className="text-white" />
-          </div>
-          <div>
-            <p className="text-white font-semibold text-sm leading-tight">PSS Power</p>
-            <p className="text-white/40 text-xs">Solutions Co., Ltd.</p>
-          </div>
-        </div>
+      <div className="px-5 py-4 border-b border-white/10">
+        <img src="/PssO_Logo.png" alt="PssO Logo" className="h-10 w-auto object-contain" />
       </div>
 
       <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-0.5">

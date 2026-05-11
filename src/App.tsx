@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useRef, useEffect } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import AppLayout from './components/Layout/AppLayout';
 import Login from './pages/Login';
@@ -50,12 +51,57 @@ function AppRoutes() {
   );
 }
 
-export default function App() {
+function SplashScreen({ onDone }: { onDone: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const finish = () => {
+      setFading(true);
+      setTimeout(onDone, 600);
+    };
+
+    video.addEventListener('ended', finish);
+    // Fallback: dismiss after 8s in case video fails to load
+    const fallback = setTimeout(finish, 8000);
+
+    return () => {
+      video.removeEventListener('ended', finish);
+      clearTimeout(fallback);
+    };
+  }, [onDone]);
+
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <div
+      className="fixed inset-0 z-[9999] bg-black flex items-center justify-center transition-opacity duration-600"
+      style={{ opacity: fading ? 0 : 1 }}
+    >
+      <video
+        ref={videoRef}
+        src="/PssO Startup.mp4"
+        autoPlay
+        muted
+        playsInline
+        className="w-full h-full object-contain"
+      />
+    </div>
+  );
+}
+
+export default function App() {
+  const [splashDone, setSplashDone] = useState(false);
+
+  return (
+    <>
+      {!splashDone && <SplashScreen onDone={() => setSplashDone(true)} />}
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </>
   );
 }

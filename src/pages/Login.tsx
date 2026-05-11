@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { Zap, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface LoginForm {
@@ -33,10 +33,7 @@ export default function Login() {
     <div className="min-h-screen bg-[#f5f6f8] flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-[#0f1923] rounded-xl mb-4">
-            <Zap size={22} className="text-[#1D9E75]" />
-          </div>
-          <h1 className="text-xl font-bold text-gray-900">PSS Power Solutions</h1>
+          <img src="/PssO_Logo.png" alt="PssO Logo" className="h-16 w-auto object-contain mx-auto mb-4" />
           <p className="text-gray-500 text-sm mt-1">Cash Flow Management System</p>
         </div>
 
