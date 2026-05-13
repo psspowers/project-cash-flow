@@ -9,7 +9,7 @@ import { supabase } from '../../lib/supabase';
 import { Notification } from '../../types';
 
 const HIGH_PRIORITY_TYPES: Array<Notification['type']> = ['warning', 'error', 'alert'];
-const PAYMENT_QUEUE_ROLES = ['accounts_supervisor', 'accounts_manager', 'ceo', 'procurement'];
+const PAYMENT_QUEUE_ROLES = ['accounts_supervisor', 'accounts_manager', 'ceo', 'banking_finance_officer', 'procurement'];
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -54,13 +54,13 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
     if (!PAYMENT_QUEUE_ROLES.includes(profile.role)) return;
     loadReleasedInvoiceCount();
 
+    // Subscribe to both tables so the badge updates instantly as docs move through the pipeline
     const channel = supabase
-      .channel('released-invoices-count')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'vendor_invoices',
-      }, () => { loadReleasedInvoiceCount(); })
+      .channel('payment-queue-badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_invoices' },
+        () => { loadReleasedInvoiceCount(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_vouchers' },
+        () => { loadReleasedInvoiceCount(); })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -78,11 +78,48 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
   }
 
   async function loadReleasedInvoiceCount() {
-    const { count } = await supabase
-      .from('vendor_invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'released');
-    setReleasedInvoiceCount(count ?? 0);
+    if (!profile) return;
+    let count = 0;
+
+    if (profile.role === 'accounts_supervisor') {
+      // Count released invoices that have no voucher yet (Supervisor's actionable queue)
+      const { data: voucherIds } = await supabase
+        .from('payment_vouchers')
+        .select('vendor_invoice_id')
+        .not('vendor_invoice_id', 'is', null);
+      const alreadyVouchered = new Set((voucherIds || []).map((v: any) => v.vendor_invoice_id));
+      const { data: released } = await supabase
+        .from('vendor_invoices')
+        .select('id')
+        .eq('status', 'released');
+      count = (released || []).filter(inv => !alreadyVouchered.has(inv.id)).length;
+
+    } else if (profile.role === 'accounts_manager' || profile.role === 'ceo') {
+      // Count vouchers awaiting Manager co-sign
+      const { count: c } = await supabase
+        .from('payment_vouchers')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending_manager');
+      count = c ?? 0;
+
+    } else if (profile.role === 'banking_finance_officer') {
+      // Count approved vouchers awaiting check issuance
+      const { count: c } = await supabase
+        .from('payment_vouchers')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'approved');
+      count = c ?? 0;
+
+    } else {
+      // Fallback: total released invoice count
+      const { count: c } = await supabase
+        .from('vendor_invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'released');
+      count = c ?? 0;
+    }
+
+    setReleasedInvoiceCount(count);
   }
 
   async function handleNotificationRead(id: string) {

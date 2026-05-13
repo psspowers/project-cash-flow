@@ -1,12 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
-import { CreditCard, AlertTriangle, X, CheckCircle, ChevronDown, Info } from 'lucide-react';
+import {
+  CreditCard, AlertTriangle, X, CheckCircle, ChevronDown, Info,
+  Clock, CheckSquare, ChevronRight, Building2,
+} from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { VendorInvoice, PaymentVoucher, PurchaseOrder, Project, Entity } from '../types';
+import { VendorInvoice, PaymentVoucher, Check, PurchaseOrder, Project, Entity } from '../types';
 import { useAuth } from '../context/AuthContext';
-import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import PODetailModal from '../components/pos/PODetailModal';
+
+// ─── WHT constants ───────────────────────────────────────────────────────────
 
 const SIMPLE_WHT_OPTIONS = [
   { rate: 0,    label: 'None' },
@@ -26,14 +30,62 @@ interface CustomLine {
   label: string;
   baseAmount: string;
 }
-
 type WhtMode = 'simple' | 'custom';
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function netPayable(inv: VendorInvoice): number {
+  const po = (inv as any).purchase_order;
+  const gross = inv.invoice_amount_incl_vat || 0;
+  const whtRate = po?.wht_rate ?? 0;
+  return +(gross - +((gross / 1.07) * whtRate).toFixed(2)).toFixed(2);
+}
+
+// ─── Section header ───────────────────────────────────────────────────────────
+
+function SectionHeader({
+  icon,
+  title,
+  count,
+  accent = 'gray',
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count?: number;
+  accent?: 'green' | 'amber' | 'red' | 'gray' | 'blue';
+}) {
+  const accentMap = {
+    green: 'text-[#1D9E75] bg-[#1D9E75]/8 border-[#1D9E75]/20',
+    amber: 'text-[#EF9F27] bg-[#EF9F27]/8 border-[#EF9F27]/20',
+    red:   'text-[#E24B4A] bg-[#E24B4A]/8 border-[#E24B4A]/20',
+    gray:  'text-gray-600 bg-gray-50 border-gray-200',
+    blue:  'text-blue-600 bg-blue-50 border-blue-200',
+  };
+  return (
+    <div className={`flex items-center justify-between px-4 py-3 rounded-t-lg border ${accentMap[accent]}`}>
+      <div className="flex items-center gap-2">
+        {icon}
+        <span className="text-sm font-semibold">{title}</span>
+      </div>
+      {count !== undefined && count > 0 && (
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+          accent === 'green' ? 'bg-[#1D9E75] text-white' :
+          accent === 'amber' ? 'bg-[#EF9F27] text-white' :
+          accent === 'red'   ? 'bg-[#E24B4A] text-white' :
+          'bg-gray-400 text-white'
+        }`}>{count}</span>
+      )}
+    </div>
+  );
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function PaymentQueue() {
   const { profile, user } = useAuth();
   const [invoices, setInvoices] = useState<VendorInvoice[]>([]);
   const [vouchers, setVouchers] = useState<PaymentVoucher[]>([]);
-  const [selectedInvoice, setSelectedInvoice] = useState<VendorInvoice | null>(null);
+  const [checks, setChecks] = useState<Check[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -47,21 +99,37 @@ export default function PaymentQueue() {
   const [rejectComment, setRejectComment] = useState('');
   const [rejecting, setRejecting] = useState(false);
 
-  // Voucher form state
+  // Issue Voucher modal
+  const [selectedInvoice, setSelectedInvoice] = useState<VendorInvoice | null>(null);
   const [bankAccount, setBankAccount] = useState('KBank PSS Main');
-
-  // WHT — simple mode
   const [whtMode, setWhtMode] = useState<WhtMode>('simple');
   const [selectedWhtRate, setSelectedWhtRate] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
-
-  // WHT — custom mode
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [customLines, setCustomLines] = useState<CustomLine[]>(
     CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' }))
   );
   const [appliedCustomLines, setAppliedCustomLines] = useState<CustomLine[] | null>(null);
+
+  // Issue Check modal (Banking Officer)
+  const [checkModalVoucher, setCheckModalVoucher] = useState<PaymentVoucher | null>(null);
+  const [checkNo, setCheckNo] = useState('');
+  const [checkDate, setCheckDate] = useState('');
+  const [issuingCheck, setIssuingCheck] = useState(false);
+
+  // Reconciliation panel
+  const [reconOpen, setReconOpen] = useState(false);
+  const [markingCleared, setMarkingCleared] = useState<Check | null>(null);
+  const [clearDate, setClearDate] = useState('');
+  const [clearNote, setClearNote] = useState('');
+  const [savingClear, setSavingClear] = useState(false);
+
+  // ── Role flags ──────────────────────────────────────────────────────────────
+  const isSupervisor = profile?.role === 'accounts_supervisor';
+  const isManager    = profile?.role === 'accounts_manager';
+  const isCEO        = profile?.role === 'ceo';
+  const isBanking    = profile?.role === 'banking_finance_officer';
 
   useEffect(() => { loadData(); }, []);
 
@@ -75,12 +143,68 @@ export default function PaymentQueue() {
     return () => document.removeEventListener('mousedown', handler);
   }, [pickerOpen]);
 
+  // ── Data ────────────────────────────────────────────────────────────────────
+
+  async function loadData() {
+    const [{ data: inv }, { data: vouc }, { data: chk }, { data: proj }, { data: vend }] = await Promise.all([
+      supabase
+        .from('vendor_invoices')
+        .select('*, project:projects(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
+        .eq('status', 'released')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('payment_vouchers')
+        .select('*, vendor_invoice:vendor_invoices(id, po_id, vendor_invoice_no, invoice_amount_incl_vat, project_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))), project:projects(name)')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('checks')
+        .select('*, payment_voucher:payment_vouchers(id, voucher_no, net_paid, status, vendor_invoice:vendor_invoices(vendor_invoice_no, purchase_order:purchase_orders(pss_po_no, supplier_name_raw, vendor:entities(name))))')
+        .order('created_at', { ascending: false }),
+      supabase.from('projects').select('id, name, status').order('name'),
+      supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
+    ]);
+    setInvoices(inv || []);
+    setVouchers(vouc || []);
+    setChecks(chk || []);
+    setPoProjects(proj || []);
+    setPoVendors(vend || []);
+    setLoading(false);
+  }
+
+  // ── Derived sets ────────────────────────────────────────────────────────────
+
+  // All voucher–linked invoice IDs (any status)
+  const voucherInvoiceIds = new Set(
+    vouchers.map(v => (v as any).vendor_invoice_id).filter(Boolean)
+  );
+
+  // Released invoices with no voucher yet
+  const invoicesWithNoVoucher = invoices.filter(inv => !voucherInvoiceIds.has(inv.id));
+
+  const highValueNoVoucher = invoicesWithNoVoucher.filter(inv => netPayable(inv) >= 1_000_000);
+  const subValueNoVoucher  = invoicesWithNoVoucher.filter(inv => netPayable(inv) <  1_000_000);
+  // All actionable invoices for Supervisor (sorted ≥₿1M first)
+  const supervisorQueue = [
+    ...highValueNoVoucher.sort((a, b) => netPayable(b) - netPayable(a)),
+    ...subValueNoVoucher.sort((a, b) => netPayable(b) - netPayable(a)),
+  ];
+
+  const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
+  const approvedVouchers       = vouchers.filter(v => v.status === 'approved');
+  const rejectedVouchers       = vouchers.filter(v => v.status === 'rejected');
+
+  // Checks split by state
+  const draftChecks   = checks.filter(c => c.status === 'draft');    // issued voucher, no check written yet
+  const issuedChecks  = checks.filter(c => c.status === 'issued');   // check written, not cleared
+  const clearedChecks = checks.filter(c => c.status === 'cleared');  // reconciled
+
+  // ── Voucher modal helpers ───────────────────────────────────────────────────
+
   function openModal(inv: VendorInvoice) {
     const po = (inv as any).purchase_order;
-    const preRate = (po?.wht_rate != null) ? po.wht_rate : null;
     setSelectedInvoice(inv);
     setWhtMode('simple');
-    setSelectedWhtRate(preRate);
+    setSelectedWhtRate(po?.wht_rate != null ? po.wht_rate : null);
     setPickerOpen(false);
     setBankAccount('KBank PSS Main');
     setCustomLines(CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' })));
@@ -98,20 +222,18 @@ export default function PaymentQueue() {
   }
 
   function openCustomModal() {
-    if (appliedCustomLines) {
-      setCustomLines(appliedCustomLines.map(l => ({ ...l })));
-    } else {
-      setCustomLines(CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' })));
-    }
+    setCustomLines(
+      appliedCustomLines
+        ? appliedCustomLines.map(l => ({ ...l }))
+        : CUSTOM_TIERS.map(t => ({ ...t, baseAmount: '' }))
+    );
     setCustomModalOpen(true);
     setPickerOpen(false);
   }
 
   function cancelCustomModal() {
     setCustomModalOpen(false);
-    if (!appliedCustomLines) {
-      setWhtMode('simple');
-    }
+    if (!appliedCustomLines) setWhtMode('simple');
   }
 
   function applyCustomModal() {
@@ -121,27 +243,34 @@ export default function PaymentQueue() {
     setCustomModalOpen(false);
   }
 
+  // Modal calculations
+  const modalGross   = selectedInvoice?.invoice_amount_incl_vat ?? 0;
+  const modalExclVat = modalGross / 1.07;
 
-  async function loadData() {
-    const [{ data: inv }, { data: vouc }, { data: proj }, { data: vend }] = await Promise.all([
-      supabase
-        .from('vendor_invoices')
-        .select('*, project:projects(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
-        .eq('status', 'released')
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('payment_vouchers')
-        .select('*, vendor_invoice:vendor_invoices(po_id, purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name)))')
-        .order('created_at', { ascending: false }),
-      supabase.from('projects').select('id, name, status').order('name'),
-      supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
-    ]);
-    setInvoices(inv || []);
-    setVouchers(vouc || []);
-    setPoProjects(proj || []);
-    setPoVendors(vend || []);
-    setLoading(false);
-  }
+  const customWorkingTotalBase = customLines.reduce((s, l) => s + (parseFloat(l.baseAmount) || 0), 0);
+  const customWorkingTotalWht  = customLines.reduce((s, l) => {
+    const base = parseFloat(l.baseAmount) || 0;
+    return s + base * l.rate;
+  }, 0);
+
+  const appliedTotalWht: number | null =
+    whtMode === 'custom' && appliedCustomLines
+      ? +appliedCustomLines.reduce((s, l) => {
+          const base = parseFloat(l.baseAmount) || 0;
+          return s + base * l.rate;
+        }, 0).toFixed(2)
+      : whtMode === 'simple' && selectedWhtRate !== null
+        ? +(modalExclVat * selectedWhtRate).toFixed(2)
+        : null;
+
+  const modalNetPayable = appliedTotalWht !== null ? +(modalGross - appliedTotalWht).toFixed(2) : modalGross;
+
+  const canSubmit = !!bankAccount && (
+    (whtMode === 'simple' && selectedWhtRate !== null) ||
+    (whtMode === 'custom' && appliedCustomLines !== null)
+  );
+
+  // ── PO drill-down ───────────────────────────────────────────────────────────
 
   async function openPODrillDown(poId: string) {
     const { data } = await supabase
@@ -152,15 +281,16 @@ export default function PaymentQueue() {
     if (data) setSelectedPO(data as PurchaseOrder);
   }
 
+  // ── Voucher sequences ───────────────────────────────────────────────────────
+
   async function getNextVoucherNo(): Promise<string> {
-    const today = format(new Date(), 'yyyy-MM-dd');
+    const today    = format(new Date(), 'yyyy-MM-dd');
     const shortDate = format(new Date(), 'yyyyMMdd');
     const { data } = await supabase
       .from('voucher_sequences')
       .select('*')
       .eq('seq_date', today)
       .maybeSingle();
-
     let seq = 1;
     if (data) {
       seq = data.last_seq + 1;
@@ -170,6 +300,8 @@ export default function PaymentQueue() {
     }
     return `VCH-${format(new Date(), 'yyyy')}-${shortDate}-${String(seq).padStart(3, '0')}`;
   }
+
+  // ── Notifications ───────────────────────────────────────────────────────────
 
   async function insertPaymentNotifications(
     voucherId: string,
@@ -187,12 +319,12 @@ export default function PaymentQueue() {
       related_entity_id: string;
     }[] = [];
 
-    if (netPaid >= 1000000) {
-      const { data: managerProfile } = await supabase
+    if (netPaid >= 1_000_000) {
+      const { data: mgr } = await supabase
         .from('user_profiles').select('id').eq('role', 'accounts_manager').maybeSingle();
-      if (managerProfile) {
+      if (mgr) {
         notifications.push({
-          user_id: managerProfile.id,
+          user_id: mgr.id,
           title: 'Sign-off required',
           message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} requires your co-signature.`,
           type: 'warning',
@@ -202,13 +334,12 @@ export default function PaymentQueue() {
         });
       }
     }
-
-    if (netPaid >= 3000000) {
-      const { data: ceoProfile } = await supabase
+    if (netPaid >= 3_000_000) {
+      const { data: ceo } = await supabase
         .from('user_profiles').select('id').eq('role', 'ceo').maybeSingle();
-      if (ceoProfile) {
+      if (ceo) {
         notifications.push({
-          user_id: ceoProfile.id,
+          user_id: ceo.id,
           title: 'Large payment approved',
           message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} has been approved.`,
           type: 'info',
@@ -218,11 +349,12 @@ export default function PaymentQueue() {
         });
       }
     }
-
     if (notifications.length > 0) {
       await supabase.from('notifications').insert(notifications);
     }
   }
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
 
   async function issueVoucher() {
     if (!selectedInvoice || !user) return;
@@ -233,8 +365,10 @@ export default function PaymentQueue() {
 
     const voucherNo = await getNextVoucherNo();
     const po = (selectedInvoice as any).purchase_order;
-    const gross = selectedInvoice.invoice_amount_incl_vat || 0;
-    const exclVat = gross / 1.07;
+    const gross    = selectedInvoice.invoice_amount_incl_vat || 0;
+    const exclVat  = gross / 1.07;
+    const vendorName  = po?.vendor?.name ?? po?.supplier_name_raw ?? 'Unknown vendor';
+    const projectName = (selectedInvoice as any).project?.name ?? 'Unknown project';
 
     let totalWhtAmount = 0;
     if (whtMode === 'simple') {
@@ -247,8 +381,8 @@ export default function PaymentQueue() {
     }
 
     const netPaid = +(gross - totalWhtAmount).toFixed(2);
-    const requiresManager = netPaid >= 1000000;
-    const ceoPay = netPaid >= 3000000;
+    const requiresManager = netPaid >= 1_000_000;
+    const ceoPay = netPaid >= 3_000_000;
 
     const { data: voucherData, error } = await supabase
       .from('payment_vouchers')
@@ -270,9 +404,6 @@ export default function PaymentQueue() {
       .maybeSingle();
 
     if (!error && voucherData) {
-      const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? 'Unknown vendor';
-      const projectName = (selectedInvoice as any).project?.name ?? 'Unknown project';
-
       let whtLines: { voucher_id: string; base_amount: number; wht_rate: number; wht_amount: number }[];
       if (whtMode === 'simple') {
         whtLines = [{
@@ -286,15 +417,11 @@ export default function PaymentQueue() {
           .filter(l => parseFloat(l.baseAmount) > 0)
           .map(l => {
             const base = parseFloat(l.baseAmount);
-            return {
-              voucher_id: voucherData.id,
-              base_amount: base,
-              wht_rate: l.rate,
-              wht_amount: +(base * l.rate).toFixed(2),
-            };
+            return { voucher_id: voucherData.id, base_amount: base, wht_rate: l.rate, wht_amount: +(base * l.rate).toFixed(2) };
           });
       }
 
+      // Create draft check record (no check_no/date yet — filled by Banking Officer)
       await Promise.all([
         supabase.from('voucher_wht_lines').insert(whtLines),
         supabase.from('checks').insert({
@@ -306,7 +433,8 @@ export default function PaymentQueue() {
           amount: netPaid,
           status: 'draft',
         }),
-        supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', selectedInvoice.id),
+        // NOTE: vendor_invoices.status is NOT mutated here.
+        // It is moved to 'paid' ONLY when the Banking Officer issues the physical check.
         insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName),
       ]);
     }
@@ -333,7 +461,6 @@ export default function PaymentQueue() {
     if (!rejectingVoucher || !user || !rejectComment.trim()) return;
     setRejecting(true);
     try {
-      // Mark voucher rejected
       await supabase
         .from('payment_vouchers')
         .update({
@@ -343,7 +470,7 @@ export default function PaymentQueue() {
           rejected_at: new Date().toISOString(),
         })
         .eq('id', rejectingVoucher.id);
-      // Reset the linked vendor invoice back to 'released' so supervisor can re-issue
+      // Return invoice to released so Supervisor can re-issue
       if ((rejectingVoucher as any).vendor_invoice_id) {
         await supabase
           .from('vendor_invoices')
@@ -358,72 +485,647 @@ export default function PaymentQueue() {
     }
   }
 
-  const isSupervisor = profile?.role === 'accounts_supervisor';
-  const isManager = profile?.role === 'accounts_manager';
-  const isCEO = profile?.role === 'ceo';
+  // ── Banking Officer: Issue Check ────────────────────────────────────────────
 
-  const pendingManagerVouchers = vouchers.filter(v => v.status === 'pending_manager');
-  const approvedVouchers = vouchers.filter(v => v.status === 'approved');
-  const rejectedVouchers = vouchers.filter(v => v.status === 'rejected');
+  function openCheckModal(voucher: PaymentVoucher) {
+    setCheckModalVoucher(voucher);
+    setCheckNo('');
+    setCheckDate(new Date().toISOString().substring(0, 10));
+    setIssuingCheck(false);
+  }
 
-  // Invoices ≥ ฿1M that have not yet had a voucher issued (no voucher references them)
-  const voucherInvoiceIds = new Set(vouchers.map(v => (v as any).vendor_invoice_id).filter(Boolean));
-  const pendingHighValueInvoices = invoices.filter(inv => {
-    const invPo = (inv as any).purchase_order;
-    const invGross = inv.invoice_amount_incl_vat || 0;
-    const invWhtRate = invPo?.wht_rate ?? 0;
-    const invNetPayable = +(invGross - +(( invGross / 1.07) * invWhtRate).toFixed(2)).toFixed(2);
-    return invNetPayable >= 1000000 && !voucherInvoiceIds.has(inv.id);
-  });
+  function closeCheckModal() {
+    setCheckModalVoucher(null);
+    setCheckNo('');
+    setCheckDate('');
+  }
 
-  // Sort invoices: ≥฿1M first, then < ฿1M
-  const sortedInvoices = [...invoices].sort((a, b) => {
-    const netOf = (inv: VendorInvoice) => {
-      const po = (inv as any).purchase_order;
-      const gross = inv.invoice_amount_incl_vat || 0;
-      const wht = +(( gross / 1.07) * (po?.wht_rate ?? 0)).toFixed(2);
-      return +(gross - wht).toFixed(2);
-    };
-    const aNet = netOf(a);
-    const bNet = netOf(b);
-    const aHigh = aNet >= 1000000 ? 1 : 0;
-    const bHigh = bNet >= 1000000 ? 1 : 0;
-    if (aHigh !== bHigh) return bHigh - aHigh;
-    return bNet - aNet;
-  });
+  async function issueCheck() {
+    if (!checkModalVoucher || !user || !checkNo.trim() || !checkDate) return;
+    setIssuingCheck(true);
+    try {
+      const invoiceId = (checkModalVoucher as any).vendor_invoice?.id
+        ?? (checkModalVoucher as any).vendor_invoice_id;
 
-  // Live modal calculations
-  const modalGross = selectedInvoice?.invoice_amount_incl_vat ?? 0;
-  const modalExclVat = modalGross / 1.07;
+      await Promise.all([
+        // 1. Mark payment_voucher as issued
+        supabase
+          .from('payment_vouchers')
+          .update({ status: 'issued' })
+          .eq('id', checkModalVoucher.id),
+        // 2. Update checks record with check number, date, and issued status
+        supabase
+          .from('checks')
+          .update({
+            check_no: checkNo.trim(),
+            check_date: checkDate,
+            status: 'issued',
+            signed_by_supervisor: user.id,
+          })
+          .eq('voucher_id', checkModalVoucher.id),
+        // 3. Mark vendor_invoice as paid — THIS IS THE ONLY PLACE THIS HAPPENS
+        ...(invoiceId
+          ? [supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId)]
+          : []),
+      ]);
 
-  const customWorkingTotalBase = customLines.reduce((s, l) => s + (parseFloat(l.baseAmount) || 0), 0);
-  const customWorkingTotalWht = customLines.reduce((s, l) => {
-    const base = parseFloat(l.baseAmount) || 0;
-    return s + base * l.rate;
-  }, 0);
+      closeCheckModal();
+      loadData();
+    } finally {
+      setIssuingCheck(false);
+    }
+  }
 
-  const appliedTotalWht: number | null =
-    whtMode === 'custom' && appliedCustomLines
-      ? +appliedCustomLines.reduce((s, l) => {
-          const base = parseFloat(l.baseAmount) || 0;
-          return s + base * l.rate;
-        }, 0).toFixed(2)
-      : whtMode === 'simple' && selectedWhtRate !== null
-        ? +(modalExclVat * selectedWhtRate).toFixed(2)
-        : null;
+  // ── Bank Reconciliation: Mark Cleared ───────────────────────────────────────
 
-  const modalNetPayable = appliedTotalWht !== null ? +(modalGross - appliedTotalWht).toFixed(2) : modalGross;
+  function openClearModal(chk: Check) {
+    setMarkingCleared(chk);
+    setClearDate(new Date().toISOString().substring(0, 10));
+    setClearNote('');
+  }
 
-  const canSubmit = !!bankAccount && (
-    (whtMode === 'simple' && selectedWhtRate !== null) ||
-    (whtMode === 'custom' && appliedCustomLines !== null)
-  );
+  function closeClearModal() {
+    setMarkingCleared(null);
+    setClearDate('');
+    setClearNote('');
+  }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
+  async function markCleared() {
+    if (!markingCleared || !clearDate) return;
+    setSavingClear(true);
+    try {
+      await supabase
+        .from('checks')
+        .update({
+          status: 'cleared',
+          cleared_at: new Date(clearDate).toISOString(),
+          cleared_note: clearNote.trim() || null,
+        })
+        .eq('id', markingCleared.id);
+      closeClearModal();
+      loadData();
+    } finally {
+      setSavingClear(false);
+    }
+  }
+
+  // ── Render helpers ──────────────────────────────────────────────────────────
+
+  function VoucherCard({
+    voucher,
+    actionSlot,
+  }: {
+    voucher: PaymentVoucher;
+    actionSlot?: React.ReactNode;
+  }) {
+    const vPo = (voucher as any).vendor_invoice?.purchase_order;
+    const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+    const invoiceNo  = (voucher as any).vendor_invoice?.vendor_invoice_no ?? '—';
+    return (
+      <div className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          {vPo?.pss_po_no && (
+            <button
+              onClick={() => openPODrillDown(vPo.id)}
+              className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block"
+            >
+              {vPo.pss_po_no}
+            </button>
+          )}
+          <p className="text-sm font-semibold text-gray-800 truncate">{vendorName}</p>
+          <p className="text-xs text-gray-400">{voucher.voucher_no} · {invoiceNo} · {formatDate(voucher.voucher_date)}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="font-bold text-gray-800">{formatTHB(voucher.net_paid)}</span>
+          {actionSlot}
+        </div>
+      </div>
+    );
+  }
+
+  function InvoiceCard({
+    inv,
+    tag,
+    actionSlot,
+  }: {
+    inv: VendorInvoice;
+    tag?: React.ReactNode;
+    actionSlot?: React.ReactNode;
+  }) {
+    const po          = (inv as any).purchase_order;
+    const vendorName  = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
+    const projectShort = (inv as any).project?.name?.split('–')[0]?.trim() || '—';
+    const net = netPayable(inv);
+    return (
+      <div className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          {po?.pss_po_no && (
+            <button
+              onClick={() => openPODrillDown(po.id)}
+              className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block"
+            >
+              {po.pss_po_no}
+            </button>
+          )}
+          <p className="text-sm font-semibold text-gray-800 truncate">{vendorName}</p>
+          <p className="text-xs text-gray-400">{projectShort} · {inv.vendor_invoice_no || 'No invoice no.'}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="font-bold text-gray-800">{formatTHB(net)}</span>
+          {tag}
+          {actionSlot}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Loading state ───────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SUPERVISOR VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (isSupervisor) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Payment Queue</h1>
+          <p className="text-sm text-gray-500 mt-0.5">EVP-approved invoices — issue vouchers and track progress</p>
+        </div>
+
+        {/* A — Active: invoices awaiting voucher */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<CreditCard size={14} />}
+            title="Active — Issue Voucher"
+            count={supervisorQueue.length}
+            accent="green"
+          />
+          <div className="p-4 space-y-2">
+            {supervisorQueue.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">All invoices have vouchers in progress.</p>
+            ) : (
+              supervisorQueue.map(inv => {
+                const net = netPayable(inv);
+                const isHighValue = net >= 1_000_000;
+                return (
+                  <InvoiceCard
+                    key={inv.id}
+                    inv={inv}
+                    actionSlot={
+                      <button
+                        onClick={() => openModal(inv)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                          isHighValue
+                            ? 'bg-[#EF9F27]/10 border border-[#EF9F27]/40 text-[#C47F00] hover:bg-[#EF9F27]/20'
+                            : 'bg-[#0f1923] text-white hover:bg-[#1a2b3c]'
+                        }`}
+                      >
+                        <CreditCard size={12} />
+                        {isHighValue ? 'Submit for Co-Sign' : 'Issue Voucher'}
+                      </button>
+                    }
+                  />
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* B — In Progress: Awaiting Manager Co-Sign */}
+        {pendingManagerVouchers.length > 0 && (
+          <div className="border border-[#EF9F27]/30 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<Clock size={14} />}
+              title="In Progress — Awaiting Manager Co-Sign"
+              count={pendingManagerVouchers.length}
+              accent="amber"
+            />
+            <div className="p-4 space-y-2">
+              {pendingManagerVouchers.map(v => (
+                <VoucherCard
+                  key={v.id}
+                  voucher={v}
+                  actionSlot={
+                    <span className="text-xs text-[#EF9F27] font-medium bg-[#EF9F27]/10 px-2 py-0.5 rounded-full">
+                      Awaiting Co-Sign
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* C — In Progress: Awaiting Check Issuance */}
+        {approvedVouchers.length > 0 && (
+          <div className="border border-[#1D9E75]/30 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<CheckSquare size={14} />}
+              title="In Progress — Awaiting Check Issuance"
+              count={approvedVouchers.length}
+              accent="green"
+            />
+            <div className="p-4 space-y-2">
+              {approvedVouchers.map(v => (
+                <VoucherCard
+                  key={v.id}
+                  voucher={v}
+                  actionSlot={
+                    <span className="text-xs text-[#1D9E75] font-medium bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">
+                      Approved — Awaiting Banking
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Rejected vouchers */}
+        {rejectedVouchers.length > 0 && (
+          <div className="border border-[#E24B4A]/30 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<AlertTriangle size={14} />}
+              title={`${rejectedVouchers.length} Voucher${rejectedVouchers.length > 1 ? 's' : ''} Rejected by Manager`}
+              accent="red"
+            />
+            <div className="p-4 space-y-2">
+              {rejectedVouchers.map(v => {
+                const vPo = (v as any).vendor_invoice?.purchase_order;
+                return (
+                  <div key={v.id} className="bg-white rounded-md border border-[#E24B4A]/20 px-4 py-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        {vPo?.pss_po_no && (
+                          <button onClick={() => openPODrillDown(vPo.id)} className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block">
+                            {vPo.pss_po_no}
+                          </button>
+                        )}
+                        <p className="text-sm font-semibold text-gray-800">{v.voucher_no}</p>
+                        <p className="text-xs text-gray-500">{formatTHB(v.net_paid)} · {formatDate(v.voucher_date)}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs font-medium text-[#E24B4A] mb-0.5">Manager's comment</p>
+                        <p className="text-xs text-gray-700 max-w-xs text-right">{(v as any).rejection_comment || '—'}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-2">Invoice returned to queue — correct and re-issue.</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Voucher + Custom WHT modals */}
+        {renderIssueVoucherModal()}
+        {renderCustomWhtModal()}
+        {renderRejectModal()}
+        {selectedPO && (
+          <PODetailModal key={selectedPO.id} po={selectedPO} projects={poProjects} vendors={poVendors}
+            onClose={() => setSelectedPO(null)} onSuccess={() => { setSelectedPO(null); loadData(); }} />
+        )}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MANAGER VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (isManager || isCEO) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Payment Queue</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Payment pipeline visibility and co-sign authority</p>
+        </div>
+
+        {/* A — Active: Co-Sign queue */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<CheckSquare size={14} />}
+            title="Active — Vouchers Awaiting Co-Sign"
+            count={pendingManagerVouchers.length}
+            accent={pendingManagerVouchers.length > 0 ? 'amber' : 'gray'}
+          />
+          <div className="p-4 space-y-2">
+            {pendingManagerVouchers.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">No vouchers awaiting your co-signature.</p>
+            ) : (
+              pendingManagerVouchers.map(v => (
+                <VoucherCard
+                  key={v.id}
+                  voucher={v}
+                  actionSlot={
+                    isManager ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { setRejectingVoucher(v); setRejectComment(''); }}
+                          className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
+                        >
+                          <X size={12} />
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => approveVoucher(v.id)}
+                          className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
+                        >
+                          <CheckCircle size={12} />
+                          Co-sign
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-400 italic">Awaiting Manager</span>
+                    )
+                  }
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* B — In Progress: Awaiting Supervisor Voucher */}
+        {highValueNoVoucher.length > 0 && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<Clock size={14} />}
+              title="In Progress — Awaiting Supervisor Voucher"
+              count={highValueNoVoucher.length}
+              accent="gray"
+            />
+            <div className="p-4 space-y-2">
+              {highValueNoVoucher.map(inv => (
+                <InvoiceCard
+                  key={inv.id}
+                  inv={inv}
+                  tag={<span className="text-xs text-gray-400 italic">Awaiting Supervisor</span>}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* C — In Progress: Awaiting Check Issuance */}
+        {approvedVouchers.length > 0 && (
+          <div className="border border-[#1D9E75]/30 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<CreditCard size={14} />}
+              title="In Progress — Awaiting Check Issuance"
+              count={approvedVouchers.length}
+              accent="green"
+            />
+            <div className="p-4 space-y-2">
+              {approvedVouchers.map(v => (
+                <VoucherCard
+                  key={v.id}
+                  voucher={v}
+                  actionSlot={
+                    <span className="text-xs text-[#1D9E75] font-medium bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">
+                      Co-signed — Awaiting Banking
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {renderRejectModal()}
+        {selectedPO && (
+          <PODetailModal key={selectedPO.id} po={selectedPO} projects={poProjects} vendors={poVendors}
+            onClose={() => setSelectedPO(null)} onSuccess={() => { setSelectedPO(null); loadData(); }} />
+        )}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // BANKING OFFICER VIEW
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (isBanking) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Payment Queue</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Write and reconcile payment checks</p>
+        </div>
+
+        {/* A — Active: Issue Checks */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<CreditCard size={14} />}
+            title="Active — Issue Checks"
+            count={approvedVouchers.length}
+            accent={approvedVouchers.length > 0 ? 'green' : 'gray'}
+          />
+          <div className="p-4 space-y-2">
+            {approvedVouchers.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">No approved vouchers awaiting check issuance.</p>
+            ) : (
+              approvedVouchers.map(v => {
+                const vi  = (v as any).vendor_invoice;
+                const vPo = vi?.purchase_order;
+                const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                const invoiceNo  = vi?.vendor_invoice_no ?? '—';
+                const bankAcc = checks.find(c => c.voucher_id === v.id)?.bank_account ?? '—';
+                return (
+                  <div key={v.id} className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      {vPo?.pss_po_no && (
+                        <button
+                          onClick={() => openPODrillDown(vPo.id)}
+                          className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block"
+                        >
+                          {vPo.pss_po_no}
+                        </button>
+                      )}
+                      <p className="text-sm font-semibold text-gray-800 truncate">{vendorName}</p>
+                      <p className="text-xs text-gray-400">{v.voucher_no} · {invoiceNo}</p>
+                      <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                        <Building2 size={10} /> {bankAcc}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-bold text-gray-800">{formatTHB(v.net_paid)}</span>
+                      <button
+                        onClick={() => openCheckModal(v)}
+                        className="flex items-center gap-1.5 bg-[#0f1923] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#1a2b3c] transition-colors"
+                      >
+                        <CreditCard size={12} />
+                        Issue Check
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* B — In Progress: Pending Manager Co-Sign */}
+        {pendingManagerVouchers.length > 0 && (
+          <div className="border border-[#EF9F27]/30 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<Clock size={14} />}
+              title="In Progress — Pending Manager Co-Sign"
+              count={pendingManagerVouchers.length}
+              accent="amber"
+            />
+            <div className="p-4 space-y-2">
+              {pendingManagerVouchers.map(v => (
+                <VoucherCard
+                  key={v.id}
+                  voucher={v}
+                  actionSlot={
+                    <span className="text-xs text-[#EF9F27] font-medium bg-[#EF9F27]/10 px-2 py-0.5 rounded-full">
+                      Pending Co-Sign
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* C — In Progress: Pending Supervisor Voucher */}
+        {invoicesWithNoVoucher.length > 0 && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<Clock size={14} />}
+              title="In Progress — Pending Supervisor Voucher"
+              count={invoicesWithNoVoucher.length}
+              accent="gray"
+            />
+            <div className="p-4 space-y-2">
+              {invoicesWithNoVoucher.map(inv => (
+                <InvoiceCard
+                  key={inv.id}
+                  inv={inv}
+                  tag={<span className="text-xs text-gray-400 italic">Awaiting Voucher</span>}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bank Reconciliation — collapsible accordion */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setReconOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-gray-600">
+              <Building2 size={14} />
+              <span className="text-sm font-semibold">Bank Reconciliation</span>
+              {issuedChecks.length > 0 && (
+                <span className="text-xs font-bold bg-gray-400 text-white px-2 py-0.5 rounded-full">
+                  {issuedChecks.length} to clear
+                </span>
+              )}
+            </div>
+            <ChevronRight size={14} className={`text-gray-400 transition-transform ${reconOpen ? 'rotate-90' : ''}`} />
+          </button>
+
+          {reconOpen && (
+            <div className="divide-y divide-gray-100">
+              {/* Issued checks awaiting bank clearance */}
+              <div className="p-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  Checks Issued — Awaiting Bank Clearance ({issuedChecks.length})
+                </p>
+                {issuedChecks.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4">No checks awaiting clearance.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {issuedChecks.map(chk => {
+                      const v    = chk.payment_voucher;
+                      const vPo  = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-800">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              Check #{chk.check_no} · {formatDate(chk.check_date)} · {chk.bank_account}
+                            </p>
+                            <p className="text-xs text-gray-400">{v?.voucher_no}</p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="font-bold text-gray-800">{formatTHB(chk.amount)}</span>
+                            <button
+                              onClick={() => openClearModal(chk)}
+                              className="flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-blue-700 transition-colors"
+                            >
+                              <CheckCircle size={12} />
+                              Mark Cleared
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Cleared history */}
+              {clearedChecks.length > 0 && (
+                <div className="p-4">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Cleared — Bank Confirmed ({clearedChecks.length})
+                  </p>
+                  <div className="space-y-2">
+                    {clearedChecks.map(chk => {
+                      const v   = chk.payment_voucher;
+                      const vPo = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-gray-50 rounded-md border border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-700">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              Check #{chk.check_no} · Cleared {formatDate(chk.cleared_at)}
+                              {chk.cleared_note ? ` · ${chk.cleared_note}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-medium text-gray-600">{formatTHB(chk.amount)}</span>
+                            <span className="text-xs text-[#1D9E75] font-medium bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">Cleared</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Modals */}
+        {renderIssueCheckModal()}
+        {renderMarkClearedModal()}
+        {selectedPO && (
+          <PODetailModal key={selectedPO.id} po={selectedPO} projects={poProjects} vendors={poVendors}
+            onClose={() => setSelectedPO(null)} onSuccess={() => { setSelectedPO(null); loadData(); }} />
+        )}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // OTHER ROLES — read-only summary
+  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-5">
@@ -431,713 +1133,513 @@ export default function PaymentQueue() {
         <h1 className="text-xl font-bold text-gray-900">Payment Queue</h1>
         <p className="text-sm text-gray-500 mt-0.5">EVP-approved invoices ready for payment</p>
       </div>
-
-      {/* Manager sign-off queue — always visible to Manager/CEO */}
-      {(isManager || isCEO) && (
-        <div className={`border rounded-lg p-4 ${pendingManagerVouchers.length > 0 ? 'bg-[#EF9F27]/5 border-[#EF9F27]/30' : 'bg-gray-50 border-gray-200'}`}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={15} className={pendingManagerVouchers.length > 0 ? 'text-[#EF9F27]' : 'text-gray-400'} />
-              <span className={`text-sm font-semibold ${pendingManagerVouchers.length > 0 ? 'text-[#EF9F27]' : 'text-gray-500'}`}>
-                Manager Co-Sign Queue
-              </span>
-            </div>
-            {pendingManagerVouchers.length > 0 && (
-              <span className="bg-[#EF9F27] text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                {pendingManagerVouchers.length}
-              </span>
-            )}
-          </div>
-
-          {/* Active vouchers needing co-sign */}
-          {pendingManagerVouchers.length > 0 && (
-            <div className="space-y-2 mb-4">
-              {pendingManagerVouchers.map(v => {
-                const vPo = (v as any).vendor_invoice?.purchase_order;
-                return (
-                  <div key={v.id} className="bg-white rounded-md border border-[#EF9F27]/30 p-3 flex items-center justify-between">
-                    <div>
-                      {vPo?.pss_po_no && (
-                        <button
-                          onClick={() => openPODrillDown(vPo.id)}
-                          className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
-                        >
-                          {vPo.pss_po_no}
-                        </button>
-                      )}
-                      <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                      <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                      {isManager ? (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => { setRejectingVoucher(v); setRejectComment(''); }}
-                            className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
-                          >
-                            <X size={12} />
-                            Reject
-                          </button>
-                          <button
-                            onClick={() => approveVoucher(v.id)}
-                            className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] transition-colors"
-                          >
-                            <CheckCircle size={12} />
-                            Co-sign
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-gray-400 italic">Awaiting Chudapak's signature</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Invoices ≥ ฿1M awaiting voucher issuance by Supervisor */}
-          {pendingHighValueInvoices.length > 0 && (
-            <div>
-              {pendingManagerVouchers.length > 0 && (
-                <div className="border-t border-[#EF9F27]/20 my-3" />
-              )}
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                Awaiting Voucher Issuance — {pendingHighValueInvoices.length} invoice{pendingHighValueInvoices.length > 1 ? 's' : ''} ≥ ฿1,000,000
-              </p>
-              <div className="space-y-1.5">
-                {pendingHighValueInvoices.map(inv => {
-                  const po = (inv as any).purchase_order;
-                  const gross = inv.invoice_amount_incl_vat || 0;
-                  const whtRate = po?.wht_rate ?? 0;
-                  const net = +(gross - +(( gross / 1.07) * whtRate).toFixed(2)).toFixed(2);
-                  const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
-                  const projectShort = (inv as any).project?.name?.split('–')[0]?.trim() || '—';
-                  return (
-                    <div key={inv.id} className="bg-white rounded-md border border-gray-200 px-3 py-2.5 flex items-center justify-between">
-                      <div>
-                        {po?.pss_po_no && (
-                          <button
-                            onClick={() => openPODrillDown(po.id)}
-                            className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
-                          >
-                            {po.pss_po_no}
-                          </button>
-                        )}
-                        <p className="text-sm font-medium text-gray-800">{vendorName}</p>
-                        <p className="text-xs text-gray-400">{projectShort} · {inv.vendor_invoice_no || 'No invoice no.'}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-gray-700">{formatTHB(net)}</span>
-                        <span className="text-xs text-gray-400 italic">Awaiting Supervisor</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {pendingManagerVouchers.length === 0 && pendingHighValueInvoices.length === 0 && (
-            <div className="text-center py-4">
-              <p className="text-sm text-gray-400">No invoices requiring your co-signature.</p>
-              <p className="text-xs text-gray-400 mt-1">
-                Vouchers ≥ ฿1,000,000 issued by the Accounts Supervisor will appear here for your co-signature.
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* CEO visibility — approved vouchers awaiting check issuance by Banking Officer */}
-      {isCEO && approvedVouchers.length > 0 && (
-        <div className="bg-[#1D9E75]/5 border border-[#1D9E75]/30 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <CreditCard size={15} className="text-[#1D9E75]" />
-            <span className="text-sm font-semibold text-[#1D9E75]">Ready to Write Check</span>
-          </div>
-          <div className="space-y-2">
-            {approvedVouchers.map(v => {
-              const vPo = (v as any).vendor_invoice?.purchase_order;
-              return (
-                <div key={v.id} className="bg-white rounded-md border border-[#1D9E75]/20 p-3 flex items-center justify-between">
-                  <div>
-                    {vPo?.pss_po_no && (
-                      <button
-                        onClick={() => openPODrillDown(vPo.id)}
-                        className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 mb-0.5 block"
-                      >
-                        {vPo.pss_po_no}
-                      </button>
-                    )}
-                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                    <p className="text-xs text-gray-500">{formatDate(v.voucher_date)}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold text-gray-800">{formatTHB(v.net_paid)}</span>
-                    <span className="text-xs text-gray-400 italic">Awaiting Banking Officer</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Rejected vouchers banner — visible to Supervisor */}
-      {isSupervisor && rejectedVouchers.length > 0 && (
-        <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/30 rounded-lg p-4 space-y-2">
-          <div className="flex items-center gap-2 mb-1">
-            <AlertTriangle size={15} className="text-[#E24B4A]" />
-            <span className="text-sm font-semibold text-[#E24B4A]">
-              {rejectedVouchers.length} Voucher{rejectedVouchers.length > 1 ? 's' : ''} Rejected by Manager
-            </span>
-          </div>
-          {rejectedVouchers.map(v => {
-            const vPo = (v as any).vendor_invoice?.purchase_order;
-            return (
-              <div key={v.id} className="bg-white rounded-md border border-[#E24B4A]/20 px-4 py-3">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    {vPo?.pss_po_no && (
-                      <button
-                        onClick={() => openPODrillDown(vPo.id)}
-                        className="text-xs font-medium text-[#1D9E75] hover:underline underline-offset-2 mb-0.5 block"
-                      >
-                        {vPo.pss_po_no}
-                      </button>
-                    )}
-                    <p className="text-sm font-medium text-gray-800">{v.voucher_no}</p>
-                    <p className="text-xs text-gray-500">{formatTHB(v.net_paid)} · {formatDate(v.voucher_date)}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-xs font-medium text-[#E24B4A] mb-0.5">Manager's comment</p>
-                    <p className="text-xs text-gray-700 max-w-xs text-right">{(v as any).rejection_comment || '—'}</p>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  The invoice has been returned to your queue. Correct and re-issue the voucher below.
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Invoice Table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50/50 border-b border-gray-100">
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">PO No.</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Project</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Invoice No.</th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Gross</th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">WHT</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Net Payable</th>
-              <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Mgr Sign</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
-              {isSupervisor && <th className="px-4 py-3" />}
             </tr>
           </thead>
           <tbody>
-            {(() => {
-              const subThresholdInvoices = sortedInvoices.filter(inv => {
+            {invoicesWithNoVoucher.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
+              </tr>
+            ) : (
+              invoicesWithNoVoucher.map(inv => {
                 const po = (inv as any).purchase_order;
-                const gross = inv.invoice_amount_incl_vat || 0;
-                const net = +(gross - +((gross / 1.07) * (po?.wht_rate ?? 0)).toFixed(2)).toFixed(2);
-                return net < 1000000;
-              });
-              if (subThresholdInvoices.length === 0) return (
-                <tr>
-                  <td colSpan={10} className="text-center py-12 text-gray-400 text-sm">No invoices ready for payment</td>
-                </tr>
-              );
-              return subThresholdInvoices.map(inv => {
-              const invPo = (inv as any).purchase_order;
-              const invGross = inv.invoice_amount_incl_vat || 0;
-              const invWhtRate = invPo?.wht_rate ?? 0;
-              const invExclVat = invGross / 1.07;
-              const invWhtAmt = +(invExclVat * invWhtRate).toFixed(2);
-              const invNetPayable = +(invGross - invWhtAmt).toFixed(2);
-              const invVendorName = invPo?.vendor?.name ?? invPo?.supplier_name_raw ?? '—';
-              return (
-                <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                  <td className="px-4 py-3">
-                    {invPo?.pss_po_no ? (
-                      <button
-                        onClick={() => openPODrillDown(invPo.id)}
-                        className="text-xs font-medium text-[#1D9E75] hover:text-[#178a64] hover:underline underline-offset-2 text-left"
-                      >
-                        {invPo.pss_po_no}
-                      </button>
-                    ) : (
-                      <span className="text-xs text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-800">{invVendorName}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate">
-                    {(inv as any).project?.name?.split('–')[0]?.trim() || '—'}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-gray-600">{inv.vendor_invoice_no || '—'}</td>
-                  <td className="px-4 py-3 text-right text-sm text-gray-700">{formatTHB(invGross)}</td>
-                  <td className="px-4 py-3 text-right text-xs">
-                    {invWhtAmt > 0 ? (
-                      <span className="text-[#E24B4A]">
-                        ({formatTHB(invWhtAmt)})&nbsp;
-                        <span className="text-gray-400">{(invWhtRate * 100).toFixed(0)}%</span>
-                      </span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">{formatTHB(invNetPayable)}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="text-xs text-gray-300">—</span>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1D9E75] bg-[#1D9E75]/8 px-2 py-0.5 rounded-full whitespace-nowrap">
-                      <CheckCircle size={11} />
-                      Supervisor Approved
-                    </span>
-                  </td>
-                  {isSupervisor && (
+                const vendorName = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
+                return (
+                  <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-4 py-3 text-xs font-medium text-[#1D9E75]">{po?.pss_po_no || '—'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-800">{vendorName}</td>
+                    <td className="px-4 py-3 text-xs text-gray-600">{inv.vendor_invoice_no || '—'}</td>
+                    <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">{formatTHB(netPayable(inv))}</td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => openModal(inv)}
-                        className="flex items-center gap-1.5 bg-[#0f1923] text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-[#1a2b3c] transition-colors"
-                      >
-                        <CreditCard size={12} />
-                        Issue Check
-                      </button>
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1D9E75] bg-[#1D9E75]/8 px-2 py-0.5 rounded-full">
+                        <CheckCircle size={11} />Released
+                      </span>
                     </td>
-                  )}
-                </tr>
-              );
-            });
-            })()}
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
-
-
-      {/* Custom WHT Breakdown Modal (z-60, sits above the voucher modal) */}
-      {customModalOpen && selectedInvoice && (() => {
-        const remaining = +(modalExclVat - customWorkingTotalBase).toFixed(2);
-        const isBalanced = Math.abs(remaining) < 1;
-        const isOver = remaining < -1;
-        return (
-          <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-800">Custom WHT Breakdown</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">Enter the ex-VAT taxable base for each applicable rate</p>
-                </div>
-                <button onClick={cancelCustomModal}><X size={16} className="text-gray-400" /></button>
-              </div>
-
-              {/* Unallocated balance helper */}
-              <div className={`mx-6 mt-4 rounded-lg px-4 py-3 flex items-start gap-3 transition-colors ${
-                isBalanced ? 'bg-[#1D9E75]/8 border border-[#1D9E75]/25' :
-                isOver ? 'bg-[#E24B4A]/5 border border-[#E24B4A]/25' :
-                'bg-gray-50 border border-gray-100'
-              }`}>
-                <Info size={14} className={`mt-0.5 shrink-0 ${isBalanced ? 'text-[#1D9E75]' : isOver ? 'text-[#E24B4A]' : 'text-gray-400'}`} />
-                <div className="text-xs space-y-1 w-full">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Invoice Ex-VAT total</span>
-                    <span className="font-medium text-gray-700">{formatTHB(modalExclVat)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Allocated so far</span>
-                    <span className="font-medium text-gray-700">{formatTHB(customWorkingTotalBase)}</span>
-                  </div>
-                  <div className={`flex justify-between font-semibold border-t pt-1 mt-0.5 ${
-                    isBalanced ? 'border-[#1D9E75]/20 text-[#1D9E75]' :
-                    isOver ? 'border-[#E24B4A]/20 text-[#E24B4A]' :
-                    'border-gray-200 text-gray-800'
-                  }`}>
-                    <span>Remaining unallocated</span>
-                    <span>{formatTHB(remaining)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-6 pt-4 pb-2">
-                {/* Column headers */}
-                <div className="grid grid-cols-3 gap-3 mb-2">
-                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Amount (Ex-VAT ฿)</span>
-                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-center">WHT Rate</span>
-                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-right">WHT Total</span>
-                </div>
-
-                {/* Rate rows */}
-                <div className="space-y-2.5">
-                  {customLines.map((line, i) => {
-                    const base = parseFloat(line.baseAmount) || 0;
-                    const whtTotal = +(base * line.rate).toFixed(2);
-                    return (
-                      <div key={line.rate} className="grid grid-cols-3 gap-3 items-center">
-                        <input
-                          type="number"
-                          min="0"
-                          value={line.baseAmount}
-                          onChange={e => {
-                            const next = [...customLines];
-                            next[i] = { ...next[i], baseAmount: e.target.value };
-                            setCustomLines(next);
-                          }}
-                          placeholder="0"
-                          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-right tabular-nums"
-                        />
-                        <div className="flex justify-center">
-                          <span className="bg-gray-100 text-gray-700 text-xs font-bold px-3 py-1.5 rounded-full">
-                            {line.label}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className={`text-sm font-semibold tabular-nums ${whtTotal > 0 ? 'text-[#E24B4A]' : 'text-gray-200'}`}>
-                            {whtTotal > 0 ? formatTHB(whtTotal) : '—'}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Total WHT row */}
-                <div className="grid grid-cols-3 gap-3 items-center border-t border-gray-150 mt-4 pt-3">
-                  <span className="text-xs font-bold text-gray-700 col-span-2">Total WHT withheld</span>
-                  <div className="text-right">
-                    <span className={`text-sm font-bold tabular-nums ${customWorkingTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-300'}`}>
-                      {customWorkingTotalWht > 0 ? formatTHB(customWorkingTotalWht) : '—'}
-                    </span>
-                  </div>
-                </div>
-
-                {isOver && (
-                  <p className="text-xs text-[#E24B4A] font-medium mt-2">
-                    Allocated base exceeds ex-VAT total by {formatTHB(Math.abs(remaining))}.
-                  </p>
-                )}
-              </div>
-
-              <div className="px-6 py-4 flex gap-3">
-                <button type="button" onClick={cancelCustomModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={applyCustomModal}
-                  disabled={customWorkingTotalBase === 0 || isOver}
-                  className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  Apply
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Issue Payment Voucher Modal */}
-      {selectedInvoice && (() => {
-        const modalPo = (selectedInvoice as any).purchase_order;
-        const modalVendorName = modalPo?.vendor?.name ?? modalPo?.supplier_name_raw ?? '—';
-        const vendorBankName: string | null = modalPo?.vendor?.bank_name ?? null;
-        const vendorBankAccNo: string | null = modalPo?.vendor?.bank_account_no ?? null;
-        const vendorBankAccName: string | null = modalPo?.vendor?.bank_account_name ?? null;
-        const hasBankDetails = vendorBankName || vendorBankAccNo;
-
-        return (
-          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <h2 className="text-base font-semibold text-gray-800">Issue Payment Voucher</h2>
-                <button onClick={closeModal}><X size={16} className="text-gray-400" /></button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                {/* Summary panel */}
-                <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
-
-                  {/* Vendor row — name + bank details below */}
-                  <div className="flex justify-between items-start">
-                    <span className="text-gray-500 shrink-0">Vendor</span>
-                    <div className="text-right ml-4">
-                      <p className="font-medium text-gray-800">{modalVendorName}</p>
-                      {hasBankDetails && (
-                        <p className="text-xs text-gray-400 mt-0.5 leading-snug">
-                          {[vendorBankName, vendorBankAccNo].filter(Boolean).join(' · ')}
-                          {vendorBankAccName ? ` (${vendorBankAccName})` : ''}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Invoice No.</span>
-                    <span>{selectedInvoice.vendor_invoice_no || '—'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Gross Amount</span>
-                    <span>{formatTHB(modalGross)}</span>
-                  </div>
-
-                  {/* Interactive WHT row */}
-                  <div ref={pickerRef} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setPickerOpen(o => !o)}
-                      className={`w-full flex justify-between items-center rounded-md px-2 py-1.5 -mx-2 transition-colors text-sm ${
-                        appliedTotalWht === null
-                          ? 'bg-[#E24B4A]/8 hover:bg-[#E24B4A]/12'
-                          : 'hover:bg-gray-100'
-                      }`}
-                    >
-                      <span className={appliedTotalWht === null ? 'text-[#E24B4A] font-medium' : 'text-gray-500'}>
-                        {whtMode === 'custom'
-                          ? 'WHT Custom'
-                          : `WHT${selectedWhtRate !== null ? ` ${(selectedWhtRate * 100).toFixed(0)}%` : ''}`
-                        }
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <span className={
-                          appliedTotalWht === null
-                            ? 'text-xs italic text-[#E24B4A]'
-                            : appliedTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-400'
-                        }>
-                          {appliedTotalWht === null
-                            ? 'tap to select'
-                            : appliedTotalWht > 0 ? `(${formatTHB(appliedTotalWht)})` : '฿0'
-                          }
-                        </span>
-                        {whtMode === 'custom' && appliedCustomLines && (
-                          <button
-                            type="button"
-                            onClick={e => { e.stopPropagation(); openCustomModal(); }}
-                            className="text-xs text-[#1D9E75] underline underline-offset-2 ml-1 hover:text-[#178a64]"
-                          >
-                            Edit
-                          </button>
-                        )}
-                        <ChevronDown
-                          size={13}
-                          className={`text-gray-400 transition-transform ${pickerOpen ? 'rotate-180' : ''}`}
-                        />
-                      </div>
-                    </button>
-
-                    {/* WHT dropdown */}
-                    {pickerOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 overflow-hidden">
-                        <div className="px-4 pt-3 pb-1.5">
-                          <p className="text-xs font-semibold text-gray-700">Fill Applicable WHT Amount</p>
-                        </div>
-                        <div className="px-2 pb-1">
-                          {SIMPLE_WHT_OPTIONS.map(opt => {
-                            const optWhtAmt = +(modalExclVat * opt.rate).toFixed(2);
-                            const isSelected = whtMode === 'simple' && selectedWhtRate === opt.rate;
-                            return (
-                              <button
-                                key={opt.rate}
-                                type="button"
-                                onClick={() => {
-                                  setWhtMode('simple');
-                                  setSelectedWhtRate(opt.rate);
-                                  setAppliedCustomLines(null);
-                                  setPickerOpen(false);
-                                }}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
-                                  isSelected
-                                    ? 'bg-[#1D9E75]/10 text-[#1D9E75]'
-                                    : 'hover:bg-gray-50 text-gray-700'
-                                }`}
-                              >
-                                <span className="font-semibold w-8 text-left shrink-0">
-                                  {(opt.rate * 100).toFixed(0)}%
-                                </span>
-                                <span className="flex-1 text-left text-xs text-gray-500 pl-1">
-                                  {opt.label}
-                                </span>
-                                <span className={`font-medium text-right ${isSelected ? 'text-[#1D9E75]' : 'text-gray-700'}`}>
-                                  {opt.rate === 0 ? '฿0' : formatTHB(optWhtAmt)}
-                                </span>
-                                {isSelected && <CheckCircle size={13} className="text-[#1D9E75] ml-2 shrink-0" />}
-                              </button>
-                            );
-                          })}
-
-                          {/* Custom / mixed-rate option */}
-                          <button
-                            type="button"
-                            onClick={openCustomModal}
-                            className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
-                              whtMode === 'custom'
-                                ? 'bg-[#1D9E75]/10 text-[#1D9E75]'
-                                : 'hover:bg-gray-50 text-gray-700'
-                            }`}
-                          >
-                            <span className="font-semibold w-8 text-left shrink-0 text-xs">Mix</span>
-                            <span className="flex-1 text-left text-xs text-gray-500 pl-1">
-                              Custom — split by rate
-                            </span>
-                            <span className={`font-medium text-right text-xs ${whtMode === 'custom' ? 'text-[#1D9E75]' : 'text-gray-500'}`}>
-                              {whtMode === 'custom' && appliedCustomLines
-                                ? formatTHB(appliedTotalWht ?? 0)
-                                : 'Enter amounts →'
-                              }
-                            </span>
-                            {whtMode === 'custom' && <CheckCircle size={13} className="text-[#1D9E75] ml-2 shrink-0" />}
-                          </button>
-                        </div>
-                        <div className="border-t border-gray-100 mx-3 mb-2.5 pt-2 flex justify-between items-center">
-                          <span className="text-xs font-semibold text-gray-600">Net Payable</span>
-                          <span className="text-sm font-bold text-gray-900">
-                            {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
-                    <span className="font-semibold text-gray-700">Net Payable</span>
-                    <span className={`font-bold text-base ${appliedTotalWht !== null ? 'text-gray-900' : 'text-gray-400'}`}>
-                      {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
-                    </span>
-                  </div>
-                </div>
-
-                {appliedTotalWht === null && (
-                  <p className="text-xs text-[#E24B4A] font-medium -mt-2">
-                    WHT selection is required before issuing this voucher.
-                  </p>
-                )}
-
-                {appliedTotalWht !== null && modalNetPayable >= 1000000 && (
-                  <div className="flex items-start gap-2 p-3 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg">
-                    <AlertTriangle size={14} className="text-[#EF9F27] shrink-0 mt-0.5" />
-                    <p className="text-xs text-[#EF9F27] font-medium">
-                      Payment ≥ ฿1,000,000 requires Accounts Manager co-signature
-                    </p>
-                  </div>
-                )}
-
-                {appliedTotalWht !== null && modalNetPayable >= 3000000 && (
-                  <div className="flex items-start gap-2 p-3 bg-[#E24B4A]/10 border border-[#E24B4A]/30 rounded-lg">
-                    <AlertTriangle size={14} className="text-[#E24B4A] shrink-0 mt-0.5" />
-                    <p className="text-xs text-[#E24B4A] font-medium">
-                      Payment ≥ ฿3,000,000 – CEO will be notified
-                    </p>
-                  </div>
-                )}
-
-                {/* Bank account selector */}
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-xs font-medium text-gray-600 mb-1 block">Bank Account</label>
-                    <select
-                      value={bankAccount}
-                      onChange={e => setBankAccount(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
-                    >
-                      <option value="KBank PSS Main">KBank PSS Main</option>
-                      <option value="SCB PSS Project">SCB PSS Project</option>
-                    </select>
-                  </div>
-                  <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg">
-                    <span className="text-xs text-blue-600">Check number and date will be entered by the Banking Officer when the physical check is written.</span>
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-1">
-                  <button type="button" onClick={closeModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={issueVoucher}
-                    disabled={submitting || !canSubmit}
-                    className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {submitting ? 'Processing...' : 'Issue Voucher'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Manager Reject Voucher Modal */}
-      {rejectingVoucher && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <AlertTriangle size={16} className="text-[#E24B4A]" />
-                <h3 className="text-sm font-semibold text-gray-900">Reject Payment Voucher</h3>
-              </div>
-              <button onClick={() => setRejectingVoucher(null)} className="text-gray-400 hover:text-gray-600">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="bg-gray-50 rounded-lg px-4 py-3">
-                <p className="text-xs text-gray-500 mb-0.5">Voucher</p>
-                <p className="text-sm font-semibold text-gray-900">{rejectingVoucher.voucher_no}</p>
-                <p className="text-sm text-gray-700">{formatTHB(rejectingVoucher.net_paid)}</p>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Reason for rejection <span className="text-[#E24B4A]">*</span>
-                </label>
-                <textarea
-                  value={rejectComment}
-                  onChange={e => setRejectComment(e.target.value)}
-                  placeholder="Explain what needs to be corrected before resubmission..."
-                  rows={4}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 focus:border-[#E24B4A] resize-none"
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  The Accounts Supervisor will see this comment and can re-issue the voucher after corrections.
-                </p>
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button
-                  onClick={() => setRejectingVoucher(null)}
-                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={rejectVoucher}
-                  disabled={rejecting || !rejectComment.trim()}
-                  className="flex-1 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c93f3e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {rejecting ? 'Rejecting...' : 'Reject Voucher'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PO Drill-Down Modal */}
       {selectedPO && (
-        <PODetailModal
-          key={selectedPO.id}
-          po={selectedPO}
-          projects={poProjects}
-          vendors={poVendors}
-          onClose={() => setSelectedPO(null)}
-          onSuccess={() => { setSelectedPO(null); loadData(); }}
-        />
+        <PODetailModal key={selectedPO.id} po={selectedPO} projects={poProjects} vendors={poVendors}
+          onClose={() => setSelectedPO(null)} onSuccess={() => { setSelectedPO(null); loadData(); }} />
       )}
     </div>
   );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MODAL RENDERERS (shared across views)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function renderIssueVoucherModal() {
+    if (!selectedInvoice) return null;
+    const modalPo = (selectedInvoice as any).purchase_order;
+    const modalVendorName = modalPo?.vendor?.name ?? modalPo?.supplier_name_raw ?? '—';
+    const vendorBankName: string | null = modalPo?.vendor?.bank_name ?? null;
+    const vendorBankAccNo: string | null = modalPo?.vendor?.bank_account_no ?? null;
+    const vendorBankAccName: string | null = modalPo?.vendor?.bank_account_name ?? null;
+    const hasBankDetails = vendorBankName || vendorBankAccNo;
+    const isOver = customLines.reduce((s, l) => s + (parseFloat(l.baseAmount) || 0), 0) > modalExclVat + 1;
+
+    return (
+      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h2 className="text-base font-semibold text-gray-800">Issue Payment Voucher</h2>
+            <button onClick={closeModal}><X size={16} className="text-gray-400" /></button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+              <div className="flex justify-between items-start">
+                <span className="text-gray-500 shrink-0">Vendor</span>
+                <div className="text-right ml-4">
+                  <p className="font-medium text-gray-800">{modalVendorName}</p>
+                  {hasBankDetails && (
+                    <p className="text-xs text-gray-400 mt-0.5 leading-snug">
+                      {[vendorBankName, vendorBankAccNo].filter(Boolean).join(' · ')}
+                      {vendorBankAccName ? ` (${vendorBankAccName})` : ''}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Invoice No.</span>
+                <span>{selectedInvoice.vendor_invoice_no || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Gross Amount</span>
+                <span>{formatTHB(modalGross)}</span>
+              </div>
+
+              {/* WHT picker */}
+              <div ref={pickerRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(o => !o)}
+                  className={`w-full flex justify-between items-center rounded-md px-2 py-1.5 -mx-2 transition-colors text-sm ${
+                    appliedTotalWht === null ? 'bg-[#E24B4A]/8 hover:bg-[#E24B4A]/12' : 'hover:bg-gray-100'
+                  }`}
+                >
+                  <span className={appliedTotalWht === null ? 'text-[#E24B4A] font-medium' : 'text-gray-500'}>
+                    {whtMode === 'custom' ? 'WHT Custom' : `WHT${selectedWhtRate !== null ? ` ${(selectedWhtRate * 100).toFixed(0)}%` : ''}`}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={appliedTotalWht === null ? 'text-xs italic text-[#E24B4A]' : appliedTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-400'}>
+                      {appliedTotalWht === null ? 'tap to select' : appliedTotalWht > 0 ? `(${formatTHB(appliedTotalWht)})` : '฿0'}
+                    </span>
+                    {whtMode === 'custom' && appliedCustomLines && (
+                      <button type="button" onClick={e => { e.stopPropagation(); openCustomModal(); }} className="text-xs text-[#1D9E75] underline underline-offset-2 ml-1">Edit</button>
+                    )}
+                    <ChevronDown size={13} className={`text-gray-400 transition-transform ${pickerOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                </button>
+                {pickerOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 overflow-hidden">
+                    <div className="px-4 pt-3 pb-1.5">
+                      <p className="text-xs font-semibold text-gray-700">Fill Applicable WHT Amount</p>
+                    </div>
+                    <div className="px-2 pb-1">
+                      {SIMPLE_WHT_OPTIONS.map(opt => {
+                        const optWhtAmt = +(modalExclVat * opt.rate).toFixed(2);
+                        const isSelected = whtMode === 'simple' && selectedWhtRate === opt.rate;
+                        return (
+                          <button key={opt.rate} type="button"
+                            onClick={() => { setWhtMode('simple'); setSelectedWhtRate(opt.rate); setAppliedCustomLines(null); setPickerOpen(false); }}
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${isSelected ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'hover:bg-gray-50 text-gray-700'}`}
+                          >
+                            <span className="font-semibold w-8 text-left shrink-0">{(opt.rate * 100).toFixed(0)}%</span>
+                            <span className="flex-1 text-left text-xs text-gray-500 pl-1">{opt.label}</span>
+                            <span className={`font-medium text-right ${isSelected ? 'text-[#1D9E75]' : 'text-gray-700'}`}>
+                              {opt.rate === 0 ? '฿0' : formatTHB(optWhtAmt)}
+                            </span>
+                            {isSelected && <CheckCircle size={13} className="text-[#1D9E75] ml-2 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                      <button type="button" onClick={openCustomModal}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${whtMode === 'custom' ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'hover:bg-gray-50 text-gray-700'}`}
+                      >
+                        <span className="font-semibold w-8 text-left shrink-0 text-xs">Mix</span>
+                        <span className="flex-1 text-left text-xs text-gray-500 pl-1">Custom — split by rate</span>
+                        <span className={`font-medium text-right text-xs ${whtMode === 'custom' ? 'text-[#1D9E75]' : 'text-gray-500'}`}>
+                          {whtMode === 'custom' && appliedCustomLines ? formatTHB(appliedTotalWht ?? 0) : 'Enter amounts →'}
+                        </span>
+                        {whtMode === 'custom' && <CheckCircle size={13} className="text-[#1D9E75] ml-2 shrink-0" />}
+                      </button>
+                    </div>
+                    <div className="border-t border-gray-100 mx-3 mb-2.5 pt-2 flex justify-between items-center">
+                      <span className="text-xs font-semibold text-gray-600">Net Payable</span>
+                      <span className="text-sm font-bold text-gray-900">
+                        {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
+                <span className="font-semibold text-gray-700">Net Payable</span>
+                <span className={`font-bold text-base ${appliedTotalWht !== null ? 'text-gray-900' : 'text-gray-400'}`}>
+                  {appliedTotalWht !== null ? formatTHB(modalNetPayable) : '—'}
+                </span>
+              </div>
+            </div>
+
+            {appliedTotalWht === null && (
+              <p className="text-xs text-[#E24B4A] font-medium -mt-2">WHT selection is required before issuing this voucher.</p>
+            )}
+            {appliedTotalWht !== null && modalNetPayable >= 1_000_000 && (
+              <div className="flex items-start gap-2 p-3 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg">
+                <AlertTriangle size={14} className="text-[#EF9F27] shrink-0 mt-0.5" />
+                <p className="text-xs text-[#EF9F27] font-medium">Payment ≥ ฿1,000,000 requires Accounts Manager co-signature</p>
+              </div>
+            )}
+            {appliedTotalWht !== null && modalNetPayable >= 3_000_000 && (
+              <div className="flex items-start gap-2 p-3 bg-[#E24B4A]/10 border border-[#E24B4A]/30 rounded-lg">
+                <AlertTriangle size={14} className="text-[#E24B4A] shrink-0 mt-0.5" />
+                <p className="text-xs text-[#E24B4A] font-medium">Payment ≥ ฿3,000,000 – CEO will be notified</p>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Bank Account</label>
+                <select
+                  value={bankAccount}
+                  onChange={e => setBankAccount(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
+                >
+                  <option value="KBank PSS Main">KBank PSS Main</option>
+                  <option value="SCB PSS Project">SCB PSS Project</option>
+                </select>
+              </div>
+              <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                <span className="text-xs text-blue-600">Check number and date will be entered by the Banking Officer when the physical check is written.</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button type="button" onClick={closeModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button type="button" onClick={issueVoucher} disabled={submitting || !canSubmit}
+                className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {submitting ? 'Processing...' : 'Issue Voucher'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCustomWhtModal() {
+    if (!customModalOpen || !selectedInvoice) return null;
+    const remaining = +(modalExclVat - customWorkingTotalBase).toFixed(2);
+    const isBalanced = Math.abs(remaining) < 1;
+    const isOver = remaining < -1;
+    return (
+      <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div>
+              <h2 className="text-base font-semibold text-gray-800">Custom WHT Breakdown</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Enter the ex-VAT taxable base for each applicable rate</p>
+            </div>
+            <button onClick={cancelCustomModal}><X size={16} className="text-gray-400" /></button>
+          </div>
+          <div className={`mx-6 mt-4 rounded-lg px-4 py-3 flex items-start gap-3 transition-colors ${
+            isBalanced ? 'bg-[#1D9E75]/8 border border-[#1D9E75]/25' :
+            isOver ? 'bg-[#E24B4A]/5 border border-[#E24B4A]/25' :
+            'bg-gray-50 border border-gray-100'
+          }`}>
+            <Info size={14} className={`mt-0.5 shrink-0 ${isBalanced ? 'text-[#1D9E75]' : isOver ? 'text-[#E24B4A]' : 'text-gray-400'}`} />
+            <div className="text-xs space-y-1 w-full">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Invoice Ex-VAT total</span>
+                <span className="font-medium text-gray-700">{formatTHB(modalExclVat)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Allocated so far</span>
+                <span className="font-medium text-gray-700">{formatTHB(customWorkingTotalBase)}</span>
+              </div>
+              <div className={`flex justify-between font-semibold border-t pt-1 mt-0.5 ${
+                isBalanced ? 'border-[#1D9E75]/20 text-[#1D9E75]' :
+                isOver ? 'border-[#E24B4A]/20 text-[#E24B4A]' :
+                'border-gray-200 text-gray-800'
+              }`}>
+                <span>Remaining unallocated</span>
+                <span>{formatTHB(remaining)}</span>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 pt-4 pb-2">
+            <div className="grid grid-cols-3 gap-3 mb-2">
+              <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Amount (Ex-VAT ฿)</span>
+              <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-center">WHT Rate</span>
+              <span className="text-xs font-medium text-gray-400 uppercase tracking-wide text-right">WHT Total</span>
+            </div>
+            <div className="space-y-2.5">
+              {customLines.map((line, i) => {
+                const base = parseFloat(line.baseAmount) || 0;
+                const whtTotal = +(base * line.rate).toFixed(2);
+                return (
+                  <div key={line.rate} className="grid grid-cols-3 gap-3 items-center">
+                    <input type="number" min="0" value={line.baseAmount}
+                      onChange={e => { const next = [...customLines]; next[i] = { ...next[i], baseAmount: e.target.value }; setCustomLines(next); }}
+                      placeholder="0"
+                      className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-right tabular-nums"
+                    />
+                    <div className="flex justify-center">
+                      <span className="bg-gray-100 text-gray-700 text-xs font-bold px-3 py-1.5 rounded-full">{line.label}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-sm font-semibold tabular-nums ${whtTotal > 0 ? 'text-[#E24B4A]' : 'text-gray-200'}`}>
+                        {whtTotal > 0 ? formatTHB(whtTotal) : '—'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="grid grid-cols-3 gap-3 items-center border-t border-gray-150 mt-4 pt-3">
+              <span className="text-xs font-bold text-gray-700 col-span-2">Total WHT withheld</span>
+              <div className="text-right">
+                <span className={`text-sm font-bold tabular-nums ${customWorkingTotalWht > 0 ? 'text-[#E24B4A]' : 'text-gray-300'}`}>
+                  {customWorkingTotalWht > 0 ? formatTHB(customWorkingTotalWht) : '—'}
+                </span>
+              </div>
+            </div>
+            {isOver && <p className="text-xs text-[#E24B4A] font-medium mt-2">Allocated base exceeds ex-VAT total by {formatTHB(Math.abs(remaining))}.</p>}
+          </div>
+          <div className="px-6 py-4 flex gap-3">
+            <button type="button" onClick={cancelCustomModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+            <button type="button" onClick={applyCustomModal} disabled={customWorkingTotalBase === 0 || isOver}
+              className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderRejectModal() {
+    if (!rejectingVoucher) return null;
+    return (
+      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} className="text-[#E24B4A]" />
+              <h3 className="text-sm font-semibold text-gray-900">Reject Payment Voucher</h3>
+            </div>
+            <button onClick={() => setRejectingVoucher(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          <div className="px-6 py-5 space-y-4">
+            <div className="bg-gray-50 rounded-lg px-4 py-3">
+              <p className="text-xs text-gray-500 mb-0.5">Voucher</p>
+              <p className="text-sm font-semibold text-gray-900">{rejectingVoucher.voucher_no}</p>
+              <p className="text-sm text-gray-700">{formatTHB(rejectingVoucher.net_paid)}</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Reason for rejection <span className="text-[#E24B4A]">*</span>
+              </label>
+              <textarea
+                value={rejectComment}
+                onChange={e => setRejectComment(e.target.value)}
+                placeholder="Explain what needs to be corrected before resubmission..."
+                rows={4}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 focus:border-[#E24B4A] resize-none"
+              />
+              <p className="text-xs text-gray-400 mt-1">The Accounts Supervisor will see this comment and can re-issue the voucher after corrections.</p>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setRejectingVoucher(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={rejectVoucher} disabled={rejecting || !rejectComment.trim()}
+                className="flex-1 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c93f3e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {rejecting ? 'Rejecting...' : 'Reject Voucher'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderIssueCheckModal() {
+    if (!checkModalVoucher) return null;
+    const vi  = (checkModalVoucher as any).vendor_invoice;
+    const vPo = vi?.purchase_order;
+    const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+    const invoiceNo  = vi?.vendor_invoice_no ?? '—';
+    const bankAcc = checks.find(c => c.voucher_id === checkModalVoucher.id)?.bank_account ?? 'KBank PSS Main';
+    const canIssue = checkNo.trim().length > 0 && checkDate.length > 0;
+    return (
+      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <CreditCard size={16} className="text-[#0f1923]" />
+              <h3 className="text-sm font-semibold text-gray-900">Issue Check</h3>
+            </div>
+            <button onClick={closeCheckModal} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          <div className="px-6 py-5 space-y-4">
+            {/* Payment summary */}
+            <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Payee</span>
+                <span className="font-medium text-gray-800">{vendorName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Invoice No.</span>
+                <span className="text-gray-700">{invoiceNo}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Voucher No.</span>
+                <span className="text-gray-700">{checkModalVoucher.voucher_no}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Bank Account</span>
+                <span className="text-gray-700">{bankAcc}</span>
+              </div>
+              <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
+                <span className="font-semibold text-gray-700">Net Payable</span>
+                <span className="font-bold text-base text-gray-900">{formatTHB(checkModalVoucher.net_paid)}</span>
+              </div>
+            </div>
+
+            {/* Check number */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Check Number <span className="text-[#E24B4A]">*</span>
+              </label>
+              <input
+                type="text"
+                value={checkNo}
+                onChange={e => setCheckNo(e.target.value)}
+                placeholder="e.g. 0012345"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 font-mono"
+              />
+            </div>
+
+            {/* Check date */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Check Date <span className="text-[#E24B4A]">*</span>
+              </label>
+              <input
+                type="date"
+                value={checkDate}
+                onChange={e => setCheckDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+              />
+            </div>
+
+            <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+              <AlertTriangle size={13} className="text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700">
+                This action will mark the invoice as <strong>Paid</strong> and is irreversible. Ensure the check details are correct before confirming.
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={closeCheckModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={issueCheck} disabled={issuingCheck || !canIssue}
+                className="flex-1 bg-[#0f1923] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {issuingCheck ? 'Processing...' : 'Confirm & Issue Check'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderMarkClearedModal() {
+    if (!markingCleared) return null;
+    const v    = markingCleared.payment_voucher;
+    const vPo  = (v as any)?.vendor_invoice?.purchase_order;
+    const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+    return (
+      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <CheckCircle size={16} className="text-blue-600" />
+              <h3 className="text-sm font-semibold text-gray-900">Mark Check as Cleared</h3>
+            </div>
+            <button onClick={closeClearModal} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          <div className="px-6 py-5 space-y-4">
+            <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Payee</span>
+                <span className="font-medium text-gray-800">{vendorName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Check No.</span>
+                <span className="text-gray-700 font-mono">{markingCleared.check_no}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Check Date</span>
+                <span className="text-gray-700">{formatDate(markingCleared.check_date)}</span>
+              </div>
+              <div className="flex justify-between border-t border-gray-200 pt-2">
+                <span className="font-semibold text-gray-700">Amount</span>
+                <span className="font-bold text-gray-900">{formatTHB(markingCleared.amount)}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                Bank Clearing Date <span className="text-[#E24B4A]">*</span>
+              </label>
+              <input
+                type="date"
+                value={clearDate}
+                onChange={e => setClearDate(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">Notes (optional)</label>
+              <input
+                type="text"
+                value={clearNote}
+                onChange={e => setClearNote(e.target.value)}
+                placeholder="e.g. Bank statement ref 2026-05"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={closeClearModal} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button onClick={markCleared} disabled={savingClear || !clearDate}
+                className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {savingClear ? 'Saving...' : 'Confirm Cleared'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
