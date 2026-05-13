@@ -81,7 +81,7 @@ function SplashScreen({ onDone }: { onDone: () => void }) {
     >
       <video
         ref={videoRef}
-        src="/PssO Startup.mp4"
+        src="/PssO_Startup.mp4"
         autoPlay
         muted
         playsInline
