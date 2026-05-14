@@ -42,6 +42,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [activeRevisionId, setActiveRevisionId] = useState<string | null>(null);
   const [activeRevisionPo, setActiveRevisionPo] = useState<PurchaseOrder | null>(null);
   const [activeRevisionActorMap, setActiveRevisionActorMap] = useState<Map<string, string>>(new Map());
+  const [viewingRevision, setViewingRevision] = useState(false);
   const [commercialDraftPo, setCommercialDraftPo] = useState<PurchaseOrder | null>(null);
   const [amendError, setAmendError] = useState<string | null>(null);
   const [creatingRevision, setCreatingRevision] = useState(false);
@@ -251,13 +252,24 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
     setMode('amend_commercial');
   }
 
-  const supplierName = (po.vendor as Entity | undefined)?.name
-    ?? vendors.find(v => v.id === po.vendor_id)?.name
-    ?? po.supplier_name_raw
+  // Which PO to actually display — parent or its active revision
+  const displayPo = viewingRevision && activeRevisionPo ? activeRevisionPo : po;
+  const displayActorMap = viewingRevision && activeRevisionPo ? activeRevisionActorMap : auditActorMap;
+
+  function revisionRoleLabel(status: string): string {
+    if (status === 'draft_revision') return 'Procurement / Cost Controller';
+    if (status === 'pending_revision_approval' || status === 'pending_evp') return 'EVP';
+    if (status === 'pending_ceo') return 'CEO';
+    return status.replace(/_/g, ' ');
+  }
+
+  const supplierName = (displayPo.vendor as Entity | undefined)?.name
+    ?? vendors.find(v => v.id === displayPo.vendor_id)?.name
+    ?? displayPo.supplier_name_raw
     ?? '—';
 
-  const projectName = (po.project as Project | undefined)?.name
-    ?? projects.find(p => p.id === po.project_id)?.name
+  const projectName = (displayPo.project as Project | undefined)?.name
+    ?? projects.find(p => p.id === displayPo.project_id)?.name
     ?? '—';
 
   // ── Commercial amendment wizard ──────────────────────────────────────────────
@@ -293,29 +305,45 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
           {/* Header */}
           <div className="px-6 pt-4 pb-3 border-b border-gray-100 shrink-0 space-y-3">
+            {/* Back breadcrumb when viewing the revision */}
+            {viewingRevision && (
+              <button
+                onClick={() => setViewingRevision(false)}
+                className="flex items-center gap-1 text-xs text-[#1D9E75] hover:text-[#178a63] transition-colors -mb-1"
+              >
+                <span className="text-base leading-none">←</span>
+                Back to {po.pss_po_no ?? 'original PO'}
+              </button>
+            )}
+
             {/* Row 1: title + actions */}
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2.5 flex-wrap">
                   <h2 className="text-base font-semibold text-gray-900">
-                    {po.pss_po_no ?? <span className="italic text-gray-400 font-normal text-sm">No PSS No. yet</span>}
+                    {displayPo.pss_po_no ?? <span className="italic text-gray-400 font-normal text-sm">No PSS No. yet</span>}
                   </h2>
-                  <Badge label={po.status.replace(/_/g, ' ')} variant={statusVariant(po.status)} />
-                  {po.status === 'pending_cc' && (
+                  <Badge label={displayPo.status.replace(/_/g, ' ')} variant={statusVariant(displayPo.status)} />
+                  {displayPo.status === 'pending_cc' && (
                     <span className="text-xs text-[#EF9F27] bg-[#EF9F27]/10 px-2 py-0.5 rounded-full font-medium">
                       Awaiting approval
                     </span>
                   )}
-                  {po.version > 1 && (
+                  {displayPo.version > 1 && (
                     <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium">
-                      v{po.version}
+                      v{displayPo.version}
+                    </span>
+                  )}
+                  {viewingRevision && (
+                    <span className="text-xs text-[#EF9F27] bg-[#EF9F27]/10 px-2 py-0.5 rounded-full font-medium">
+                      Amendment
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-gray-400 mt-0.5">{projectName}</p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {canEdit && (
+                {canEdit && !viewingRevision && (
                   <button
                     onClick={() => setMode('edit')}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
@@ -324,7 +352,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
                     Edit PO
                   </button>
                 )}
-                {canAmend && (
+                {canAmend && !viewingRevision && (
                   <button
                     onClick={() => setMode('amend_choice')}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
@@ -339,8 +367,8 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               </div>
             </div>
 
-            {/* Row 2: workflow timeline */}
-            <WorkflowTimeline po={po} auditActorMap={auditActorMap} />
+            {/* Row 2: workflow timeline — shows the relevant PO's path */}
+            <WorkflowTimeline po={displayPo} auditActorMap={displayActorMap} />
           </div>
 
           {loading ? (
@@ -354,29 +382,29 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               {/* ── LEFT: PO details (scrollable) ─────────────────────────── */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 lg:border-r lg:border-gray-100">
 
-                {/* Active revision — amendment progress card */}
-                {isIssued && activeRevisionPo && (
-                  <div className="border border-[#EF9F27]/40 rounded-xl bg-[#FFF9F0] overflow-hidden">
-                    <div className="flex items-center gap-2 px-4 pt-3 pb-1">
-                      <GitBranch size={13} className="text-[#EF9F27] shrink-0" />
-                      <span className="text-xs font-semibold text-[#92650a]">
-                        Amendment in progress
-                        <span className="ml-1.5 text-[10px] font-medium text-[#EF9F27] bg-[#EF9F27]/15 px-1.5 py-0.5 rounded-full">
-                          v{activeRevisionPo.version}
-                        </span>
-                      </span>
-                      <span className="ml-auto text-[10px] text-[#92650a]/70">
-                        {activeRevisionPo.status.replace(/_/g, ' ')}
-                      </span>
-                    </div>
-                    <div className="px-3 pb-3">
-                      <WorkflowTimeline po={activeRevisionPo} auditActorMap={activeRevisionActorMap} />
-                    </div>
-                    <div className="border-t border-[#EF9F27]/20 px-4 py-2 bg-[#EF9F27]/5">
-                      <p className="text-[10px] text-[#92650a]/70">
-                        Commercial edits on this PO are locked until the amendment is resolved (approved, voided, or cancelled).
+                {/* Active revision warning — shows who holds the ball */}
+                {isIssued && activeRevisionPo && !viewingRevision && (
+                  <div className="flex items-start gap-2.5 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
+                    <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-[#92650a] mb-0.5">
+                        Commercial amendment in progress
+                        <span className="ml-1.5 font-normal text-[#EF9F27]">(v{activeRevisionPo.version})</span>
+                      </p>
+                      <p className="text-xs text-[#92650a]">
+                        Current status: Awaiting{' '}
+                        <span className="font-semibold">{revisionRoleLabel(activeRevisionPo.status)}</span>
+                      </p>
+                      <p className="text-[10px] text-[#92650a]/70 mt-0.5">
+                        Commercial edits are locked until the amendment is resolved.
                       </p>
                     </div>
+                    <button
+                      onClick={() => setViewingRevision(true)}
+                      className="shrink-0 text-[10px] font-semibold text-[#EF9F27] bg-white border border-[#EF9F27]/40 px-2.5 py-1.5 rounded-lg hover:bg-[#EF9F27]/10 transition-colors whitespace-nowrap"
+                    >
+                      View Active Amendment
+                    </button>
                   </div>
                 )}
 
