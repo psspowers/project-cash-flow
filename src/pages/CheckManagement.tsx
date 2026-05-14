@@ -160,6 +160,7 @@ export default function CheckManagement() {
   const [issueTarget, setIssueTarget] = useState<PendingVoucher | null>(null);
   const [issueCheckNo, setIssueCheckNo] = useState('');
   const [issueCheckDate, setIssueCheckDate] = useState('');
+  const [issueCheckBankAccount, setIssueCheckBankAccount] = useState('KBank PSS Main');
   const [issuing, setIssuing] = useState(false);
 
   // Mark cleared modal
@@ -252,6 +253,14 @@ export default function CheckManagement() {
     setIssueTarget(v);
     setIssueCheckNo('');
     setIssueCheckDate(format(new Date(), 'yyyy-MM-dd'));
+    setIssueCheckBankAccount(v.bank_account ?? 'KBank PSS Main');
+  }
+
+  function closeIssue() {
+    setIssueTarget(null);
+    setIssueCheckNo('');
+    setIssueCheckDate('');
+    setIssueCheckBankAccount('KBank PSS Main');
   }
 
   async function submitIssue() {
@@ -261,14 +270,20 @@ export default function CheckManagement() {
       await Promise.all([
         supabase
           .from('checks')
-          .update({ check_no: issueCheckNo.trim(), check_date: issueCheckDate, status: 'issued' })
+          .update({
+            check_no: issueCheckNo.trim(),
+            check_date: issueCheckDate,
+            bank_account: issueCheckBankAccount,
+            status: 'issued',
+            signed_by_supervisor: user.id,
+          })
           .eq('voucher_id', issueTarget.id),
         supabase
           .from('payment_vouchers')
           .update({ status: 'issued' })
           .eq('id', issueTarget.id),
       ]);
-      setIssueTarget(null);
+      closeIssue();
       await loadData();
     } finally {
       setIssuing(false);
@@ -505,7 +520,14 @@ export default function CheckManagement() {
       </div>
 
       {/* ── Issue Check Modal ── */}
-      {issueTarget && (
+      {issueTarget && (() => {
+        const isOnline = issueCheckBankAccount === 'Online - KBank';
+        const refLabel = isOnline ? 'Transaction Number' : 'Check Number';
+        const refPlaceholder = isOnline ? 'e.g. TXN20260514001234567' : 'e.g. 1234567';
+        const dateLabel = isOnline ? 'Transaction Date' : 'Check Date';
+        const modalTitle = isOnline ? 'Record Online Transfer' : 'Issue Check';
+        const confirmLabel = isOnline ? 'Confirm & Transfer' : 'Confirm & Issue';
+        return (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#0f1923] rounded-2xl border border-white/10 w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
@@ -514,14 +536,11 @@ export default function CheckManagement() {
                   <CreditCard size={16} className="text-amber-400" />
                 </div>
                 <div>
-                  <h2 className="text-white font-semibold text-sm">Issue Check</h2>
+                  <h2 className="text-white font-semibold text-sm">{modalTitle}</h2>
                   <p className="text-gray-400 text-xs">{issueTarget.voucher_no}</p>
                 </div>
               </div>
-              <button
-                onClick={() => setIssueTarget(null)}
-                className="text-gray-500 hover:text-white transition-colors"
-              >
+              <button onClick={closeIssue} className="text-gray-500 hover:text-white transition-colors">
                 <X size={18} />
               </button>
             </div>
@@ -537,10 +556,6 @@ export default function CheckManagement() {
                   <FileText size={12} />
                   <span>{poNo(issueTarget)} · {projectName(issueTarget)}</span>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-gray-400">
-                  <Banknote size={12} />
-                  <span>{bankDetails(issueTarget)}</span>
-                </div>
                 <div className="pt-1 border-t border-white/5 flex items-center justify-between">
                   <span className="text-xs text-gray-400">Net Amount</span>
                   <span className="text-lg font-bold text-white">{formatTHB(issueTarget.net_paid)}</span>
@@ -553,25 +568,41 @@ export default function CheckManagement() {
                 )}
               </div>
 
-              {/* Check Number */}
+              {/* Payment Method / Bank Account */}
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                  <span className="flex items-center gap-1.5"><Hash size={12} /> Check Number</span>
+                  <span className="flex items-center gap-1.5"><Banknote size={12} /> Payment Method / Bank</span>
+                </label>
+                <select
+                  value={issueCheckBankAccount}
+                  onChange={e => { setIssueCheckBankAccount(e.target.value); setIssueCheckNo(''); }}
+                  className="w-full bg-[#131f2e] border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500/50 appearance-none"
+                >
+                  <option value="KBank PSS Main">KBank PSS Main — Check</option>
+                  <option value="SCB PSS Project">SCB PSS Project — Check</option>
+                  <option value="Online - KBank">Online - KBank (Transfer)</option>
+                </select>
+              </div>
+
+              {/* Check / Transaction Number */}
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                  <span className="flex items-center gap-1.5"><Hash size={12} /> {refLabel}</span>
                 </label>
                 <input
                   type="text"
                   value={issueCheckNo}
                   onChange={e => setIssueCheckNo(e.target.value)}
-                  placeholder="e.g. 1234567"
+                  placeholder={refPlaceholder}
                   className="w-full bg-[#131f2e] border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-amber-500/50 font-mono"
                   autoFocus
                 />
               </div>
 
-              {/* Check Date */}
+              {/* Check / Transaction Date */}
               <div>
                 <label className="block text-xs font-medium text-gray-300 mb-1.5">
-                  <span className="flex items-center gap-1.5"><Calendar size={12} /> Check Date</span>
+                  <span className="flex items-center gap-1.5"><Calendar size={12} /> {dateLabel}</span>
                 </label>
                 <input
                   type="date"
@@ -584,7 +615,7 @@ export default function CheckManagement() {
 
             <div className="px-6 pb-5 flex gap-3">
               <button
-                onClick={() => setIssueTarget(null)}
+                onClick={closeIssue}
                 className="flex-1 px-4 py-2 rounded-lg border border-white/10 text-gray-300 text-sm hover:bg-white/5 transition-colors"
               >
                 Cancel
@@ -597,13 +628,14 @@ export default function CheckManagement() {
                 {issuing ? (
                   <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
                 ) : (
-                  <><CheckCircle2 size={15} /> Confirm & Issue</>
+                  <><CheckCircle2 size={15} /> {confirmLabel}</>
                 )}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── Mark Cleared Modal ── */}
       {clearTarget && (
