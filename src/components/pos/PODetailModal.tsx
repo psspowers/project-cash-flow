@@ -40,6 +40,8 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [approvedBy, setApprovedBy] = useState<AuditProfile | null>(null);
   const [rejectedBy, setRejectedBy] = useState<AuditProfile | null>(null);
   const [activeRevisionId, setActiveRevisionId] = useState<string | null>(null);
+  const [activeRevisionPo, setActiveRevisionPo] = useState<PurchaseOrder | null>(null);
+  const [activeRevisionActorMap, setActiveRevisionActorMap] = useState<Map<string, string>>(new Map());
   const [commercialDraftPo, setCommercialDraftPo] = useState<PurchaseOrder | null>(null);
   const [amendError, setAmendError] = useState<string | null>(null);
   const [creatingRevision, setCreatingRevision] = useState(false);
@@ -64,14 +66,43 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
     setMilestones((milestonesRes.data as POMilestone[]) ?? []);
     setPayments((paymentsRes.data as POSimplePayment[]) ?? []);
 
-    // Check for active revision child POs (lock detection)
+    // Check for active revision child POs (lock detection) — fetch full PO for timeline
     const { data: revisions } = await supabase
       .from('purchase_orders')
-      .select('id, status')
+      .select('*')
       .eq('parent_po_id', po.id)
-      .not('status', 'in', '(voided,cancelled)');
+      .not('status', 'in', '(voided,cancelled)')
+      .order('version', { ascending: false })
+      .limit(1);
 
-    setActiveRevisionId(revisions && revisions.length > 0 ? revisions[0].id : null);
+    const revPo = revisions && revisions.length > 0 ? (revisions[0] as PurchaseOrder) : null;
+    setActiveRevisionId(revPo ? revPo.id : null);
+    setActiveRevisionPo(revPo);
+
+    // Fetch audit log for the revision PO so we can show its timeline with actor names
+    if (revPo) {
+      const { data: revAuditRows } = await supabase
+        .from('po_audit_log')
+        .select('to_status, actor_id')
+        .eq('po_id', revPo.id)
+        .order('created_at', { ascending: true });
+      const revLogs = (revAuditRows as Pick<POAuditLog, 'to_status' | 'actor_id'>[] | null) ?? [];
+      const revActorIds = Array.from(new Set(revLogs.map(r => r.actor_id).filter(Boolean)));
+      let revNameMap = new Map<string, string>();
+      if (revActorIds.length > 0) {
+        const { data: revProfiles } = await supabase
+          .from('user_profiles')
+          .select('id, full_name')
+          .in('id', revActorIds);
+        revNameMap = new Map((revProfiles as AuditProfile[] ?? []).map(p => [p.id, p.full_name]));
+      }
+      const revActorMap = new Map<string, string>();
+      for (const row of revLogs) {
+        const name = revNameMap.get(row.actor_id);
+        if (name) revActorMap.set(row.to_status, name);
+      }
+      setActiveRevisionActorMap(revActorMap);
+    }
 
     // Fetch audit log to build per-step actor map
     const { data: auditRows } = await supabase
@@ -323,13 +354,29 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               {/* ── LEFT: PO details (scrollable) ─────────────────────────── */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 lg:border-r lg:border-gray-100">
 
-                {/* Active revision warning */}
-                {isIssued && activeRevisionId && (
-                  <div className="flex items-start gap-2 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
-                    <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
-                    <p className="text-xs text-[#92650a]">
-                      A commercial amendment is currently in progress. Commercial edits are locked until the active revision is resolved (approved, voided, or cancelled).
-                    </p>
+                {/* Active revision — amendment progress card */}
+                {isIssued && activeRevisionPo && (
+                  <div className="border border-[#EF9F27]/40 rounded-xl bg-[#FFF9F0] overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 pt-3 pb-1">
+                      <GitBranch size={13} className="text-[#EF9F27] shrink-0" />
+                      <span className="text-xs font-semibold text-[#92650a]">
+                        Amendment in progress
+                        <span className="ml-1.5 text-[10px] font-medium text-[#EF9F27] bg-[#EF9F27]/15 px-1.5 py-0.5 rounded-full">
+                          v{activeRevisionPo.version}
+                        </span>
+                      </span>
+                      <span className="ml-auto text-[10px] text-[#92650a]/70">
+                        {activeRevisionPo.status.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div className="px-3 pb-3">
+                      <WorkflowTimeline po={activeRevisionPo} auditActorMap={activeRevisionActorMap} />
+                    </div>
+                    <div className="border-t border-[#EF9F27]/20 px-4 py-2 bg-[#EF9F27]/5">
+                      <p className="text-[10px] text-[#92650a]/70">
+                        Commercial edits on this PO are locked until the amendment is resolved (approved, voided, or cancelled).
+                      </p>
+                    </div>
                   </div>
                 )}
 
