@@ -10,6 +10,7 @@ import {
   projectStatusGroup,
   PROJECT_STATUS_LABELS,
   fmtTHBCompact,
+  fmtTHB,
 } from '../types';
 import Badge, { statusVariant } from '../components/ui/Badge';
 
@@ -846,7 +847,7 @@ function NewProjectModal({ clients: initialClients, onClose, onSaved }: NewProje
             />
             {errors.contractExcl && <p className="text-xs text-[#E24B4A] mt-1">{errors.contractExcl}</p>}
             {contractIncl > 0 && (
-              <p className="text-xs text-gray-400 mt-1">incl VAT 7%: ฿{contractIncl.toLocaleString('en-US', { maximumFractionDigits: 0 })}</p>
+              <p className="text-xs text-gray-400 mt-1">incl VAT 7%: {fmtTHB(contractIncl)}</p>
             )}
           </div>
 

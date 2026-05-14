@@ -3,7 +3,7 @@ import { format, parseISO } from 'date-fns';
 export function formatTHB(amount: number | null | undefined): string {
   if (amount === null || amount === undefined) return '฿0';
   const abs = Math.abs(amount);
-  const formatted = '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const formatted = '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return amount < 0 ? '-' + formatted : formatted;
 }
 

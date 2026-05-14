@@ -557,7 +557,7 @@ export function projectStatusGroup(status: ProjectStatus): 'estimation' | 'budge
 export function fmtTHB(n: number | null | undefined): string {
   if (n == null) return '฿0';
   const abs = Math.abs(n);
-  const formatted = '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const formatted = '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return n < 0 ? '-' + formatted : formatted;
 }
 
@@ -567,5 +567,5 @@ export function fmtTHBCompact(n: number | null | undefined): string {
   const sign = n < 0 ? '-' : '';
   if (abs >= 1_000_000) return sign + '฿' + (abs / 1_000_000).toFixed(1) + 'M';
   if (abs >= 1_000) return sign + '฿' + (abs / 1_000).toFixed(0) + 'K';
-  return sign + '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  return sign + '฿' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
