@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, CreditCard as Edit2, Clock, CheckCircle, XCircle, AlertTriangle, GitBranch } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { PurchaseOrder, Project, Entity, POMilestone, POSimplePayment, COST_CATEGORY_LABELS, fmtTHB } from '../../types';
+import { PurchaseOrder, Project, Entity, POMilestone, POSimplePayment, POAuditLog, COST_CATEGORY_LABELS, fmtTHB } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { hasRole, PROCUREMENT_WRITE_ROLES } from '../../config/roles';
 import Badge, { statusVariant } from '../ui/Badge';
@@ -11,6 +11,7 @@ import AmendmentChoiceModal from './AmendmentChoiceModal';
 import NonCommercialEditModal from './NonCommercialEditModal';
 import { logPOAction } from '../../services/workflow';
 import CommentThread from '../ui/CommentThread';
+import WorkflowTimeline from './WorkflowTimeline';
 
 interface Props {
   po: PurchaseOrder;
@@ -42,6 +43,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [commercialDraftPo, setCommercialDraftPo] = useState<PurchaseOrder | null>(null);
   const [amendError, setAmendError] = useState<string | null>(null);
   const [creatingRevision, setCreatingRevision] = useState(false);
+  const [auditActorMap, setAuditActorMap] = useState<Map<string, string>>(new Map());
 
   const isIssued = ISSUED_STATUSES.has(po.status);
   const canEdit = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) &&
@@ -71,18 +73,49 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
     setActiveRevisionId(revisions && revisions.length > 0 ? revisions[0].id : null);
 
-    // Load audit trail profiles
-    const ids = [po.submitted_by, po.approved_by, po.rejected_by].filter(Boolean) as string[];
-    if (ids.length > 0) {
+    // Fetch audit log to build per-step actor map
+    const { data: auditRows } = await supabase
+      .from('po_audit_log')
+      .select('to_status, actor_id')
+      .eq('po_id', po.id)
+      .order('created_at', { ascending: true });
+
+    const auditLogs = (auditRows as Pick<POAuditLog, 'to_status' | 'actor_id'>[] | null) ?? [];
+
+    // Collect all unique actor IDs (audit log + direct PO fields)
+    const allActorIds = Array.from(new Set([
+      ...auditLogs.map(r => r.actor_id),
+      po.submitted_by,
+      po.approved_by,
+      po.rejected_by,
+    ].filter(Boolean) as string[]));
+
+    let profileNameMap = new Map<string, string>();
+    if (allActorIds.length > 0) {
       const { data: profiles } = await supabase
         .from('user_profiles')
         .select('id, full_name')
-        .in('id', ids);
-      const profileMap = new Map((profiles as AuditProfile[] ?? []).map(p => [p.id, p]));
-      setSubmittedBy(po.submitted_by ? (profileMap.get(po.submitted_by) ?? null) : null);
-      setApprovedBy(po.approved_by ? (profileMap.get(po.approved_by) ?? null) : null);
-      setRejectedBy(po.rejected_by ? (profileMap.get(po.rejected_by) ?? null) : null);
+        .in('id', allActorIds);
+      profileNameMap = new Map((profiles as AuditProfile[] ?? []).map(p => [p.id, p.full_name]));
     }
+
+    // Map to_status → actor full_name (last entry wins for each status)
+    const actorMap = new Map<string, string>();
+    for (const row of auditLogs) {
+      const name = profileNameMap.get(row.actor_id);
+      if (name) actorMap.set(row.to_status, name);
+    }
+    setAuditActorMap(actorMap);
+
+    const profileMap = new Map((
+      allActorIds
+        .map(id => ({ id, full_name: profileNameMap.get(id) ?? '' }))
+        .filter(p => p.full_name)
+    ).map(p => [p.id, p as AuditProfile]));
+
+    setSubmittedBy(po.submitted_by ? (profileMap.get(po.submitted_by) ?? null) : null);
+    setApprovedBy(po.approved_by ? (profileMap.get(po.approved_by) ?? null) : null);
+    setRejectedBy(po.rejected_by ? (profileMap.get(po.rejected_by) ?? null) : null);
     setLoading(false);
   }
 
@@ -228,49 +261,55 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
         <div className="bg-white rounded-xl w-full max-w-5xl border border-gray-200 my-4 flex flex-col" style={{ maxHeight: 'calc(100vh - 2rem)' }}>
 
           {/* Header */}
-          <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-            <div>
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-base font-semibold text-gray-900">
-                  {po.pss_po_no ?? <span className="italic text-gray-400 font-normal text-sm">No PSS No. yet</span>}
-                </h2>
-                <Badge label={po.status.replace(/_/g, ' ')} variant={statusVariant(po.status)} />
-                {po.status === 'pending_cc' && (
-                  <span className="text-xs text-[#EF9F27] bg-[#EF9F27]/10 px-2 py-0.5 rounded-full font-medium">
-                    Awaiting approval
-                  </span>
-                )}
-                {po.version > 1 && (
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium">
-                    v{po.version}
-                  </span>
-                )}
+          <div className="px-6 pt-4 pb-3 border-b border-gray-100 shrink-0 space-y-3">
+            {/* Row 1: title + actions */}
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h2 className="text-base font-semibold text-gray-900">
+                    {po.pss_po_no ?? <span className="italic text-gray-400 font-normal text-sm">No PSS No. yet</span>}
+                  </h2>
+                  <Badge label={po.status.replace(/_/g, ' ')} variant={statusVariant(po.status)} />
+                  {po.status === 'pending_cc' && (
+                    <span className="text-xs text-[#EF9F27] bg-[#EF9F27]/10 px-2 py-0.5 rounded-full font-medium">
+                      Awaiting approval
+                    </span>
+                  )}
+                  {po.version > 1 && (
+                    <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full font-medium">
+                      v{po.version}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">{projectName}</p>
               </div>
-              <p className="text-xs text-gray-400 mt-0.5">{projectName}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 ml-4">
-              {canEdit && (
-                <button
-                  onClick={() => setMode('edit')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
-                >
-                  <Edit2 size={12} />
-                  Edit PO
+              <div className="flex items-center gap-2 shrink-0">
+                {canEdit && (
+                  <button
+                    onClick={() => setMode('edit')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
+                  >
+                    <Edit2 size={12} />
+                    Edit PO
+                  </button>
+                )}
+                {canAmend && (
+                  <button
+                    onClick={() => setMode('amend_choice')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
+                  >
+                    <GitBranch size={12} />
+                    Amend PO
+                  </button>
+                )}
+                <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+                  <X size={16} />
                 </button>
-              )}
-              {canAmend && (
-                <button
-                  onClick={() => setMode('amend_choice')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f1923] text-white text-xs font-medium rounded-lg hover:bg-[#1a2b3c] transition-colors"
-                >
-                  <GitBranch size={12} />
-                  Amend PO
-                </button>
-              )}
-              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={16} />
-              </button>
+              </div>
             </div>
+
+            {/* Row 2: workflow timeline */}
+            <WorkflowTimeline po={po} auditActorMap={auditActorMap} />
           </div>
 
           {loading ? (
