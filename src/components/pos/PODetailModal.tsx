@@ -43,6 +43,7 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [activeRevisionPo, setActiveRevisionPo] = useState<PurchaseOrder | null>(null);
   const [activeRevisionActorMap, setActiveRevisionActorMap] = useState<Map<string, string>>(new Map());
   const [viewingRevision, setViewingRevision] = useState(false);
+  const [submittingRevision, setSubmittingRevision] = useState(false);
   const [commercialDraftPo, setCommercialDraftPo] = useState<PurchaseOrder | null>(null);
   const [amendError, setAmendError] = useState<string | null>(null);
   const [creatingRevision, setCreatingRevision] = useState(false);
@@ -252,6 +253,56 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
     setMode('amend_commercial');
   }
 
+  async function submitRevisionDraft() {
+    if (!profile || !activeRevisionPo) return;
+    setSubmittingRevision(true);
+    setAmendError(null);
+
+    const { error } = await supabase
+      .from('purchase_orders')
+      .update({
+        status: 'pending_revision_approval',
+        submitted_by: profile.id,
+        submitted_at: new Date().toISOString(),
+      })
+      .eq('id', activeRevisionPo.id);
+
+    if (error) {
+      setAmendError(error.message);
+      setSubmittingRevision(false);
+      return;
+    }
+
+    await logPOAction(
+      activeRevisionPo.id,
+      'revision_submitted',
+      'draft_revision',
+      'pending_revision_approval',
+      profile.id,
+      `Amendment v${activeRevisionPo.version} submitted for EVP approval`,
+    );
+
+    // Notify EVP
+    const evp = await (async () => {
+      const { data } = await supabase.from('user_profiles').select('id').eq('role', 'evp').maybeSingle();
+      return data as { id: string } | null;
+    })();
+    if (evp) {
+      await supabase.from('notifications').insert({
+        user_id: evp.id,
+        title: `Amendment ready for approval — ${projectName}`,
+        message: `A revised purchase order (v${activeRevisionPo.version}) for "${activeRevisionPo.description}" has been submitted for your approval.`,
+        type: 'alert',
+        is_read: false,
+        related_entity_type: 'purchase_order',
+        related_entity_id: activeRevisionPo.id,
+      });
+    }
+
+    setSubmittingRevision(false);
+    onSuccess(); // reload parent list so status refreshes
+  }
+
   // Which PO to actually display — parent or its active revision
   const displayPo = viewingRevision && activeRevisionPo ? activeRevisionPo : po;
   const displayActorMap = viewingRevision && activeRevisionPo ? activeRevisionActorMap : auditActorMap;
@@ -343,6 +394,21 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
                 <p className="text-xs text-gray-400 mt-0.5">{projectName}</p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {/* Submit amendment draft for approval */}
+                {viewingRevision && activeRevisionPo?.status === 'draft_revision' && hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) && (
+                  <button
+                    onClick={submitRevisionDraft}
+                    disabled={submittingRevision}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1D9E75] text-white text-xs font-medium rounded-lg hover:bg-[#178a63] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {submittingRevision ? (
+                      <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <CheckCircle size={12} />
+                    )}
+                    Submit for Approval
+                  </button>
+                )}
                 {canEdit && !viewingRevision && (
                   <button
                     onClick={() => setMode('edit')}
