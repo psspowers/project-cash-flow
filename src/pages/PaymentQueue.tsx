@@ -116,6 +116,7 @@ export default function PaymentQueue() {
   const [checkModalVoucher, setCheckModalVoucher] = useState<PaymentVoucher | null>(null);
   const [checkNo, setCheckNo] = useState('');
   const [checkDate, setCheckDate] = useState('');
+  const [checkBankAccount, setCheckBankAccount] = useState('KBank PSS Main');
   const [issuingCheck, setIssuingCheck] = useState(false);
 
   // Reconciliation panel
@@ -488,9 +489,11 @@ export default function PaymentQueue() {
   // ── Banking Officer: Issue Check ────────────────────────────────────────────
 
   function openCheckModal(voucher: PaymentVoucher) {
+    const existingBankAcc = checks.find(c => c.voucher_id === voucher.id)?.bank_account ?? 'KBank PSS Main';
     setCheckModalVoucher(voucher);
     setCheckNo('');
     setCheckDate(new Date().toISOString().substring(0, 10));
+    setCheckBankAccount(existingBankAcc);
     setIssuingCheck(false);
   }
 
@@ -498,6 +501,7 @@ export default function PaymentQueue() {
     setCheckModalVoucher(null);
     setCheckNo('');
     setCheckDate('');
+    setCheckBankAccount('KBank PSS Main');
   }
 
   async function issueCheck() {
@@ -513,12 +517,13 @@ export default function PaymentQueue() {
           .from('payment_vouchers')
           .update({ status: 'issued' })
           .eq('id', checkModalVoucher.id),
-        // 2. Update checks record with check number, date, and issued status
+        // 2. Update checks record with check number/txn, date, bank, and issued status
         supabase
           .from('checks')
           .update({
             check_no: checkNo.trim(),
             check_date: checkDate,
+            bank_account: checkBankAccount,
             status: 'issued',
             signed_by_supervisor: user.id,
           })
@@ -1057,7 +1062,7 @@ export default function PaymentQueue() {
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-gray-800">{vendorName}</p>
                             <p className="text-xs text-gray-400">
-                              Check #{chk.check_no} · {formatDate(chk.check_date)} · {chk.bank_account}
+                              {chk.bank_account === 'Online - KBank' ? 'Txn' : 'Check'} #{chk.check_no} · {formatDate(chk.check_date)} · {chk.bank_account}
                             </p>
                             <p className="text-xs text-gray-400">{v?.voucher_no}</p>
                           </div>
@@ -1486,7 +1491,11 @@ export default function PaymentQueue() {
     const vPo = vi?.purchase_order;
     const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
     const invoiceNo  = vi?.vendor_invoice_no ?? '—';
-    const bankAcc = checks.find(c => c.voucher_id === checkModalVoucher.id)?.bank_account ?? 'KBank PSS Main';
+    const isOnline = checkBankAccount === 'Online - KBank';
+    const refLabel = isOnline ? 'Transaction Number' : 'Check Number';
+    const refPlaceholder = isOnline ? 'e.g. TXN20260514001234567' : 'e.g. 0012345';
+    const dateLabel = isOnline ? 'Transaction Date' : 'Check Date';
+    const confirmLabel = isOnline ? 'Confirm & Record Transfer' : 'Confirm & Issue Check';
     const canIssue = checkNo.trim().length > 0 && checkDate.length > 0;
     return (
       <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -1494,7 +1503,9 @@ export default function PaymentQueue() {
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <CreditCard size={16} className="text-[#0f1923]" />
-              <h3 className="text-sm font-semibold text-gray-900">Issue Check</h3>
+              <h3 className="text-sm font-semibold text-gray-900">
+                {isOnline ? 'Record Online Transfer' : 'Issue Check'}
+              </h3>
             </div>
             <button onClick={closeCheckModal} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
           </div>
@@ -1513,34 +1524,44 @@ export default function PaymentQueue() {
                 <span className="text-gray-500">Voucher No.</span>
                 <span className="text-gray-700">{checkModalVoucher.voucher_no}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Bank Account</span>
-                <span className="text-gray-700">{bankAcc}</span>
-              </div>
               <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
                 <span className="font-semibold text-gray-700">Net Payable</span>
                 <span className="font-bold text-base text-gray-900">{formatTHB(checkModalVoucher.net_paid)}</span>
               </div>
             </div>
 
-            {/* Check number */}
+            {/* Bank account — editable */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">Payment Method / Bank Account</label>
+              <select
+                value={checkBankAccount}
+                onChange={e => { setCheckBankAccount(e.target.value); setCheckNo(''); }}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
+              >
+                <option value="KBank PSS Main">KBank PSS Main — Check</option>
+                <option value="SCB PSS Project">SCB PSS Project — Check</option>
+                <option value="Online - KBank">Online - KBank (Transfer)</option>
+              </select>
+            </div>
+
+            {/* Check / Transaction number */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                Check Number <span className="text-[#E24B4A]">*</span>
+                {refLabel} <span className="text-[#E24B4A]">*</span>
               </label>
               <input
                 type="text"
                 value={checkNo}
                 onChange={e => setCheckNo(e.target.value)}
-                placeholder="e.g. 0012345"
+                placeholder={refPlaceholder}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 font-mono"
               />
             </div>
 
-            {/* Check date */}
+            {/* Check / Transaction date */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                Check Date <span className="text-[#E24B4A]">*</span>
+                {dateLabel} <span className="text-[#E24B4A]">*</span>
               </label>
               <input
                 type="date"
@@ -1553,7 +1574,7 @@ export default function PaymentQueue() {
             <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg">
               <AlertTriangle size={13} className="text-amber-600 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-700">
-                This action will mark the invoice as <strong>Paid</strong> and is irreversible. Ensure the check details are correct before confirming.
+                This action will mark the invoice as <strong>Paid</strong> and is irreversible. Ensure the details are correct before confirming.
               </p>
             </div>
 
@@ -1562,7 +1583,7 @@ export default function PaymentQueue() {
               <button onClick={issueCheck} disabled={issuingCheck || !canIssue}
                 className="flex-1 bg-[#0f1923] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {issuingCheck ? 'Processing...' : 'Confirm & Issue Check'}
+                {issuingCheck ? 'Processing...' : confirmLabel}
               </button>
             </div>
           </div>
