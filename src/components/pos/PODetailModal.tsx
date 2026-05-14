@@ -256,11 +256,11 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const displayPo = viewingRevision && activeRevisionPo ? activeRevisionPo : po;
   const displayActorMap = viewingRevision && activeRevisionPo ? activeRevisionActorMap : auditActorMap;
 
-  function revisionRoleLabel(status: string): string {
-    if (status === 'draft_revision') return 'Procurement / Cost Controller';
-    if (status === 'pending_revision_approval' || status === 'pending_evp') return 'EVP';
-    if (status === 'pending_ceo') return 'CEO';
-    return status.replace(/_/g, ' ');
+  function revisionRoleLabel(status: string): { action: string; role: string } {
+    if (status === 'draft_revision') return { action: 'Submit amendment draft', role: 'Procurement' };
+    if (status === 'pending_revision_approval' || status === 'pending_evp') return { action: 'Approve amendment', role: 'EVP' };
+    if (status === 'pending_ceo') return { action: 'Approve amendment', role: 'CEO' };
+    return { action: 'Review', role: status.replace(/_/g, ' ') };
   }
 
   const supplierName = (displayPo.vendor as Entity | undefined)?.name
@@ -383,30 +383,35 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
               <div className="flex-1 overflow-y-auto p-6 space-y-6 lg:border-r lg:border-gray-100">
 
                 {/* Active revision warning — shows who holds the ball */}
-                {isIssued && activeRevisionPo && !viewingRevision && (
-                  <div className="flex items-start gap-2.5 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
-                    <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-[#92650a] mb-0.5">
-                        Commercial amendment in progress
-                        <span className="ml-1.5 font-normal text-[#EF9F27]">(v{activeRevisionPo.version})</span>
-                      </p>
-                      <p className="text-xs text-[#92650a]">
-                        Current status: Awaiting{' '}
-                        <span className="font-semibold">{revisionRoleLabel(activeRevisionPo.status)}</span>
-                      </p>
-                      <p className="text-[10px] text-[#92650a]/70 mt-0.5">
-                        Commercial edits are locked until the amendment is resolved.
-                      </p>
+                {isIssued && activeRevisionPo && !viewingRevision && (() => {
+                  const { action, role } = revisionRoleLabel(activeRevisionPo.status);
+                  return (
+                    <div className="flex items-start gap-2.5 bg-[#EF9F27]/10 border border-[#EF9F27]/30 rounded-lg p-3">
+                      <AlertTriangle size={14} className="text-[#EF9F27] mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-[#92650a] mb-0.5">
+                          Commercial amendment in progress
+                          <span className="ml-1.5 font-normal text-[#EF9F27]">(v{activeRevisionPo.version})</span>
+                        </p>
+                        <p className="text-xs text-[#92650a]">
+                          Next action:{' '}
+                          <span className="font-semibold">{action}</span>
+                          <span className="mx-1 text-[#EF9F27]">·</span>
+                          <span className="font-semibold">{role}</span>
+                        </p>
+                        <p className="text-[10px] text-[#92650a]/70 mt-0.5">
+                          Commercial edits are locked until the amendment is resolved.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setViewingRevision(true)}
+                        className="shrink-0 text-[10px] font-semibold text-[#EF9F27] bg-white border border-[#EF9F27]/40 px-2.5 py-1.5 rounded-lg hover:bg-[#EF9F27]/10 transition-colors whitespace-nowrap"
+                      >
+                        View Active Amendment
+                      </button>
                     </div>
-                    <button
-                      onClick={() => setViewingRevision(true)}
-                      className="shrink-0 text-[10px] font-semibold text-[#EF9F27] bg-white border border-[#EF9F27]/40 px-2.5 py-1.5 rounded-lg hover:bg-[#EF9F27]/10 transition-colors whitespace-nowrap"
-                    >
-                      View Active Amendment
-                    </button>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Warning for pending_cc + can edit */}
                 {canEdit && po.status === 'pending_cc' && (
