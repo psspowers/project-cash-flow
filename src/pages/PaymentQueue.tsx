@@ -1003,26 +1003,6 @@ export default function PaymentQueue() {
           </div>
         )}
 
-        {/* C — In Progress: Pending Supervisor Voucher */}
-        {invoicesWithNoVoucher.length > 0 && (
-          <div className="border border-gray-200 rounded-lg overflow-hidden">
-            <SectionHeader
-              icon={<Clock size={14} />}
-              title="In Progress — Pending Supervisor Voucher"
-              count={invoicesWithNoVoucher.length}
-              accent="gray"
-            />
-            <div className="p-4 space-y-2">
-              {invoicesWithNoVoucher.map(inv => (
-                <InvoiceCard
-                  key={inv.id}
-                  inv={inv}
-                  tag={<span className="text-xs text-gray-400 italic">Awaiting Voucher</span>}
-                />
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Bank Reconciliation — collapsible accordion */}
         <div className="border border-gray-200 rounded-lg overflow-hidden">
