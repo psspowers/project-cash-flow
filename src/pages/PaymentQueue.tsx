@@ -791,6 +791,86 @@ export default function PaymentQueue() {
           </div>
         )}
 
+        {/* Bank Reconciliation — read-only view */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setReconOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-gray-600">
+              <Building2 size={14} />
+              <span className="text-sm font-semibold">Bank Reconciliation</span>
+              {issuedChecks.length > 0 && (
+                <span className="text-xs font-bold bg-gray-400 text-white px-2 py-0.5 rounded-full">
+                  {issuedChecks.length} issued
+                </span>
+              )}
+            </div>
+            <ChevronRight size={14} className={`text-gray-400 transition-transform ${reconOpen ? 'rotate-90' : ''}`} />
+          </button>
+          {reconOpen && (
+            <div className="divide-y divide-gray-100">
+              <div className="p-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  Checks Issued — Awaiting Bank Clearance ({issuedChecks.length})
+                </p>
+                {issuedChecks.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4">No checks awaiting clearance.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {issuedChecks.map(chk => {
+                      const v    = chk.payment_voucher;
+                      const vPo  = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-800">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              {chk.bank_account === 'Online - KBank' ? 'Txn' : 'Check'} #{chk.check_no} · {formatDate(chk.check_date)} · {chk.bank_account}
+                            </p>
+                            <p className="text-xs text-gray-400">{v?.voucher_no}</p>
+                          </div>
+                          <span className="font-bold text-gray-800 shrink-0">{formatTHB(chk.amount)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {clearedChecks.length > 0 && (
+                <div className="p-4">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Cleared — Bank Confirmed ({clearedChecks.length})
+                  </p>
+                  <div className="space-y-2">
+                    {clearedChecks.map(chk => {
+                      const v   = chk.payment_voucher;
+                      const vPo = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-gray-50 rounded-md border border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-700">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              Check #{chk.check_no} · Cleared {formatDate(chk.cleared_at)}
+                              {chk.cleared_note ? ` · ${chk.cleared_note}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-medium text-gray-600">{formatTHB(chk.amount)}</span>
+                            <span className="text-xs text-[#1D9E75] font-medium bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">Cleared</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Voucher + Custom WHT modals */}
         {renderIssueVoucherModal()}
         {renderCustomWhtModal()}
@@ -904,6 +984,86 @@ export default function PaymentQueue() {
             </div>
           </div>
         )}
+
+        {/* Bank Reconciliation — read-only view */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setReconOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+          >
+            <div className="flex items-center gap-2 text-gray-600">
+              <Building2 size={14} />
+              <span className="text-sm font-semibold">Bank Reconciliation</span>
+              {issuedChecks.length > 0 && (
+                <span className="text-xs font-bold bg-gray-400 text-white px-2 py-0.5 rounded-full">
+                  {issuedChecks.length} issued
+                </span>
+              )}
+            </div>
+            <ChevronRight size={14} className={`text-gray-400 transition-transform ${reconOpen ? 'rotate-90' : ''}`} />
+          </button>
+          {reconOpen && (
+            <div className="divide-y divide-gray-100">
+              <div className="p-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  Checks Issued — Awaiting Bank Clearance ({issuedChecks.length})
+                </p>
+                {issuedChecks.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4">No checks awaiting clearance.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {issuedChecks.map(chk => {
+                      const v    = chk.payment_voucher;
+                      const vPo  = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-white rounded-md border border-gray-200 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-800">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              {chk.bank_account === 'Online - KBank' ? 'Txn' : 'Check'} #{chk.check_no} · {formatDate(chk.check_date)} · {chk.bank_account}
+                            </p>
+                            <p className="text-xs text-gray-400">{v?.voucher_no}</p>
+                          </div>
+                          <span className="font-bold text-gray-800 shrink-0">{formatTHB(chk.amount)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {clearedChecks.length > 0 && (
+                <div className="p-4">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Cleared — Bank Confirmed ({clearedChecks.length})
+                  </p>
+                  <div className="space-y-2">
+                    {clearedChecks.map(chk => {
+                      const v   = chk.payment_voucher;
+                      const vPo = (v as any)?.vendor_invoice?.purchase_order;
+                      const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? '—';
+                      return (
+                        <div key={chk.id} className="bg-gray-50 rounded-md border border-gray-100 px-4 py-3 flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-700">{vendorName}</p>
+                            <p className="text-xs text-gray-400">
+                              Check #{chk.check_no} · Cleared {formatDate(chk.cleared_at)}
+                              {chk.cleared_note ? ` · ${chk.cleared_note}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-medium text-gray-600">{formatTHB(chk.amount)}</span>
+                            <span className="text-xs text-[#1D9E75] font-medium bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">Cleared</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {renderRejectModal()}
         {selectedPO && (
