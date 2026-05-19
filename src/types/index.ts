@@ -72,6 +72,7 @@ export interface Project {
   last_rejected_at?: string;
   last_rejected_stage?: string;
   is_financials_locked: boolean;
+  project_type?: 'construction' | 'overhead';
 }
 
 export type CostingStatus = 'draft' | 'submitted' | 'cm_approved' | 'cm_rejected' | 'evp_approved' | 'evp_rejected';
@@ -267,10 +268,32 @@ export interface POSimplePayment {
 
 export type ExpenseStatus = 'draft' | 'approved' | 'rejected';
 
+export type SgaSubcategory =
+  | 'office_admin'
+  | 'travel_transport'
+  | 'it_systems'
+  | 'professional_fees'
+  | 'marketing_bd'
+  | 'staff_welfare'
+  | 'utilities'
+  | 'other';
+
+export const SGA_SUBCATEGORY_LABELS: Record<SgaSubcategory, string> = {
+  office_admin:      'Office & Administration',
+  travel_transport:  'Travel & Transport',
+  it_systems:        'IT & Systems',
+  professional_fees: 'Professional Fees',
+  marketing_bd:      'Marketing & Business Dev',
+  staff_welfare:     'Staff Welfare',
+  utilities:         'Utilities & Facilities',
+  other:             'Other / Miscellaneous',
+};
+
 export interface ProjectExpense {
   id: string;
   project_id: string;
-  cost_category: CostCategory;
+  cost_category: CostCategory | null;
+  sga_subcategory?: SgaSubcategory | null;
   description: string;
   amount: number;
   expense_date?: string;

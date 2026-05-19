@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { X, Receipt, AlertCircle, CheckCircle } from 'lucide-react';
+import { X, Receipt, AlertCircle, CheckCircle, Building2, Layers } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { Project, CostCategory, COST_CATEGORY_LABELS } from '../../types';
+import {
+  Project, CostCategory, COST_CATEGORY_LABELS,
+  SgaSubcategory, SGA_SUBCATEGORY_LABELS,
+} from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
 interface Props {
@@ -15,23 +18,42 @@ const COST_CATEGORIES: { value: CostCategory; label: string }[] = Object.entries
   ([value, label]) => ({ value: value as CostCategory, label })
 );
 
+const SGA_SUBCATEGORIES: { value: SgaSubcategory; label: string }[] = Object.entries(SGA_SUBCATEGORY_LABELS).map(
+  ([value, label]) => ({ value: value as SgaSubcategory, label })
+);
+
 export default function NewExpenseModal({ projects, defaultProjectId, onClose, onSuccess }: Props) {
   const { profile } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  const overheadProjects = projects.filter(p => p.project_type === 'overhead');
+  const constructionProjects = projects.filter(
+    p => p.project_type !== 'overhead' && ['active', 'completed'].includes(p.status)
+  );
+
+  const initialProjectId = defaultProjectId ?? overheadProjects[0]?.id ?? constructionProjects[0]?.id ?? '';
+
   const [form, setForm] = useState({
-    project_id: defaultProjectId ?? projects[0]?.id ?? '',
+    project_id: initialProjectId,
     cost_category: '01_civil' as CostCategory,
+    sga_subcategory: 'office_admin' as SgaSubcategory,
     description: '',
     amount: '',
     expense_date: new Date().toISOString().split('T')[0],
     receipt_ref: '',
   });
 
+  const isOverhead = overheadProjects.some(p => p.id === form.project_id);
+
   function set(key: string, value: string) {
     setForm(prev => ({ ...prev, [key]: value }));
+    setError(null);
+  }
+
+  function handleProjectChange(projectId: string) {
+    setForm(prev => ({ ...prev, project_id: projectId }));
     setError(null);
   }
 
@@ -40,7 +62,7 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
     if (!profile) return;
 
     const amount = parseFloat(form.amount);
-    if (!form.project_id) { setError('Please select a project.'); return; }
+    if (!form.project_id) { setError('Please select an account.'); return; }
     if (!form.description.trim()) { setError('Please enter a description.'); return; }
     if (isNaN(amount) || amount <= 0) { setError('Please enter a valid amount greater than zero.'); return; }
     if (!form.expense_date) { setError('Please select an expense date.'); return; }
@@ -50,7 +72,8 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
 
     const { error: insertError } = await supabase.from('project_expenses').insert({
       project_id: form.project_id,
-      cost_category: form.cost_category,
+      cost_category: isOverhead ? null : form.cost_category,
+      sga_subcategory: isOverhead ? form.sga_subcategory : null,
       description: form.description.trim(),
       amount,
       expense_date: form.expense_date,
@@ -67,9 +90,7 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
     }
 
     setSuccess(true);
-    setTimeout(() => {
-      onSuccess();
-    }, 800);
+    setTimeout(() => { onSuccess(); }, 800);
   }
 
   return (
@@ -84,7 +105,7 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
             </div>
             <div>
               <h2 className="text-sm font-semibold text-gray-900">New Expense</h2>
-              <p className="text-xs text-gray-400">Direct project cost entry</p>
+              <p className="text-xs text-gray-400">Direct cost entry — project or overhead</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -100,42 +121,88 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
         ) : (
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
 
-            {/* Project */}
+            {/* Account selector — SG&A overhead and construction projects in separate groups */}
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Project <span className="text-red-400">*</span></label>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Account <span className="text-red-400">*</span>
+              </label>
               <select
                 value={form.project_id}
-                onChange={e => set('project_id', e.target.value)}
+                onChange={e => handleProjectChange(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-gray-800"
               >
-                <option value="">Select project...</option>
-                {projects
-                  .filter(p => ['active', 'completed'].includes(p.status))
-                  .map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.name.split('–')[0].split('—')[0].trim()}
-                    </option>
-                  ))}
+                <option value="">Select account...</option>
+
+                {overheadProjects.length > 0 && (
+                  <optgroup label="SG&A / Overhead">
+                    {overheadProjects.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+
+                {constructionProjects.length > 0 && (
+                  <optgroup label="Construction Projects">
+                    {constructionProjects.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name.split('–')[0].split('—')[0].trim()}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
+
+              {/* Context badge */}
+              {form.project_id && (
+                <div className={`flex items-center gap-1.5 mt-1.5 text-[11px] font-medium ${
+                  isOverhead ? 'text-amber-600' : 'text-[#1D9E75]'
+                }`}>
+                  {isOverhead
+                    ? <><Building2 size={11} /> SG&A overhead — select an expense type below</>
+                    : <><Layers size={11} /> Construction project — select a cost category below</>
+                  }
+                </div>
+              )}
             </div>
 
-            {/* Cost Category */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Cost Category <span className="text-red-400">*</span></label>
-              <select
-                value={form.cost_category}
-                onChange={e => set('cost_category', e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-gray-800"
-              >
-                {COST_CATEGORIES.map(c => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
-            </div>
+            {/* Classification — swaps instantly on project type change */}
+            {isOverhead ? (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Expense Type <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={form.sga_subcategory}
+                  onChange={e => set('sga_subcategory', e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-amber-200 rounded-lg bg-amber-50/40 focus:outline-none focus:ring-2 focus:ring-amber-400/30 text-gray-800"
+                >
+                  {SGA_SUBCATEGORIES.map(s => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Cost Category <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={form.cost_category}
+                  onChange={e => set('cost_category', e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-gray-800"
+                >
+                  {COST_CATEGORIES.map(c => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Description */}
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Description <span className="text-red-400">*</span></label>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Description <span className="text-red-400">*</span>
+              </label>
               <input
                 type="text"
                 value={form.description}
@@ -149,7 +216,9 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
             {/* Amount + Date row */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Amount (฿) <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Amount (฿) <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="number"
                   value={form.amount}
@@ -161,7 +230,9 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Expense Date <span className="text-red-400">*</span></label>
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                  Expense Date <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="date"
                   value={form.expense_date}
@@ -173,7 +244,9 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
 
             {/* Receipt Ref */}
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Receipt Reference <span className="text-gray-400 font-normal">(optional)</span></label>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Receipt Reference <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
               <input
                 type="text"
                 value={form.receipt_ref}

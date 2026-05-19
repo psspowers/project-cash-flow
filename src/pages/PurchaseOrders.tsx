@@ -104,7 +104,7 @@ export default function PurchaseOrders() {
         .from('purchase_orders')
         .select('*, supplier_name_raw, vendor:entities!vendor_id(*), project:projects(*)')
         .order('created_at', { ascending: false }),
-      supabase.from('projects').select('id, name, status').order('name'),
+      supabase.from('projects').select('id, name, status, project_type').order('name'),
       supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
     ]);
     setPos((purchaseOrders as PurchaseOrder[]) || []);
