@@ -4,6 +4,7 @@ import { differenceInDays } from 'date-fns';
 import {
   ShoppingCart, FileText, BarChart2, TrendingUp, CreditCard,
   RefreshCw, CheckCircle, Filter, ChevronRight, AlertTriangle,
+  Landmark,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -21,7 +22,7 @@ import {
 // ---------------------------------------------------------------------------
 
 type AgingLevel = 'fresh' | 'amber' | 'red';
-type CardType = 'po' | 'invoice' | 'costing' | 'progress_report' | 'voucher';
+type CardType = 'po' | 'invoice' | 'costing' | 'progress_report' | 'voucher' | 'check';
 
 interface WorkItem {
   id: string;
@@ -31,11 +32,19 @@ interface WorkItem {
   projectName: string;
   projectId: string;
   amount: number;
-  itemDate: string | null;   // invoice_date, po date, etc.
+  itemDate: string | null;
   daysWaiting: number;
   aging: AgingLevel;
   rawInvoice?: VendorInvoice;
   rawPO?: PurchaseOrder;
+  // enriched accounts detail
+  invoiceNo?: string;
+  poRef?: string;
+  bankAccount?: string;
+  checkNo?: string;
+  whtAmount?: number;
+  netPayable?: number;
+  requiresManagerApproval?: boolean;
 }
 
 interface DeskDef {
@@ -109,6 +118,7 @@ function typeIcon(type: CardType, size = 11) {
     case 'costing':         return <BarChart2 size={size} />;
     case 'progress_report': return <TrendingUp size={size} />;
     case 'voucher':         return <CreditCard size={size} />;
+    case 'check':           return <Landmark size={size} />;
   }
 }
 
@@ -119,6 +129,7 @@ function typeLabel(type: CardType) {
     case 'costing':         return 'Costing';
     case 'progress_report': return 'Progress Report';
     case 'voucher':         return 'Voucher';
+    case 'check':           return 'Check — Awaiting Clearance';
   }
 }
 
@@ -152,7 +163,7 @@ function WorkItemRow({
           <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{typeLabel(item.type)}</span>
         </div>
 
-        {/* Row 2: Supplier | Invoice/PO No */}
+        {/* Row 2: Supplier | ref number */}
         <div className="flex items-start justify-between gap-2 min-w-0">
           <p className="text-[12px] font-semibold text-gray-700 truncate leading-tight flex-1 min-w-0">
             {item.supplierName}
@@ -164,6 +175,46 @@ function WorkItemRow({
 
         {/* Row 3: Project name */}
         <p className="text-[11px] text-gray-400 truncate mt-0.5">{item.projectName}</p>
+
+        {/* Enriched accounts detail: invoice + PO refs */}
+        {(item.invoiceNo || item.poRef) && (
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            {item.invoiceNo && (
+              <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                Inv: {item.invoiceNo}
+              </span>
+            )}
+            {item.poRef && (
+              <span className="text-[10px] font-medium text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                PO: {item.poRef}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Enriched accounts detail: bank + check no for checks */}
+        {item.bankAccount && (
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <span className="text-[10px] text-gray-400 bg-teal-50 text-teal-600 px-1.5 py-0.5 rounded font-medium">
+              {item.bankAccount}
+            </span>
+            {item.checkNo && (
+              <span className="text-[10px] font-medium text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded">
+                #{item.checkNo}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* WHT breakdown for vouchers */}
+        {item.whtAmount != null && item.whtAmount > 0 && item.netPayable != null && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-400">
+            <span>Net payable:</span>
+            <span className="font-semibold text-gray-600">{formatTHBCompact(item.netPayable)}</span>
+            <span className="text-gray-300">·</span>
+            <span>WHT: {formatTHBCompact(item.whtAmount)}</span>
+          </div>
+        )}
 
         {/* Row 4: Amount | Date */}
         <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-gray-100/80">
@@ -360,6 +411,7 @@ export default function WorkflowEfficiency() {
   const [allCostings, setAllCostings] = useState<any[]>([]);
   const [allReports, setAllReports] = useState<any[]>([]);
   const [allVouchers, setAllVouchers] = useState<any[]>([]);
+  const [allChecks, setAllChecks] = useState<any[]>([]);
   const [allProjects, setAllProjects] = useState<{ id: string; name: string }[]>([]);
 
   const [projectFilter, setProjectFilter] = useState<string>('');
@@ -378,7 +430,7 @@ export default function WorkflowEfficiency() {
     setLoading(true);
     const now = new Date();
 
-    const [posRes, invRes, costingsRes, reportsRes, vouchersRes, projRes] = await Promise.all([
+    const [posRes, invRes, costingsRes, reportsRes, vouchersRes, checksRes, projRes] = await Promise.all([
       supabase
         .from('purchase_orders')
         .select('id, pss_po_no, description, po_amount_incl_vat, status, po_date, submitted_at, created_at, supplier_name_raw, project_id, vendor_id, version, vendor:entities!vendor_id(id,name), project:projects!project_id(id,name)')
@@ -397,8 +449,12 @@ export default function WorkflowEfficiency() {
         .in('status', ['submitted', 'cm_approved']),
       supabase
         .from('payment_vouchers')
-        .select('id, voucher_no, net_paid, status, updated_at, project:projects!project_id(id,name)')
+        .select('id, voucher_no, amount, wht_amount, net_paid, status, requires_manager_approval, updated_at, project:projects!project_id(id,name), vendor_invoice:vendor_invoices!vendor_invoice_id(id, vendor_invoice_no, net_payable, purchase_order:purchase_orders!po_id(id, pss_po_no, description, supplier_name_raw, vendor:entities!vendor_id(id,name)))')
         .in('status', ['pending_manager', 'approved']),
+      supabase
+        .from('checks')
+        .select('id, voucher_id, bank_account, check_no, check_date, payee, amount, status, updated_at, payment_voucher:payment_vouchers!voucher_id(id, voucher_no, net_paid, project:projects!project_id(id,name), vendor_invoice:vendor_invoices!vendor_invoice_id(id, vendor_invoice_no, purchase_order:purchase_orders!po_id(id, pss_po_no, supplier_name_raw, vendor:entities!vendor_id(id,name))))')
+        .eq('status', 'issued'),
       supabase.from('projects').select('id, name').order('name'),
     ]);
 
@@ -411,6 +467,7 @@ export default function WorkflowEfficiency() {
     setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllVouchers((vouchersRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllChecks((checksRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllProjects(projRes.data ?? []);
     setLastRefresh(now);
     setLoading(false);
@@ -478,15 +535,47 @@ export default function WorkflowEfficiency() {
   }
 
   function mkVoucher(v: any): WorkItem {
+    const vi = v.vendor_invoice;
+    const po = vi?.purchase_order;
+    const vendor = po?.vendor;
+    const supplierName = vendor?.name ?? po?.supplier_name_raw ?? '—';
     return {
       id: v.id, type: 'voucher',
       label: v.voucher_no,
-      supplierName: '—',
+      supplierName,
       projectName: v.project?.name ?? '—',
       projectId: v.project?.id ?? '',
       amount: v.net_paid ?? 0,
       itemDate: v.updated_at ?? null,
       daysWaiting: v._days, aging: agingLevel(v._days),
+      invoiceNo: vi?.vendor_invoice_no ?? undefined,
+      poRef: po?.pss_po_no ?? undefined,
+      whtAmount: v.wht_amount > 0 ? v.wht_amount : undefined,
+      netPayable: vi?.net_payable ?? undefined,
+      requiresManagerApproval: v.requires_manager_approval ?? false,
+    };
+  }
+
+  function mkCheck(c: any): WorkItem {
+    const pv = c.payment_voucher;
+    const vi = pv?.vendor_invoice;
+    const po = vi?.purchase_order;
+    const vendor = po?.vendor;
+    const supplierName = c.payee ?? vendor?.name ?? po?.supplier_name_raw ?? '—';
+    const projectId = pv?.project?.id ?? '';
+    return {
+      id: c.id, type: 'check',
+      label: pv?.voucher_no ?? '—',
+      supplierName,
+      projectName: pv?.project?.name ?? '—',
+      projectId,
+      amount: c.amount ?? pv?.net_paid ?? 0,
+      itemDate: c.check_date ?? c.updated_at ?? null,
+      daysWaiting: c._days, aging: agingLevel(c._days),
+      invoiceNo: vi?.vendor_invoice_no ?? undefined,
+      poRef: po?.pss_po_no ?? undefined,
+      bankAccount: c.bank_account ?? undefined,
+      checkNo: c.check_no ?? undefined,
     };
   }
 
@@ -498,11 +587,12 @@ export default function WorkflowEfficiency() {
     const f = (pid: string) => !projectFilter || pid === projectFilter;
     const byAge = (a: WorkItem, b: WorkItem) => b.daysWaiting - a.daysWaiting;
 
-    const pos     = allPos.filter(p => f(p.project_id));
-    const invs    = allInvoices.filter(i => f(i.project_id));
-    const costs   = allCostings.filter(c => f(c.project?.id ?? ''));
-    const reports = allReports.filter(r => f(r.project?.id ?? ''));
+    const pos      = allPos.filter(p => f(p.project_id));
+    const invs     = allInvoices.filter(i => f(i.project_id));
+    const costs    = allCostings.filter(c => f(c.project?.id ?? ''));
+    const reports  = allReports.filter(r => f(r.project?.id ?? ''));
     const vouchers = allVouchers.filter(v => f(v.project?.id ?? ''));
+    const chks     = allChecks.filter(c => f(c.payment_voucher?.project?.id ?? ''));
 
     const deskMap: Record<string, WorkItem[]> = {
       procurement: [
@@ -538,12 +628,15 @@ export default function WorkflowEfficiency() {
         ...invs.filter(i => i.status === 'released').map(mkInv),
       ].sort(byAge),
 
+      // Accounts Manager: vouchers submitted for co-sign, awaiting manager approval
       accounts_manager: [
         ...vouchers.filter(v => v.status === 'pending_manager').map(mkVoucher),
       ].sort(byAge),
 
+      // Banking & Finance: co-signed vouchers ready for check writing + issued checks awaiting bank clearance
       banking_finance_officer: [
         ...vouchers.filter(v => v.status === 'approved').map(mkVoucher),
+        ...chks.map(mkCheck),
       ].sort(byAge),
     };
 
@@ -558,7 +651,7 @@ export default function WorkflowEfficiency() {
         items: deskMap[role] ?? [],
       };
     });
-  }, [allPos, allInvoices, allCostings, allReports, allVouchers, projectFilter]);
+  }, [allPos, allInvoices, allCostings, allReports, allVouchers, allChecks, projectFilter]);
 
   // ---------------------------------------------------------------------------
   // Scroll to desk from flow strip
@@ -592,7 +685,7 @@ export default function WorkflowEfficiency() {
       navigate(`/projects/${item.projectId}`);
       return;
     }
-    if (item.type === 'voucher') {
+    if (item.type === 'voucher' || item.type === 'check') {
       navigate('/payment-queue');
     }
   }
