@@ -13,7 +13,7 @@ import VendorCombobox from '../../ui/VendorCombobox';
 import { CATEGORY_MAP, CATEGORY_KEY_LABELS } from '../projectDetailConstants';
 import { useTaxConfig } from '../../../hooks/useTaxConfig';
 import { useAuth } from '../../../context/AuthContext';
-import { submitInvoice } from '../../../services/workflow';
+import { submitInvoice, submitPO } from '../../../services/workflow';
 import PODetailModal from '../../pos/PODetailModal';
 
 interface OverrunInfo {
@@ -123,17 +123,19 @@ export default function OrdersTab() {
   };
 
   async function handleSubmitDraft(poId: string) {
-    if (isSubmitting) return;
+    if (isSubmitting || !user || !project) return;
     setIsSubmitting(true);
     try {
-      const { error } = await supabase
-        .from('purchase_orders')
-        .update({
-          status: 'pending_cc',
-          submitted_at: new Date().toISOString(),
-          submitted_by: user?.id ?? null,
-        })
-        .eq('id', poId);
+      const po = orders.find(o => o.id === poId);
+      const { error } = await submitPO({
+        poId,
+        actorId: user.id,
+        projectName: project.name,
+        projectId: project.id,
+        poDescription: po?.description ?? '',
+        poAmountInclVat: po?.po_amount_incl_vat ?? 0,
+        currentStatus: 'draft',
+      });
       if (error) {
         alert('Failed to submit PO for approval. Please try again.');
         return;
