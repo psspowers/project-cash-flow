@@ -35,6 +35,7 @@ export function notifHref(
   if (role === 'ceo') {
     if (entityType === 'project' && entityId) return `/projects/${entityId}?tab=costing`;
     if (entityType === 'project_costing' && entityId) return `/projects/${entityId}?tab=costing`;
+    if (entityType === 'purchase_order') return '/approvals?section=purchase_orders';
     if (entityType === 'loan') return '/treasury';
     if (entityType === 'check') return '/checks';
     // Everything else actionable for the CEO lives on the CEO approvals page
