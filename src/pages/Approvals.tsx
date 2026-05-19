@@ -7,7 +7,9 @@ import {
 import {
   approveInvoiceCM, approveInvoiceEVP, approveInvoiceCEO, rejectInvoice,
   approvePO_CC, approvePO_CM, approvePO_EVP, approvePO_CEO, rejectPO,
-  POActionParams,
+  approveCostingCM, approveCostingEVP, rejectCostingCM, rejectCostingEVP,
+  recommendTransferEVP, approveTransferCEO, rejectTransferCEO,
+  POActionParams, CostingActionParams, TransferActionParams,
 } from '../services/workflow';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import { useForm } from 'react-hook-form';
@@ -21,12 +23,10 @@ import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { computeMarginTransferPosition, MarginTransferPosition } from '../utils/marginTransfer';
+import { PO_THRESHOLD_CM, PO_THRESHOLD_EVP, INVOICE_CEO_THRESHOLD } from '../config/thresholds';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const PO_THRESHOLD_CM  = 1_000_000;
-const PO_THRESHOLD_EVP = 5_000_000;
-const INVOICE_CEO_THRESHOLD = 3_000_000;
 const PO_PENDING_STATUSES = ['pending_cc', 'pending_cm', 'pending_evp', 'pending_ceo', 'pending_revision_approval'];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -454,22 +454,20 @@ export default function Approvals() {
     if (!user) return;
     setCostingAction(true);
     const projectStatus = costing.project.status;
-    if (role === 'construction_manager') {
-      await supabase.from('project_costings').update({ status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: costingComment || null }).eq('id', costing.id);
-      const nextStatus = projectStatus === 'estimation_submitted' ? 'estimation_cm_approved' : 'budget_cm_approved';
-      await supabase.from('projects').update({ status: nextStatus }).eq('id', costing.project_id);
-      const evp = await supabase.from('user_profiles').select('*').eq('role', 'evp').maybeSingle();
-      if (evp.data) {
-        const label = projectStatus === 'estimation_submitted' ? 'Estimation' : 'Budget';
-        await supabase.from('notifications').insert({ user_id: evp.data.id, title: `${label} costing ready for EVP approval — ${costing.project.name}`, message: `Construction Manager has reviewed and approved. Awaiting your final sign-off.`, type: 'info', is_read: false, related_entity_type: 'project_costing', related_entity_id: costing.project_id });
-      }
-    } else if (role === 'evp') {
-      await supabase.from('project_costings').update({ status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: costingComment || null }).eq('id', costing.id);
-      const nextStatus = projectStatus === 'estimation_cm_approved' ? 'estimation_approved' : 'active';
-      await supabase.from('projects').update({ status: nextStatus }).eq('id', costing.project_id);
-      const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
-      if (cc.data) await supabase.from('notifications').insert({ user_id: cc.data.id, title: `Costing approved — ${costing.project.name}`, message: `EVP has given final approval. Project status updated.`, type: 'success', is_read: false, related_entity_type: 'project_costing', related_entity_id: costing.project_id });
-    }
+    const stage: CostingActionParams['stage'] = projectStatus.startsWith('budget') ? 'budget' : 'estimation';
+    const params: CostingActionParams = {
+      costingId: costing.id,
+      projectId: costing.project_id,
+      projectName: costing.project.name,
+      actorId: user.id,
+      stage,
+      comment: costingComment || null,
+    };
+    let result: { error: string | null };
+    if (role === 'construction_manager') result = await approveCostingCM(params);
+    else if (role === 'evp') result = await approveCostingEVP(params);
+    else { setCostingAction(false); return; }
+    if (result.error) alert('Failed to approve costing: ' + result.error);
     setCostingReviewModal(null);
     setCostingComment('');
     setCostingAction(false);
@@ -481,16 +479,15 @@ export default function Approvals() {
     setCostingAction(true);
     const projectStatus = costing.project.status;
     const stageStr = stageLabel(projectStatus);
-    const rejectStatus = role === 'construction_manager' ? 'cm_rejected' : 'evp_rejected';
-    const backStatus = projectStatus.startsWith('budget') ? 'budget_draft' : 'estimation_draft';
+    const stage: CostingActionParams['stage'] = projectStatus.startsWith('budget') ? 'budget' : 'estimation';
     const stageFullLabel = `${stageStr} — ${role === 'construction_manager' ? 'CM Review' : 'EVP Approval'}`;
-    const updateData: Record<string, unknown> = { status: rejectStatus };
-    if (role === 'construction_manager') { updateData.cm_approved_by = user.id; updateData.cm_approved_at = new Date().toISOString(); updateData.cm_comments = costingComment; }
-    else { updateData.evp_approved_by = user.id; updateData.evp_approved_at = new Date().toISOString(); updateData.evp_comments = costingComment; }
-    await supabase.from('project_costings').update(updateData).eq('id', costing.id);
-    await supabase.from('projects').update({ status: backStatus, last_rejection_comment: costingComment, last_rejected_by: user.id, last_rejected_at: new Date().toISOString(), last_rejected_stage: stageFullLabel }).eq('id', costing.project_id);
-    const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
-    if (cc.data) await supabase.from('notifications').insert({ user_id: cc.data.id, title: `${stageFullLabel} rejected`, message: `Rejected by ${profileName(user.id)}: ${costingComment}`, type: 'warning', is_read: false, related_entity_type: 'project', related_entity_id: costing.project_id });
+    let result: { error: string | null };
+    if (role === 'construction_manager') {
+      result = await rejectCostingCM(costing.id, costing.project_id, costing.project.name, user.id, stage, costingComment, stageFullLabel);
+    } else if (role === 'evp') {
+      result = await rejectCostingEVP(costing.id, costing.project_id, costing.project.name, user.id, stage, costingComment, stageFullLabel);
+    } else { setCostingAction(false); return; }
+    if (result.error) alert('Failed to reject costing: ' + result.error);
     setCostingReviewModal(null);
     setCostingComment('');
     setCostingAction(false);
@@ -582,9 +579,17 @@ export default function Approvals() {
     setTransferAction(true);
     const { data: actor } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
     const actorName = (actor as { full_name: string } | null)?.full_name ?? 'EVP';
-    await supabase.from('project_cash_transfers').update({ status: 'evp_recommended', recommended_by: user.id, recommended_at: new Date().toISOString(), recommended_notes: transferNotes || null }).eq('id', t.id);
-    const ceo = profiles.find(p => p.role === 'ceo');
-    if (ceo) await supabase.from('notifications').insert({ user_id: ceo.id, title: 'Margin transfer requires your approval', message: `${actorName} recommends approving a transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}.${transferNotes ? ` ${transferNotes}` : ''} Requires your final approval.`, type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
+    const params: TransferActionParams = {
+      transferId: t.id,
+      actorId: user.id,
+      actorName,
+      amount: t.amount,
+      fromProjectName: (t.from_project as Project)?.name ?? '',
+      toProjectName: (t.to_project as Project)?.name ?? '',
+      notes: transferNotes || null,
+    };
+    const result = await recommendTransferEVP(params);
+    if (result.error) alert('Failed to recommend transfer: ' + result.error);
     setTransferModal(null);
     setTransferNotes('');
     setTransferAction(false);
@@ -597,15 +602,16 @@ export default function Approvals() {
     setTransferApprovalError(null);
     const { data: actor } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
     const actorName = (actor as { full_name: string } | null)?.full_name ?? 'CEO';
-    const { error } = await supabase.from('project_cash_transfers').update({ status: 'ceo_approved', approved_by: user.id, approved_at: new Date().toISOString(), transfer_date: new Date().toISOString().slice(0, 10) }).eq('id', t.id);
-    if (error) { setTransferApprovalError(error.message); setTransferAction(false); return; }
-    const fromName = (t.from_project as Project)?.name ?? '';
-    const toName = (t.to_project as Project)?.name ?? '';
-    const approvedDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    for (const targetRole of ['cost_controller', 'accounts_supervisor'] as const) {
-      const p = profiles.find(pr => pr.role === targetRole);
-      if (p) await supabase.from('notifications').insert({ user_id: p.id, title: `Margin transfer approved — ${fmtTHB(t.amount)}`, message: targetRole === 'accounts_supervisor' ? `${fmtTHB(t.amount)} from ${fromName} to ${toName} approved by CEO on ${approvedDate}.` : `${actorName} approved transfer of ${fmtTHB(t.amount)} from ${fromName} to ${toName}.`, type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
-    }
+    const params: TransferActionParams = {
+      transferId: t.id,
+      actorId: user.id,
+      actorName,
+      amount: t.amount,
+      fromProjectName: (t.from_project as Project)?.name ?? '',
+      toProjectName: (t.to_project as Project)?.name ?? '',
+    };
+    const result = await approveTransferCEO(params);
+    if (result.error) { setTransferApprovalError(result.error); setTransferAction(false); return; }
     setTransferModal(null);
     setTransferNotes('');
     setTransferAction(false);
@@ -615,9 +621,15 @@ export default function Approvals() {
   async function handleTransferReject(t: ProjectCashTransfer) {
     if (!user || !transferRejectReason.trim()) return;
     setTransferAction(true);
-    await supabase.from('project_cash_transfers').update({ status: 'rejected', rejected_by: user.id, rejected_at: new Date().toISOString(), rejection_reason: transferRejectReason.trim() }).eq('id', t.id);
-    const cc = profiles.find(p => p.role === 'cost_controller');
-    if (cc) await supabase.from('notifications').insert({ user_id: cc.id, title: 'Transfer proposal rejected', message: `${profileName(user.id)} rejected the transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}. Reason: ${transferRejectReason.trim()}`, type: 'warning', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
+    const { data: actor } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
+    const actorName = (actor as { full_name: string } | null)?.full_name ?? profileName(user.id);
+    const result = await rejectTransferCEO(
+      t.id, user.id, actorName, t.amount,
+      (t.from_project as Project)?.name ?? '',
+      (t.to_project as Project)?.name ?? '',
+      transferRejectReason.trim(),
+    );
+    if (result.error) alert('Failed to reject transfer: ' + result.error);
     setTransferModal(null);
     setTransferRejectReason('');
     setTransferAction(false);

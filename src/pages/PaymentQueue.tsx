@@ -9,6 +9,12 @@ import { VendorInvoice, PaymentVoucher, Check, PurchaseOrder, Project, Entity } 
 import { useAuth } from '../context/AuthContext';
 import { formatTHB, formatDate } from '../utils/formatters';
 import PODetailModal from '../components/pos/PODetailModal';
+import {
+  approveVoucherCosign, rejectVoucherCosign,
+  issueCheckAndMarkPaid, approveCheckEdit,
+  markCheckCleared, notifyPaymentIssued,
+} from '../services/workflow';
+import { VOUCHER_MANAGER_THRESHOLD } from '../config/thresholds';
 
 // ─── WHT constants ───────────────────────────────────────────────────────────
 
@@ -326,58 +332,7 @@ export default function PaymentQueue() {
     return `VCH-${format(new Date(), 'yyyy')}-${shortDate}-${String(seq).padStart(3, '0')}`;
   }
 
-  // ── Notifications ───────────────────────────────────────────────────────────
-
-  async function insertPaymentNotifications(
-    voucherId: string,
-    netPaid: number,
-    vendorName: string,
-    projectName: string,
-  ) {
-    const notifications: {
-      user_id: string;
-      title: string;
-      message: string;
-      type: 'warning' | 'info';
-      is_read: boolean;
-      related_entity_type: string;
-      related_entity_id: string;
-    }[] = [];
-
-    if (netPaid >= 1_000_000) {
-      const { data: mgr } = await supabase
-        .from('user_profiles').select('id').eq('role', 'accounts_manager').maybeSingle();
-      if (mgr) {
-        notifications.push({
-          user_id: mgr.id,
-          title: 'Sign-off required',
-          message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} requires your co-signature.`,
-          type: 'warning',
-          is_read: false,
-          related_entity_type: 'payment_voucher',
-          related_entity_id: voucherId,
-        });
-      }
-    }
-    if (netPaid >= 3_000_000) {
-      const { data: ceo } = await supabase
-        .from('user_profiles').select('id').eq('role', 'ceo').maybeSingle();
-      if (ceo) {
-        notifications.push({
-          user_id: ceo.id,
-          title: 'Large payment approved',
-          message: `Payment of ${formatTHB(netPaid)} to ${vendorName} for ${projectName} has been approved.`,
-          type: 'info',
-          is_read: false,
-          related_entity_type: 'payment_voucher',
-          related_entity_id: voucherId,
-        });
-      }
-    }
-    if (notifications.length > 0) {
-      await supabase.from('notifications').insert(notifications);
-    }
-  }
+  // ── Notifications delegated to workflow.notifyPaymentIssued ─────────────────
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -460,7 +415,7 @@ export default function PaymentQueue() {
         }),
         // NOTE: vendor_invoices.status is NOT mutated here.
         // It is moved to 'paid' ONLY when the Banking Officer issues the physical check.
-        insertPaymentNotifications(voucherData.id, netPaid, vendorName, projectName),
+        notifyPaymentIssued(voucherData.id, netPaid, vendorName, projectName),
       ]);
     }
 
@@ -471,14 +426,8 @@ export default function PaymentQueue() {
 
   async function approveVoucher(voucherId: string) {
     if (!user) return;
-    await supabase
-      .from('payment_vouchers')
-      .update({ status: 'approved', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
-      .eq('id', voucherId);
-    await supabase
-      .from('checks')
-      .update({ signed_by_manager: user.id })
-      .eq('voucher_id', voucherId);
+    const result = await approveVoucherCosign(voucherId, user.id);
+    if (result.error) alert('Failed to approve voucher: ' + result.error);
     loadData();
   }
 
@@ -486,22 +435,11 @@ export default function PaymentQueue() {
     if (!rejectingVoucher || !user || !rejectComment.trim()) return;
     setRejecting(true);
     try {
-      await supabase
-        .from('payment_vouchers')
-        .update({
-          status: 'rejected',
-          rejection_comment: rejectComment.trim(),
-          rejected_by: user.id,
-          rejected_at: new Date().toISOString(),
-        })
-        .eq('id', rejectingVoucher.id);
-      // Return invoice to released so Supervisor can re-issue
-      if ((rejectingVoucher as any).vendor_invoice_id) {
-        await supabase
-          .from('vendor_invoices')
-          .update({ status: 'released' })
-          .eq('id', (rejectingVoucher as any).vendor_invoice_id);
-      }
+      const result = await rejectVoucherCosign(
+        rejectingVoucher.id, user.id, rejectComment.trim(),
+        (rejectingVoucher as any).vendor_invoice_id ?? null,
+      );
+      if (result.error) alert('Failed to reject voucher: ' + result.error);
       setRejectingVoucher(null);
       setRejectComment('');
       loadData();
@@ -532,31 +470,15 @@ export default function PaymentQueue() {
     if (!editingCheck || !user) return;
     setSavingEdit(true);
     try {
-      await Promise.all([
-        supabase
-          .from('checks')
-          .update({
-            bank_account: editBankAccount,
-            check_no: editCheckNo.trim() || null,
-            check_date: editCheckDate || null,
-            payee: editPayee.trim() || null,
-            status: 'issued',
-            edit_request_status: 'approved',
-            signed_by_manager: user.id,
-          })
-          .eq('id', editingCheck.id),
-        supabase
-          .from('payment_vouchers')
-          .update({ status: 'issued', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
-          .eq('id', editingCheck.voucher_id),
-      ]);
-
-      // Mark vendor invoice as paid
-      const invoiceId = (editingCheck as any).payment_voucher?.vendor_invoice?.id;
-      if (invoiceId) {
-        await supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId);
-      }
-
+      const invoiceId = (editingCheck as any).payment_voucher?.vendor_invoice?.id ?? null;
+      const result = await approveCheckEdit(
+        editingCheck.id,
+        editingCheck.voucher_id,
+        invoiceId,
+        { bankAccount: editBankAccount, checkNo: editCheckNo, checkDate: editCheckDate, payee: editPayee },
+        user.id,
+      );
+      if (result.error) alert('Failed to save edit: ' + result.error);
       closeEditRequest();
       loadData();
     } finally {
@@ -595,31 +517,21 @@ export default function PaymentQueue() {
     setIssuingCheck(true);
     try {
       const invoiceId = (checkModalVoucher as any).vendor_invoice?.id
-        ?? (checkModalVoucher as any).vendor_invoice_id;
+        ?? (checkModalVoucher as any).vendor_invoice_id
+        ?? null;
+      const checkRecord = checks.find(c => c.voucher_id === checkModalVoucher.id);
+      if (!checkRecord) { setIssuingCheck(false); return; }
 
-      await Promise.all([
-        // 1. Mark payment_voucher as issued
-        supabase
-          .from('payment_vouchers')
-          .update({ status: 'issued' })
-          .eq('id', checkModalVoucher.id),
-        // 2. Update checks record with check number/txn, date, bank, and issued status
-        supabase
-          .from('checks')
-          .update({
-            check_no: checkNo.trim(),
-            check_date: checkDate,
-            bank_account: checkBankAccount,
-            status: 'issued',
-            signed_by_supervisor: user.id,
-          })
-          .eq('voucher_id', checkModalVoucher.id),
-        // 3. Mark vendor_invoice as paid — THIS IS THE ONLY PLACE THIS HAPPENS
-        ...(invoiceId
-          ? [supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId)]
-          : []),
-      ]);
-
+      const result = await issueCheckAndMarkPaid(
+        checkRecord.id,
+        checkModalVoucher.id,
+        invoiceId,
+        checkNo.trim(),
+        checkDate,
+        checkBankAccount,
+        user.id,
+      );
+      if (result.error) alert('Failed to issue check: ' + result.error);
       closeCheckModal();
       loadData();
     } finally {
@@ -645,14 +557,8 @@ export default function PaymentQueue() {
     if (!markingCleared || !clearDate) return;
     setSavingClear(true);
     try {
-      await supabase
-        .from('checks')
-        .update({
-          status: 'cleared',
-          cleared_at: new Date(clearDate).toISOString(),
-          cleared_note: clearNote.trim() || null,
-        })
-        .eq('id', markingCleared.id);
+      const result = await markCheckCleared(markingCleared.id, clearDate, clearNote.trim() || null);
+      if (result.error) alert('Failed to mark check cleared: ' + result.error);
       closeClearModal();
       loadData();
     } finally {

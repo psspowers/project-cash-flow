@@ -11,7 +11,12 @@ import {
 import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
-import { approveInvoiceCEO, rejectInvoice } from '../services/workflow';
+import {
+  approveInvoiceCEO, rejectInvoice,
+  approveVoucherCosign, rejectVoucherCosign,
+  approveTransferCEO, rejectTransferCEO,
+  TransferActionParams,
+} from '../services/workflow';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import PODetailModal from '../components/pos/PODetailModal';
 
@@ -191,11 +196,8 @@ export default function CEOAlerts() {
   async function approveVoucher(voucherId: string) {
     if (!user) return;
     setVoucherAction(true);
-    await supabase
-      .from('payment_vouchers')
-      .update({ status: 'approved', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
-      .eq('id', voucherId);
-    await supabase.from('checks').update({ signed_by_manager: user.id }).eq('voucher_id', voucherId);
+    const result = await approveVoucherCosign(voucherId, user.id);
+    if (result.error) alert('Failed to approve voucher: ' + result.error);
     setVoucherAction(false);
     loadData();
   }
@@ -203,13 +205,10 @@ export default function CEOAlerts() {
   async function rejectVoucher() {
     if (!rejectingVoucher || !user || !rejectComment.trim()) return;
     setVoucherAction(true);
-    await supabase
-      .from('payment_vouchers')
-      .update({ status: 'rejected', rejection_comment: rejectComment.trim(), rejected_by: user.id, rejected_at: new Date().toISOString() })
-      .eq('id', rejectingVoucher.id);
-    if (rejectingVoucher.vendor_invoice_id) {
-      await supabase.from('vendor_invoices').update({ status: 'released' }).eq('id', rejectingVoucher.vendor_invoice_id);
-    }
+    const result = await rejectVoucherCosign(
+      rejectingVoucher.id, user.id, rejectComment.trim(), rejectingVoucher.vendor_invoice_id,
+    );
+    if (result.error) alert('Failed to reject voucher: ' + result.error);
     setRejectingVoucher(null);
     setRejectComment('');
     setVoucherAction(false);
@@ -259,39 +258,17 @@ export default function CEOAlerts() {
     setTransferAction(true);
     setTransferApprovalError(null);
     const { data: actorProfile } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
-    const actorName = (actorProfile as { full_name: string } | null)?.full_name ?? 'A team member';
-    const { error } = await supabase.from('project_cash_transfers').update({
-      status: 'ceo_approved',
-      approved_by: user.id,
-      approved_at: new Date().toISOString(),
-      transfer_date: new Date().toISOString().slice(0, 10),
-    }).eq('id', t.id);
-    if (error) {
-      setTransferApprovalError(error.message);
-      setTransferAction(false);
-      return;
-    }
-    const ccProf  = profiles.find(p => p.role === 'cost_controller');
-    const acctProf = profiles.find(p => p.role === 'accounts_supervisor');
-    const fromName = (t.from_project as Project)?.name ?? '';
-    const toName   = (t.to_project as Project)?.name ?? '';
-    const approvedDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    if (ccProf) {
-      await supabase.from('notifications').insert({
-        user_id: ccProf.id,
-        title: `Margin transfer approved — ${fmtTHB(t.amount)}`,
-        message: `${actorName} has approved the transfer of ${fmtTHB(t.amount)} from ${fromName} to ${toName}.`,
-        type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
-    }
-    if (acctProf) {
-      await supabase.from('notifications').insert({
-        user_id: acctProf.id,
-        title: `Margin transfer approved for your records`,
-        message: `${fmtTHB(t.amount)} transferred from ${fromName} to ${toName} approved by CEO on ${approvedDate}.`,
-        type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
-    }
+    const actorName = (actorProfile as { full_name: string } | null)?.full_name ?? 'CEO';
+    const params: TransferActionParams = {
+      transferId: t.id,
+      actorId: user.id,
+      actorName,
+      amount: t.amount,
+      fromProjectName: (t.from_project as Project)?.name ?? '',
+      toProjectName: (t.to_project as Project)?.name ?? '',
+    };
+    const result = await approveTransferCEO(params);
+    if (result.error) { setTransferApprovalError(result.error); setTransferAction(false); return; }
     setTransferModal(null);
     setTransferNotes('');
     setTransferAction(false);
@@ -301,21 +278,15 @@ export default function CEOAlerts() {
   async function handleReject(t: ProjectCashTransfer) {
     if (!user || !transferRejectReason.trim()) return;
     setTransferAction(true);
-    await supabase.from('project_cash_transfers').update({
-      status: 'rejected',
-      rejected_by: user.id,
-      rejected_at: new Date().toISOString(),
-      rejection_reason: transferRejectReason.trim(),
-    }).eq('id', t.id);
-    const ccProf = profiles.find(p => p.role === 'cost_controller');
-    if (ccProf) {
-      await supabase.from('notifications').insert({
-        user_id: ccProf.id,
-        title: `Transfer proposal rejected`,
-        message: `${profileName(user.id)} rejected the transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}. Reason: ${transferRejectReason.trim()}`,
-        type: 'warning', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
-    }
+    const { data: actorProfile } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
+    const actorName = (actorProfile as { full_name: string } | null)?.full_name ?? profileName(user.id);
+    const result = await rejectTransferCEO(
+      t.id, user.id, actorName, t.amount,
+      (t.from_project as Project)?.name ?? '',
+      (t.to_project as Project)?.name ?? '',
+      transferRejectReason.trim(),
+    );
+    if (result.error) alert('Failed to reject transfer: ' + result.error);
     setTransferModal(null);
     setTransferRejectReason('');
     setTransferAction(false);

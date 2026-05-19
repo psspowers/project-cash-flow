@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Lock, Plus, X, XCircle } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import {
-  ProjectCosting, VariationOrder, UserProfile,
+  ProjectCosting, VariationOrder,
   fmtTHB, COSTING_CATEGORY_KEYS, COSTING_CATEGORY_LABELS,
 } from '../../../types';
 import Badge, { statusVariant } from '../../ui/Badge';
@@ -11,6 +11,11 @@ import { useAuth } from '../../../context/AuthContext';
 import ProjectCostingForm from '../../costing/ProjectCostingForm';
 import { useProjectDetail } from '../../../context/ProjectDetailContext';
 import { CATEGORY_KEY_LABELS, STATUS_BANNER, DRAFT_STAGES, emptyCosting } from '../projectDetailConstants';
+import {
+  submitCosting, approveCostingCM, approveCostingEVP,
+  rejectCostingCM, rejectCostingEVP, notify,
+  CostingActionParams,
+} from '../../../services/workflow';
 
 export default function CostingTab() {
   const {
@@ -59,18 +64,6 @@ export default function CostingTab() {
   const estimationOnly = new Set(['estimation_draft', 'estimation_submitted', 'estimation_cm_approved', 'estimation_approved']);
   const showVOs = status === 'active' || status === 'completed';
 
-  async function insertNotification(userId: string, title: string, message: string, type: 'info' | 'warning' = 'info') {
-    await supabase.from('notifications').insert({
-      user_id: userId, title, message, type, is_read: false,
-      related_entity_type: 'project', related_entity_id: project!.id,
-    });
-  }
-
-  async function getProfileByRole(role: string): Promise<UserProfile | null> {
-    const { data } = await supabase.from('user_profiles').select('*').eq('role', role).maybeSingle();
-    return data as UserProfile | null;
-  }
-
   function openBudgetEdit() {
     if (!budget) return;
     const fields: Record<string, string> = { salesPrice: String(budget.sales_price_excl_vat) };
@@ -111,36 +104,29 @@ export default function CostingTab() {
   async function submitEstimation() {
     if (!project || !user || !estimation) return;
     setActionLoading(true); setActionError('');
-    await supabase.from('project_costings').update({ status: 'submitted', submitted_by: user.id, submitted_at: new Date().toISOString() }).eq('id', estimation.id);
-    await supabase.from('projects').update({ status: 'estimation_submitted' }).eq('id', project.id);
-    const cm = await getProfileByRole('construction_manager');
-    if (cm) await insertNotification(cm.id, `Estimation ready for review — ${project.name}`, `Niramon has submitted the estimation for ${project.name}. Awaiting your review.`);
+    const params: CostingActionParams = { costingId: estimation.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'estimation' };
+    const result = await submitCosting(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
 
   async function approveCMEstimation() {
-    if (!project || !user) return;
+    if (!project || !user || !estimation) return;
     setActionLoading(true); setActionError('');
-    if (estimation) {
-      await supabase.from('project_costings').update({ status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString() }).eq('id', estimation.id);
-    }
-    await supabase.from('projects').update({ status: 'estimation_cm_approved' }).eq('id', project.id);
-    const evp = await getProfileByRole('evp');
-    if (evp) await insertNotification(evp.id, `Estimation ready for your approval — ${project.name}`, `Suraphol has approved the estimation. Awaiting your final sign-off.`);
+    const params: CostingActionParams = { costingId: estimation.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'estimation' };
+    const result = await approveCostingCM(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
 
   async function approveEVPEstimation() {
-    if (!project || !user) return;
+    if (!project || !user || !estimation) return;
     setActionLoading(true); setActionError('');
-    if (estimation) {
-      await supabase.from('project_costings').update({ status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString() }).eq('id', estimation.id);
-    }
-    await supabase.from('projects').update({ status: 'estimation_approved' }).eq('id', project.id);
-    const cc = await getProfileByRole('cost_controller');
-    if (cc) await insertNotification(cc.id, `Estimation approved — ${project.name}`, `Nakkarin has approved the estimation. You can now create the budget.`);
+    const params: CostingActionParams = { costingId: estimation.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'estimation' };
+    const result = await approveCostingEVP(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
@@ -169,38 +155,29 @@ export default function CostingTab() {
   async function submitBudget() {
     if (!project || !user || !budget) return;
     setActionLoading(true); setActionError('');
-    await supabase.from('project_costings').update({ status: 'submitted', submitted_by: user.id, submitted_at: new Date().toISOString() }).eq('id', budget.id);
-    await supabase.from('projects').update({ status: 'budget_submitted' }).eq('id', project.id);
-    const cm = await getProfileByRole('construction_manager');
-    if (cm) await insertNotification(cm.id, `Budget ready for review — ${project.name}`, `Niramon has submitted the budget for ${project.name}. Awaiting your review.`);
+    const params: CostingActionParams = { costingId: budget.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'budget' };
+    const result = await submitCosting(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
 
   async function approveCMBudget() {
-    if (!project || !user) return;
+    if (!project || !user || !budget) return;
     setActionLoading(true); setActionError('');
-    if (budget) {
-      await supabase.from('project_costings').update({ status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString() }).eq('id', budget.id);
-    }
-    await supabase.from('projects').update({ status: 'budget_cm_approved' }).eq('id', project.id);
-    const evp = await getProfileByRole('evp');
-    if (evp) await insertNotification(evp.id, `Budget ready for final approval — ${project.name}`, `Suraphol has approved the budget. Awaiting your final approval to activate the project.`);
+    const params: CostingActionParams = { costingId: budget.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'budget' };
+    const result = await approveCostingCM(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
 
   async function approveEVPBudget() {
-    if (!project || !user) return;
+    if (!project || !user || !budget) return;
     setActionLoading(true); setActionError('');
-    if (budget) {
-      await supabase.from('project_costings').update({ status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString() }).eq('id', budget.id);
-    }
-    await supabase.from('projects').update({ status: 'active' }).eq('id', project.id);
-    const cc = await getProfileByRole('cost_controller');
-    const acct = await getProfileByRole('accounts_supervisor');
-    if (cc) await insertNotification(cc.id, `Project activated — ${project.name}`, `Budget approved by Nakkarin. The project is now active. You can create purchase orders.`);
-    if (acct) await insertNotification(acct.id, `New active project — ${project.name}`, `Project ${project.name} is now active. Cash receipts and payments can be recorded.`);
+    const params: CostingActionParams = { costingId: budget.id, projectId: project.id, projectName: project.name, actorId: user.id, stage: 'budget' };
+    const result = await approveCostingEVP(params);
+    if (result.error) setActionError(result.error);
     setActionLoading(false);
     await reload();
   }
@@ -225,24 +202,17 @@ export default function CostingTab() {
     setActionLoading(true); setActionError('');
     setShowRejectModal(false);
     const costingToUpdate = rejectTargetStatus.startsWith('budget') ? budget : estimation;
+    const stage: CostingActionParams['stage'] = rejectTargetStatus.startsWith('budget') ? 'budget' : 'estimation';
     if (costingToUpdate) {
       const isEVPReject = rejectTargetStatus === 'evp_rejected';
-      const isCMReject = rejectTargetStatus === 'cm_rejected';
-      const updateData: Record<string, unknown> = { status: rejectTargetStatus };
-      if (isCMReject) { updateData.cm_approved_by = user.id; updateData.cm_approved_at = new Date().toISOString(); updateData.cm_comments = rejectComment; }
-      if (isEVPReject) { updateData.evp_approved_by = user.id; updateData.evp_approved_at = new Date().toISOString(); updateData.evp_comments = rejectComment; }
-      await supabase.from('project_costings').update(updateData).eq('id', costingToUpdate.id);
+      let result: { error: string | null };
+      if (isEVPReject) {
+        result = await rejectCostingEVP(costingToUpdate.id, project.id, project.name, user.id, stage, rejectComment, rejectStageLabel);
+      } else {
+        result = await rejectCostingCM(costingToUpdate.id, project.id, project.name, user.id, stage, rejectComment, rejectStageLabel);
+      }
+      if (result.error) setActionError(result.error);
     }
-    const backStatus = rejectTargetStatus.startsWith('budget') ? 'budget_draft' : 'estimation_draft';
-    await supabase.from('projects').update({
-      status: backStatus,
-      last_rejection_comment: rejectComment,
-      last_rejected_by: user.id,
-      last_rejected_at: new Date().toISOString(),
-      last_rejected_stage: rejectStageLabel,
-    }).eq('id', project.id);
-    const cc = await getProfileByRole('cost_controller');
-    if (cc) await insertNotification(cc.id, `${rejectStageLabel} rejected`, `Rejected by ${profileName(user.id)}: ${rejectComment}`, 'warning');
     setRejectComment('');
     setActionLoading(false);
     await reload();
@@ -267,8 +237,10 @@ export default function CostingTab() {
       submitted_at: new Date().toISOString(),
     });
     if (error) { setFormError(error.message); return; }
-    const evp = await getProfileByRole('evp');
-    if (evp) await insertNotification(evp.id, `New Variation Order — ${project.name}`, `A new variation order (${voForm.vo_number}) has been submitted for your review.`);
+    const { data: evpProfile } = await supabase.from('user_profiles').select('id').eq('role', 'evp').maybeSingle();
+    if (evpProfile) {
+      await notify((evpProfile as { id: string }).id, `New Variation Order — ${project.name}`, `A new variation order (${voForm.vo_number}) has been submitted for your review.`, 'info', 'project', project.id);
+    }
     setShowNewVO(false);
     setVoForm({ vo_number: '', client_po_reference: '', description: '', revenue_increase: '0', ...emptyCosting() });
     setFormError('');

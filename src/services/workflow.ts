@@ -1,5 +1,10 @@
 import { supabase } from '../lib/supabase';
 import type { UserRole, POStatus } from '../types';
+import {
+  PO_CEO_THRESHOLD as _PO_CEO_THRESHOLD,
+  VOUCHER_MANAGER_THRESHOLD,
+  VOUCHER_CEO_NOTIFY_THRESHOLD,
+} from '../config/thresholds';
 
 type NotificationType = 'info' | 'warning' | 'success' | 'error' | 'alert';
 
@@ -12,7 +17,7 @@ async function getProfileByRole(role: UserRole): Promise<{ id: string } | null> 
   return data as { id: string } | null;
 }
 
-async function notify(
+export async function notify(
   userId: string,
   title: string,
   message: string,
@@ -176,7 +181,7 @@ export async function rejectInvoiceCM(
   return { error: null };
 }
 
-const EVP_CEO_THRESHOLD = 3_000_000;
+const EVP_CEO_THRESHOLD = _PO_CEO_THRESHOLD;
 
 export async function approveInvoiceEVP(
   invoiceId: string,
@@ -297,7 +302,7 @@ export async function rejectInvoice(
 
 // ─── PO State Machine ─────────────────────────────────────────────────────────
 
-export const PO_CEO_THRESHOLD = 3_000_000;
+export { PO_CEO_THRESHOLD } from '../config/thresholds';
 
 export async function logPOAction(
   poId: string,
@@ -825,4 +830,462 @@ export async function rejectPOChangeRequest(
   }
 
   return { error: null };
+}
+
+// ─── Costing Workflow ─────────────────────────────────────────────────────────
+
+export interface CostingActionParams {
+  costingId: string;
+  projectId: string;
+  projectName: string;
+  actorId: string;
+  stage: 'estimation' | 'budget';
+  comment?: string | null;
+}
+
+export async function submitCosting(params: CostingActionParams): Promise<{ error: string | null }> {
+  const { costingId, projectId, projectName, actorId, stage } = params;
+
+  const { error: costingErr } = await supabase
+    .from('project_costings')
+    .update({ status: 'submitted', submitted_by: actorId, submitted_at: new Date().toISOString() })
+    .eq('id', costingId);
+  if (costingErr) return { error: costingErr.message };
+
+  const projectStatus = stage === 'estimation' ? 'estimation_submitted' : 'budget_submitted';
+  const { error: projErr } = await supabase
+    .from('projects')
+    .update({ status: projectStatus })
+    .eq('id', projectId);
+  if (projErr) return { error: projErr.message };
+
+  const cm = await getProfileByRole('construction_manager');
+  if (cm) {
+    const label = stage === 'estimation' ? 'Estimation' : 'Budget';
+    await notify(
+      cm.id,
+      `${label} ready for review — ${projectName}`,
+      `The ${label.toLowerCase()} for ${projectName} has been submitted. Awaiting your review.`,
+      'info',
+      'project',
+      projectId,
+    );
+  }
+
+  return { error: null };
+}
+
+export async function approveCostingCM(params: CostingActionParams): Promise<{ error: string | null }> {
+  const { costingId, projectId, projectName, actorId, stage, comment } = params;
+
+  const { error: costingErr } = await supabase
+    .from('project_costings')
+    .update({ status: 'cm_approved', cm_approved_by: actorId, cm_approved_at: new Date().toISOString(), cm_comments: comment ?? null })
+    .eq('id', costingId);
+  if (costingErr) return { error: costingErr.message };
+
+  const projectStatus = stage === 'estimation' ? 'estimation_cm_approved' : 'budget_cm_approved';
+  const { error: projErr } = await supabase
+    .from('projects')
+    .update({ status: projectStatus })
+    .eq('id', projectId);
+  if (projErr) return { error: projErr.message };
+
+  const evp = await getProfileByRole('evp');
+  if (evp) {
+    const label = stage === 'estimation' ? 'Estimation' : 'Budget';
+    await notify(
+      evp.id,
+      `${label} costing ready for your approval — ${projectName}`,
+      `Construction Manager has reviewed and approved the ${label.toLowerCase()} for ${projectName}. Awaiting your final sign-off.`,
+      'info',
+      'project',
+      projectId,
+    );
+  }
+
+  return { error: null };
+}
+
+export async function approveCostingEVP(params: CostingActionParams): Promise<{ error: string | null }> {
+  const { costingId, projectId, projectName, actorId, stage, comment } = params;
+
+  const { error: costingErr } = await supabase
+    .from('project_costings')
+    .update({ status: 'evp_approved', evp_approved_by: actorId, evp_approved_at: new Date().toISOString(), evp_comments: comment ?? null })
+    .eq('id', costingId);
+  if (costingErr) return { error: costingErr.message };
+
+  const projectStatus = stage === 'estimation' ? 'estimation_approved' : 'active';
+  const { error: projErr } = await supabase
+    .from('projects')
+    .update({ status: projectStatus })
+    .eq('id', projectId);
+  if (projErr) return { error: projErr.message };
+
+  const cc = await getProfileByRole('cost_controller');
+  if (cc) {
+    const label = stage === 'estimation' ? 'Estimation' : 'Budget';
+    const msg = stage === 'estimation'
+      ? `EVP has approved the estimation for ${projectName}. You can now create the budget.`
+      : `EVP has approved the budget for ${projectName}. The project is now active. You can create purchase orders.`;
+    await notify(cc.id, `${label} approved — ${projectName}`, msg, 'success', 'project', projectId);
+  }
+
+  if (stage === 'budget') {
+    const acct = await getProfileByRole('accounts_supervisor');
+    if (acct) {
+      await notify(
+        acct.id,
+        `New active project — ${projectName}`,
+        `Project ${projectName} is now active. Cash receipts and payments can be recorded.`,
+        'success',
+        'project',
+        projectId,
+      );
+    }
+  }
+
+  return { error: null };
+}
+
+export async function rejectCostingCM(
+  costingId: string,
+  projectId: string,
+  projectName: string,
+  actorId: string,
+  stage: 'estimation' | 'budget',
+  comment: string,
+  stageLabel: string,
+): Promise<{ error: string | null }> {
+  const { error: costingErr } = await supabase
+    .from('project_costings')
+    .update({ status: 'cm_rejected', cm_approved_by: actorId, cm_approved_at: new Date().toISOString(), cm_comments: comment })
+    .eq('id', costingId);
+  if (costingErr) return { error: costingErr.message };
+
+  const backStatus = stage === 'budget' ? 'budget_draft' : 'estimation_draft';
+  const { error: projErr } = await supabase
+    .from('projects')
+    .update({
+      status: backStatus,
+      last_rejection_comment: comment,
+      last_rejected_by: actorId,
+      last_rejected_at: new Date().toISOString(),
+      last_rejected_stage: stageLabel,
+    })
+    .eq('id', projectId);
+  if (projErr) return { error: projErr.message };
+
+  const cc = await getProfileByRole('cost_controller');
+  if (cc) {
+    await notify(cc.id, `${stageLabel} rejected`, `Rejected by Construction Manager: ${comment}`, 'warning', 'project', projectId);
+  }
+
+  return { error: null };
+}
+
+export async function rejectCostingEVP(
+  costingId: string,
+  projectId: string,
+  projectName: string,
+  actorId: string,
+  stage: 'estimation' | 'budget',
+  comment: string,
+  stageLabel: string,
+): Promise<{ error: string | null }> {
+  const { error: costingErr } = await supabase
+    .from('project_costings')
+    .update({ status: 'evp_rejected', evp_approved_by: actorId, evp_approved_at: new Date().toISOString(), evp_comments: comment })
+    .eq('id', costingId);
+  if (costingErr) return { error: costingErr.message };
+
+  const backStatus = stage === 'budget' ? 'budget_draft' : 'estimation_draft';
+  const { error: projErr } = await supabase
+    .from('projects')
+    .update({
+      status: backStatus,
+      last_rejection_comment: comment,
+      last_rejected_by: actorId,
+      last_rejected_at: new Date().toISOString(),
+      last_rejected_stage: stageLabel,
+    })
+    .eq('id', projectId);
+  if (projErr) return { error: projErr.message };
+
+  const cc = await getProfileByRole('cost_controller');
+  if (cc) {
+    await notify(cc.id, `${stageLabel} rejected`, `Rejected by EVP: ${comment}`, 'warning', 'project', projectId);
+  }
+
+  return { error: null };
+}
+
+// ─── Cash Transfer Workflow ────────────────────────────────────────────────────
+
+export interface TransferActionParams {
+  transferId: string;
+  actorId: string;
+  actorName: string;
+  amount: number;
+  fromProjectName: string;
+  toProjectName: string;
+  notes?: string | null;
+}
+
+export async function recommendTransferEVP(params: TransferActionParams): Promise<{ error: string | null }> {
+  const { transferId, actorId, actorName, amount, fromProjectName, toProjectName, notes } = params;
+
+  const { error } = await supabase
+    .from('project_cash_transfers')
+    .update({ status: 'evp_recommended', recommended_by: actorId, recommended_at: new Date().toISOString(), recommended_notes: notes ?? null })
+    .eq('id', transferId);
+  if (error) return { error: error.message };
+
+  const ceo = await getProfileByRole('ceo');
+  if (ceo) {
+    await notify(
+      ceo.id,
+      'Margin transfer requires your approval',
+      `${actorName} recommends approving a transfer of ฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })} from ${fromProjectName} to ${toProjectName}.${notes ? ` ${notes}` : ''} Requires your final approval.`,
+      'info',
+      'project_cash_transfer',
+      transferId,
+    );
+  }
+
+  return { error: null };
+}
+
+export async function approveTransferCEO(params: TransferActionParams): Promise<{ error: string | null }> {
+  const { transferId, actorId, actorName, amount, fromProjectName, toProjectName } = params;
+
+  const { error } = await supabase
+    .from('project_cash_transfers')
+    .update({ status: 'ceo_approved', approved_by: actorId, approved_at: new Date().toISOString(), transfer_date: new Date().toISOString().slice(0, 10) })
+    .eq('id', transferId);
+  if (error) return { error: error.message };
+
+  const approvedDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const amtStr = `฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+
+  const [cc, acct] = await Promise.all([
+    getProfileByRole('cost_controller'),
+    getProfileByRole('accounts_supervisor'),
+  ]);
+
+  if (cc) {
+    await notify(
+      cc.id,
+      `Margin transfer approved — ${amtStr}`,
+      `${actorName} has approved the transfer of ${amtStr} from ${fromProjectName} to ${toProjectName}.`,
+      'info',
+      'project_cash_transfer',
+      transferId,
+    );
+  }
+  if (acct) {
+    await notify(
+      acct.id,
+      `Margin transfer approved for your records`,
+      `${amtStr} transferred from ${fromProjectName} to ${toProjectName} approved by CEO on ${approvedDate}.`,
+      'info',
+      'project_cash_transfer',
+      transferId,
+    );
+  }
+
+  return { error: null };
+}
+
+export async function rejectTransferCEO(
+  transferId: string,
+  actorId: string,
+  actorName: string,
+  amount: number,
+  fromProjectName: string,
+  toProjectName: string,
+  reason: string,
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('project_cash_transfers')
+    .update({ status: 'rejected', rejected_by: actorId, rejected_at: new Date().toISOString(), rejection_reason: reason })
+    .eq('id', transferId);
+  if (error) return { error: error.message };
+
+  const amtStr = `฿${amount.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  const cc = await getProfileByRole('cost_controller');
+  if (cc) {
+    await notify(
+      cc.id,
+      'Transfer proposal rejected',
+      `${actorName} rejected the transfer of ${amtStr} from ${fromProjectName} to ${toProjectName}. Reason: ${reason}`,
+      'warning',
+      'project_cash_transfer',
+      transferId,
+    );
+  }
+
+  return { error: null };
+}
+
+// ─── Voucher Co-Sign Workflow ─────────────────────────────────────────────────
+
+export async function approveVoucherCosign(
+  voucherId: string,
+  actorId: string,
+): Promise<{ error: string | null }> {
+  const { error: vErr } = await supabase
+    .from('payment_vouchers')
+    .update({ status: 'approved', manager_approved_by: actorId, manager_approved_at: new Date().toISOString() })
+    .eq('id', voucherId);
+  if (vErr) return { error: vErr.message };
+
+  const { error: cErr } = await supabase
+    .from('checks')
+    .update({ signed_by_manager: actorId })
+    .eq('voucher_id', voucherId);
+  if (cErr) return { error: cErr.message };
+
+  return { error: null };
+}
+
+export async function rejectVoucherCosign(
+  voucherId: string,
+  actorId: string,
+  comment: string,
+  vendorInvoiceId: string | null | undefined,
+): Promise<{ error: string | null }> {
+  const { error: vErr } = await supabase
+    .from('payment_vouchers')
+    .update({ status: 'rejected', rejection_comment: comment, rejected_by: actorId, rejected_at: new Date().toISOString() })
+    .eq('id', voucherId);
+  if (vErr) return { error: vErr.message };
+
+  if (vendorInvoiceId) {
+    await supabase.from('vendor_invoices').update({ status: 'released' }).eq('id', vendorInvoiceId);
+  }
+
+  return { error: null };
+}
+
+// ─── Mark Invoice Paid ────────────────────────────────────────────────────────
+
+export async function markInvoicePaid(invoiceId: string): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('vendor_invoices')
+    .update({ status: 'paid' })
+    .eq('id', invoiceId);
+  return { error: error?.message ?? null };
+}
+
+// ─── Check Lifecycle ──────────────────────────────────────────────────────────
+
+export async function issueCheckAndMarkPaid(
+  checkId: string,
+  voucherId: string,
+  invoiceId: string | null | undefined,
+  checkNo: string,
+  checkDate: string,
+  bankAccount: string,
+  actorId: string,
+): Promise<{ error: string | null }> {
+  const updates: Promise<unknown>[] = [
+    supabase.from('payment_vouchers').update({ status: 'issued' }).eq('id', voucherId),
+    supabase.from('checks').update({ check_no: checkNo, check_date: checkDate, bank_account: bankAccount, status: 'issued', signed_by_supervisor: actorId }).eq('id', checkId),
+  ];
+  if (invoiceId) {
+    updates.push(supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId));
+  }
+  await Promise.all(updates);
+  return { error: null };
+}
+
+export async function approveCheckEdit(
+  checkId: string,
+  voucherId: string,
+  invoiceId: string | null | undefined,
+  edits: { bankAccount: string; checkNo: string; checkDate: string; payee: string },
+  actorId: string,
+): Promise<{ error: string | null }> {
+  const updates: Promise<unknown>[] = [
+    supabase.from('checks').update({
+      bank_account: edits.bankAccount,
+      check_no: edits.checkNo.trim() || null,
+      check_date: edits.checkDate || null,
+      payee: edits.payee.trim() || null,
+      status: 'issued',
+      edit_request_status: 'approved',
+      signed_by_manager: actorId,
+    }).eq('id', checkId),
+    supabase.from('payment_vouchers').update({ status: 'issued', manager_approved_by: actorId, manager_approved_at: new Date().toISOString() }).eq('id', voucherId),
+  ];
+  if (invoiceId) {
+    updates.push(supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId));
+  }
+  await Promise.all(updates);
+  return { error: null };
+}
+
+export async function markCheckCleared(
+  checkId: string,
+  clearedAt: string,
+  note: string | null,
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('checks')
+    .update({ status: 'cleared', cleared_at: new Date(clearedAt).toISOString(), cleared_note: note ?? null })
+    .eq('id', checkId);
+  return { error: error?.message ?? null };
+}
+
+// ─── Payment Notification Helper ──────────────────────────────────────────────
+
+export async function notifyPaymentIssued(
+  voucherId: string,
+  netPaid: number,
+  vendorName: string,
+  projectName: string,
+): Promise<void> {
+  const notifications: {
+    user_id: string;
+    title: string;
+    message: string;
+    type: 'warning' | 'info';
+    is_read: boolean;
+    related_entity_type: string;
+    related_entity_id: string;
+  }[] = [];
+
+  if (netPaid >= VOUCHER_MANAGER_THRESHOLD) {
+    const mgr = await getProfileByRole('accounts_manager');
+    if (mgr) {
+      notifications.push({
+        user_id: mgr.id,
+        title: 'Sign-off required',
+        message: `Payment of ฿${netPaid.toLocaleString('en-US', { maximumFractionDigits: 0 })} to ${vendorName} for ${projectName} requires your co-signature.`,
+        type: 'warning',
+        is_read: false,
+        related_entity_type: 'payment_voucher',
+        related_entity_id: voucherId,
+      });
+    }
+  }
+  if (netPaid >= VOUCHER_CEO_NOTIFY_THRESHOLD) {
+    const ceo = await getProfileByRole('ceo');
+    if (ceo) {
+      notifications.push({
+        user_id: ceo.id,
+        title: 'Large payment approved',
+        message: `Payment of ฿${netPaid.toLocaleString('en-US', { maximumFractionDigits: 0 })} to ${vendorName} for ${projectName} has been approved.`,
+        type: 'info',
+        is_read: false,
+        related_entity_type: 'payment_voucher',
+        related_entity_id: voucherId,
+      });
+    }
+  }
+  if (notifications.length > 0) {
+    await supabase.from('notifications').insert(notifications);
+  }
 }

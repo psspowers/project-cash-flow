@@ -5,6 +5,9 @@ import { Project, Entity, CostCategory, COST_CATEGORY_LABELS, fmtTHB, PurchaseOr
 import { useAuth } from '../../context/AuthContext';
 import { useTaxConfig } from '../../hooks/useTaxConfig';
 import VendorCombobox from '../ui/VendorCombobox';
+import { PO_THRESHOLD_CM, PO_THRESHOLD_EVP } from '../../config/thresholds';
+import { submitPO } from '../../services/workflow';
+import type { POActionParams } from '../../services/workflow';
 
 interface Props {
   projects: Project[];
@@ -27,9 +30,6 @@ interface SimplePaymentRow {
 
 type POType = 'simple' | 'milestone';
 type SubmitMode = 'draft' | 'submit';
-
-const PO_THRESHOLD_CM = 1_000_000;
-const PO_THRESHOLD_EVP = 5_000_000;
 
 export default function POCreationWizard({ projects, vendors, onClose, onSuccess, editPo }: Props) {
   const { user } = useAuth();
@@ -219,22 +219,17 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
       }
 
       if (status === 'pending_cc') {
-        const requiredRole = inclVatNum < PO_THRESHOLD_CM ? 'construction_manager'
-          : inclVatNum < PO_THRESHOLD_EVP ? 'evp' : 'ceo';
-        const { data: approverProfile } = await supabase
-          .from('user_profiles').select('id').eq('role', requiredRole).maybeSingle();
-        if (approverProfile) {
-          const projectName = projects.find(p => p.id === projectId)?.name ?? '';
-          await supabase.from('notifications').insert({
-            user_id: (approverProfile as { id: string }).id,
-            title: `PO approval required — ${projectName}`,
-            message: `A purchase order for ${vendors.find(v => v.id === vendorId)?.name ?? 'supplier'} (${fmtTHB(inclVatNum)}) has been re-submitted for your approval.`,
-            type: 'info',
-            is_read: false,
-            related_entity_type: 'project',
-            related_entity_id: projectId,
-          });
-        }
+        const projectName = projects.find(p => p.id === projectId)?.name ?? '';
+        const poParams: POActionParams = {
+          poId: editPo!.id,
+          actorId: user.id,
+          projectName,
+          projectId,
+          poDescription: description.trim(),
+          poAmountInclVat: inclVatNum,
+          currentStatus: editPo!.status as never,
+        };
+        await submitPO(poParams);
       }
 
       setSaving(false);
@@ -296,22 +291,17 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     }
 
     if (mode === 'submit') {
-      const requiredRole = inclVatNum < PO_THRESHOLD_CM ? 'construction_manager'
-        : inclVatNum < PO_THRESHOLD_EVP ? 'evp' : 'ceo';
-      const { data: approverProfile } = await supabase
-        .from('user_profiles').select('id').eq('role', requiredRole).maybeSingle();
-      if (approverProfile) {
-        const projectName = activeProjects.find(p => p.id === projectId)?.name ?? '';
-        await supabase.from('notifications').insert({
-          user_id: (approverProfile as { id: string }).id,
-          title: `PO approval required — ${projectName}`,
-          message: `A new purchase order for ${vendors.find(v => v.id === vendorId)?.name ?? 'supplier'} (${fmtTHB(inclVatNum)}) has been submitted for your approval.`,
-          type: 'info',
-          is_read: false,
-          related_entity_type: 'project',
-          related_entity_id: projectId,
-        });
-      }
+      const projectName = activeProjects.find(p => p.id === projectId)?.name ?? '';
+      const poParams: POActionParams = {
+        poId: (poData as { id: string }).id,
+        actorId: user.id,
+        projectName,
+        projectId,
+        poDescription: description.trim(),
+        poAmountInclVat: inclVatNum,
+        currentStatus: 'draft',
+      };
+      await submitPO(poParams);
     }
 
     setSaving(false);
