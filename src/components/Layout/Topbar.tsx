@@ -28,10 +28,10 @@ export function notifHref(entityType: string | null | undefined, entityId: strin
   if (!entityType) return null;
   if (entityType === 'project' && entityId) return `/projects/${entityId}?tab=costing`;
   if (entityType === 'project_costing' && entityId) return `/projects/${entityId}?tab=costing`;
-  if (entityType === 'purchase_order') return '/approvals';
-  if (entityType === 'vendor_invoice') return '/approvals';
-  if (entityType === 'project_cash_transfer') return '/approvals';
-  if (entityType === 'progress_report') return '/approvals';
+  if (entityType === 'purchase_order') return '/approvals?section=purchase_orders';
+  if (entityType === 'vendor_invoice') return '/approvals?section=invoices';
+  if (entityType === 'project_cash_transfer') return '/approvals?section=transfers';
+  if (entityType === 'progress_report') return '/approvals?section=progress_reports';
   if (entityType === 'payment_voucher') return '/payment-queue';
   if (entityType === 'loan') return '/treasury';
   if (entityType === 'check') return '/checks';

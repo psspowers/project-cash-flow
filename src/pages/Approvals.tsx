@@ -1,12 +1,20 @@
-import { useEffect, useState } from 'react';
-import { CheckCircle, XCircle, Clock, Plus, X, FileText, DollarSign, ArrowRightLeft, ShoppingCart, Receipt } from 'lucide-react';
-import { approveInvoiceCM, approveInvoiceCEO, approveInvoiceEVP, rejectInvoiceCM, rejectInvoice } from '../services/workflow';
+import { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  CheckCircle, XCircle, Clock, Plus, X, FileText, DollarSign,
+  ArrowRightLeft, ShoppingCart, Receipt, AlertTriangle,
+} from 'lucide-react';
+import {
+  approveInvoiceCM, approveInvoiceEVP, approveInvoiceCEO, rejectInvoice,
+  approvePO_CC, approvePO_CM, approvePO_EVP, approvePO_CEO, rejectPO,
+  POActionParams,
+} from '../services/workflow';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import { useForm } from 'react-hook-form';
 import { supabase } from '../lib/supabase';
 import {
   ProgressReport, PurchaseOrder, VendorInvoice, Project,
-  ProjectCosting, COSTING_CATEGORY_KEYS, COSTING_CATEGORY_LABELS, fmtTHB, UserProfile,
+  ProjectCosting, COSTING_CATEGORY_KEYS, fmtTHB, UserProfile,
   ProjectCashTransfer,
 } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -14,19 +22,14 @@ import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHB, formatDate } from '../utils/formatters';
 import { computeMarginTransferPosition, MarginTransferPosition } from '../utils/marginTransfer';
 
-const PO_THRESHOLD_CM = 1_000_000;
-const PO_THRESHOLD_EVP = 5_000_000;
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const PROJECT_CODE_MAP: Record<string, string> = {
-  'LPF2 Meat Frozen': 'LPF2',
-  'RCP – 788 kWp Rooftop': 'RCP',
-  'Renaissance – 455 kWp Rooftop': 'RENA',
-  'LPF – 999 kWp Rooftop': 'LPF',
-  'Nanapan – 2.5 MWp Rooftop': 'NANP',
-  'KKU – 30 MWp Solar System': 'KKU',
-  'Walailak – 6 MWp Floating Solar': 'WAL',
-  'Naresuan – 12.09 MWp Rooftop': 'NARE',
-};
+const PO_THRESHOLD_CM  = 1_000_000;
+const PO_THRESHOLD_EVP = 5_000_000;
+const INVOICE_CEO_THRESHOLD = 3_000_000;
+const PO_PENDING_STATUSES = ['pending_cc', 'pending_cm', 'pending_evp', 'pending_ceo', 'pending_revision_approval'];
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type ApprovalTab = 'pending' | 'with_others' | 'completed';
 
@@ -50,6 +53,37 @@ interface CostingWithProject extends ProjectCosting {
   submitterProfile?: UserProfile;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function stageLabel(projectStatus: string): string {
+  if (['estimation_submitted', 'estimation_cm_approved'].includes(projectStatus)) return 'Estimation';
+  if (['budget_submitted', 'budget_cm_approved'].includes(projectStatus)) return 'Budget';
+  return 'Costing';
+}
+
+function poStageLabel(status: string): string {
+  switch (status) {
+    case 'pending_cc':  return 'Awaiting Cost Controller';
+    case 'pending_cm':  return 'Awaiting Construction Manager';
+    case 'pending_evp': return 'Awaiting EVP';
+    case 'pending_ceo': return 'Awaiting CEO';
+    case 'pending_revision_approval': return 'Revision Request — EVP Decision';
+    default: return status.replace(/_/g, ' ');
+  }
+}
+
+function poRequiredApprover(po: PurchaseOrder): string {
+  if (po.status === 'pending_cc')  return 'Cost Controller';
+  if (po.status === 'pending_cm')  return 'Construction Manager';
+  if (po.status === 'pending_evp') return 'EVP';
+  if (po.status === 'pending_ceo') return 'CEO';
+  if (po.status === 'pending_revision_approval') return 'EVP';
+  const amt = po.po_amount_incl_vat;
+  if (amt < PO_THRESHOLD_CM)  return 'Construction Manager';
+  if (amt < PO_THRESHOLD_EVP) return 'EVP';
+  return 'CEO';
+}
+
 const CATEGORY_KEY_LABELS: Record<string, string> = {
   cost_01_civil: '01 Civil Works',
   cost_02_pv_modules: '02 PV Modules',
@@ -63,71 +97,109 @@ const CATEGORY_KEY_LABELS: Record<string, string> = {
   cost_10_testing: '10 Testing & Warranty',
 };
 
-function stageLabel(projectStatus: string): string {
-  if (['estimation_submitted', 'estimation_cm_approved'].includes(projectStatus)) return 'Estimation';
-  if (['budget_submitted', 'budget_cm_approved'].includes(projectStatus)) return 'Budget';
-  return 'Costing';
-}
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Approvals() {
   const { profile, user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<ApprovalTab>('pending');
+
   const [reports, setReports] = useState<ProgressReport[]>([]);
-  const [pos, setPos] = useState<PurchaseOrder[]>([]);
+  const [allPOs, setAllPOs] = useState<PurchaseOrder[]>([]);
+  const [completedPOs, setCompletedPOs] = useState<PurchaseOrder[]>([]);
   const [invoices, setInvoices] = useState<VendorInvoice[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [costings, setCostings] = useState<CostingWithProject[]>([]);
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [transfers, setTransfers] = useState<ProjectCashTransfer[]>([]);
+  const [transferPositions, setTransferPositions] = useState<Map<string, MarginTransferPosition>>(new Map());
   const [loading, setLoading] = useState(true);
+
   const [showForm, setShowForm] = useState(false);
   const [reviewModal, setReviewModal] = useState<ProgressReport | null>(null);
   const [reviewComment, setReviewComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
-
   const [costingReviewModal, setCostingReviewModal] = useState<CostingWithProject | null>(null);
   const [costingComment, setCostingComment] = useState('');
   const [costingAction, setCostingAction] = useState(false);
-
-  const [transfers, setTransfers] = useState<ProjectCashTransfer[]>([]);
   const [transferModal, setTransferModal] = useState<ProjectCashTransfer | null>(null);
   const [transferModalMode, setTransferModalMode] = useState<'recommend' | 'approve' | 'reject'>('recommend');
   const [transferNotes, setTransferNotes] = useState('');
   const [transferRejectReason, setTransferRejectReason] = useState('');
   const [transferAction, setTransferAction] = useState(false);
-  const [transferPositions, setTransferPositions] = useState<Map<string, MarginTransferPosition>>(new Map());
   const [transferApprovalError, setTransferApprovalError] = useState<string | null>(null);
-
-  const [pendingPOs, setPendingPOs] = useState<PurchaseOrder[]>([]);
-  const [completedPOs, setCompletedPOs] = useState<PurchaseOrder[]>([]);
   const [poReviewModal, setPoReviewModal] = useState<PurchaseOrder | null>(null);
   const [poRejectReason, setPoRejectReason] = useState('');
   const [poAction, setPoAction] = useState(false);
-
   const [invoiceRejectModal, setInvoiceRejectModal] = useState<VendorInvoice | null>(null);
   const [invoiceRejectComment, setInvoiceRejectComment] = useState('');
   const [invoiceAction, setInvoiceAction] = useState(false);
   const [invoiceDetailModal, setInvoiceDetailModal] = useState<VendorInvoice | null>(null);
 
+  const transfersRef  = useRef<HTMLDivElement>(null);
+  const poRef         = useRef<HTMLDivElement>(null);
+  const invoicesRef   = useRef<HTMLDivElement>(null);
+  const costingsRef   = useRef<HTMLDivElement>(null);
+  const reportsRef    = useRef<HTMLDivElement>(null);
+
   const { register, handleSubmit, watch, reset } = useForm<ProgressReportForm>();
   const pctValue = watch('percentage_complete', 0);
+
+  // Scroll to section when navigating from a notification bell click (?section=...)
+  useEffect(() => {
+    const section = searchParams.get('section');
+    if (!section || loading) return;
+    const map: Record<string, React.RefObject<HTMLDivElement>> = {
+      purchase_orders: poRef,
+      invoices: invoicesRef,
+      transfers: transfersRef,
+      costings: costingsRef,
+      progress_reports: reportsRef,
+    };
+    const ref = map[section];
+    if (ref?.current) {
+      setTimeout(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, searchParams]);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
-    const [{ data: reps }, { data: purchaseOrders }, { data: invs }, { data: proj }, { data: costingData }, { data: profileData }, { data: pendingPOData }, { data: completedPOData }] = await Promise.all([
-      supabase.from('progress_reports').select('*, project:projects(*), purchase_order:purchase_orders(*, vendor:entities!vendor_id(*))').order('created_at', { ascending: false }),
-      supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').in('status', ['approved', 'partially_paid']),
-      supabase.from('vendor_invoices').select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, vendor:entities!vendor_id(name), project:projects(name))').in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
+    const [
+      { data: reps },
+      { data: pendingPOData },
+      { data: completedPOData },
+      { data: invs },
+      { data: proj },
+      { data: costingData },
+      { data: profileData },
+    ] = await Promise.all([
+      supabase.from('progress_reports')
+        .select('*, project:projects(*), purchase_order:purchase_orders(*, vendor:entities!vendor_id(*))')
+        .order('created_at', { ascending: false }),
+      supabase.from('purchase_orders')
+        .select('*, project:projects(*), vendor:entities!vendor_id(*)')
+        .in('status', PO_PENDING_STATUSES)
+        .order('created_at', { ascending: false }),
+      supabase.from('purchase_orders')
+        .select('*, project:projects(name), vendor:entities!vendor_id(name)')
+        .in('status', ['approved', 'partially_paid', 'fully_paid'])
+        .order('approved_at', { ascending: false })
+        .limit(100),
+      supabase.from('vendor_invoices')
+        .select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, vendor:entities!vendor_id(name), project:projects(name))')
+        .in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
       supabase.from('projects').select('id, name, status, last_rejected_stage').order('name'),
-      supabase.from('project_costings').select('*').in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
+      supabase.from('project_costings')
+        .select('*')
+        .in('status', ['submitted', 'cm_approved', 'evp_approved', 'cm_rejected', 'evp_rejected']),
       supabase.from('user_profiles').select('*'),
-      supabase.from('purchase_orders').select('*, project:projects(*), vendor:entities!vendor_id(*)').eq('status', 'pending_cc').order('created_at', { ascending: false }),
-      supabase.from('purchase_orders').select('*, project:projects(name), vendor:entities!vendor_id(name)').in('status', ['approved', 'partially_paid', 'fully_paid']).order('approved_at', { ascending: false }).limit(100),
     ]);
+
     setReports(reps || []);
-    setPos(purchaseOrders || []);
-    setPendingPOs((pendingPOData as PurchaseOrder[]) || []);
+    setAllPOs((pendingPOData as PurchaseOrder[]) || []);
     setCompletedPOs((completedPOData as PurchaseOrder[]) || []);
     setInvoices(invs || []);
     setProjects(proj || []);
@@ -135,7 +207,7 @@ export default function Approvals() {
 
     if (costingData && proj) {
       const projectMap = new Map<string, Project>((proj as Project[]).map(p => [p.id, p]));
-      const enriched: CostingWithProject[] = ((costingData as ProjectCosting[]))
+      const enriched: CostingWithProject[] = (costingData as ProjectCosting[])
         .map(c => {
           const project = projectMap.get(c.project_id);
           if (!project) return null;
@@ -145,6 +217,7 @@ export default function Approvals() {
         .filter((x): x is CostingWithProject => x !== null);
       setCostings(enriched);
     }
+
     const { data: transferData } = await supabase
       .from('project_cash_transfers')
       .select('*, from_project:projects!from_project_id(id,name,contract_incl_vat,status), to_project:projects!to_project_id(id,name,contract_incl_vat,status)')
@@ -168,363 +241,158 @@ export default function Approvals() {
     return profiles.find(p => p.id === uid)?.full_name ?? '—';
   }
 
-  function filterCostings(): CostingWithProject[] {
-    if (!profile) return [];
-    const r = profile.role;
-    if (r === 'ceo' || r === 'accounts_manager') return costings;
-
-    if (tab === 'pending') {
-      if (r === 'construction_manager') {
-        return costings.filter(c =>
-          c.status === 'submitted' &&
-          ['estimation_submitted', 'budget_submitted'].includes(c.project.status)
-        );
-      }
-      if (r === 'evp') {
-        return costings.filter(c =>
-          c.status === 'cm_approved' &&
-          ['estimation_cm_approved', 'budget_cm_approved'].includes(c.project.status)
-        );
-      }
-    }
-    if (tab === 'with_others') {
-      if (r === 'cost_controller') {
-        return costings.filter(c =>
-          c.status === 'submitted' || c.status === 'cm_approved'
-        );
-      }
-      if (r === 'construction_manager') {
-        return costings.filter(c => c.status === 'cm_approved');
-      }
-    }
-    if (tab === 'completed') {
-      if (r === 'evp') {
-        return costings.filter(c => c.status === 'evp_approved' || c.status === 'evp_rejected');
-      }
-      if (r === 'construction_manager') {
-        return costings.filter(c => ['evp_approved', 'evp_rejected', 'cm_rejected'].includes(c.status));
-      }
-      if (r === 'cost_controller') {
-        return costings.filter(c => c.status === 'evp_approved' || c.status === 'cm_rejected' || c.status === 'evp_rejected');
-      }
-    }
-    return [];
-  }
-
-  function filterReports(): ProgressReport[] {
-    if (!profile) return [];
-    const r = profile.role;
-    if (r === 'ceo' || r === 'accounts_manager') return reports;
-
-    if (tab === 'pending') {
-      if (r === 'cost_controller') return reports.filter(rep => rep.status === 'draft' || rep.status === 'cm_rejected' || rep.status === 'evp_rejected');
-      if (r === 'construction_manager') return reports.filter(rep => rep.status === 'submitted');
-      if (r === 'evp') return reports.filter(rep => rep.status === 'cm_approved');
-      return [];
-    }
-    if (tab === 'with_others') {
-      if (r === 'cost_controller') return reports.filter(rep => rep.status === 'submitted' || rep.status === 'cm_approved');
-      if (r === 'construction_manager') return reports.filter(rep => rep.status === 'cm_approved');
-      return [];
-    }
-    if (tab === 'completed') {
-      return reports.filter(rep => rep.status === 'evp_approved' || rep.status === 'cm_rejected' || rep.status === 'evp_rejected');
-    }
-    return [];
-  }
-
-  async function submitReport(data: ProgressReportForm) {
-    if (!user) return;
-    setSubmitting(true);
-    await supabase.from('progress_reports').insert({
-      po_id: data.po_id,
-      vendor_invoice_id: data.vendor_invoice_id || null,
-      project_id: data.project_id,
-      prepared_by: user.id,
-      report_date: data.report_date,
-      description: data.description,
-      percentage_complete: Number(data.percentage_complete),
-      notes: data.notes,
-      site_checklist: {
-        work_complete: data.work_complete,
-        materials_on_site: data.materials_on_site,
-        quality_check: data.quality_check,
-        safety_compliance: data.safety_compliance,
-        documentation: data.documentation,
-      },
-      status: 'submitted',
-    });
-    reset();
-    setShowForm(false);
-    setSubmitting(false);
-    loadData();
-  }
-
-  async function approve(report: ProgressReport) {
-    if (!user) return;
-    const role = profile?.role;
-    let update: Record<string, unknown> = {};
-    let invoiceUpdate: Record<string, unknown> | null = null;
-
-    if (role === 'construction_manager') {
-      update = { status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: reviewComment };
-    } else if (role === 'evp') {
-      update = { status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: reviewComment };
-      if (report.vendor_invoice_id) invoiceUpdate = { status: 'released' };
-    }
-
-    await supabase.from('progress_reports').update(update).eq('id', report.id);
-    if (invoiceUpdate && report.vendor_invoice_id) {
-      await supabase.from('vendor_invoices').update(invoiceUpdate).eq('id', report.vendor_invoice_id);
-    }
-    setReviewModal(null);
-    setReviewComment('');
-    loadData();
-  }
-
-  async function reject(report: ProgressReport) {
-    if (!user) return;
-    const role = profile?.role;
-    let update: Record<string, unknown> = {};
-    if (role === 'construction_manager') {
-      update = { status: 'cm_rejected', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: reviewComment };
-    } else if (role === 'evp') {
-      update = { status: 'evp_rejected', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: reviewComment };
-    }
-    await supabase.from('progress_reports').update(update).eq('id', report.id);
-    setReviewModal(null);
-    setReviewComment('');
-    loadData();
-  }
-
-  async function approveCostingItem(costing: CostingWithProject) {
-    if (!user) return;
-    setCostingAction(true);
-    const role = profile?.role;
-    const projectStatus = costing.project.status;
-
-    if (role === 'construction_manager') {
-      await supabase.from('project_costings').update({
-        status: 'cm_approved',
-        cm_approved_by: user.id,
-        cm_approved_at: new Date().toISOString(),
-        cm_comments: costingComment || null,
-      }).eq('id', costing.id);
-
-      const nextProjectStatus = projectStatus === 'estimation_submitted' ? 'estimation_cm_approved' : 'budget_cm_approved';
-      await supabase.from('projects').update({ status: nextProjectStatus }).eq('id', costing.project_id);
-
-      const evp = await supabase.from('user_profiles').select('*').eq('role', 'evp').maybeSingle();
-      if (evp.data) {
-        const label = projectStatus === 'estimation_submitted' ? 'Estimation' : 'Budget';
-        await supabase.from('notifications').insert({
-          user_id: evp.data.id,
-          title: `${label} ready for your approval — ${costing.project.name}`,
-          message: `Suraphol has approved the ${label.toLowerCase()}. Awaiting your final sign-off.`,
-          type: 'info',
-          is_read: false,
-          related_entity_type: 'project',
-          related_entity_id: costing.project_id,
-        });
-      }
-    } else if (role === 'evp') {
-      if (projectStatus === 'estimation_cm_approved') {
-        await supabase.from('project_costings').update({
-          status: 'evp_approved',
-          evp_approved_by: user.id,
-          evp_approved_at: new Date().toISOString(),
-          evp_comments: costingComment || null,
-        }).eq('id', costing.id);
-        await supabase.from('projects').update({ status: 'estimation_approved' }).eq('id', costing.project_id);
-        const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
-        if (cc.data) {
-          await supabase.from('notifications').insert({
-            user_id: cc.data.id,
-            title: `Estimation approved — ${costing.project.name}`,
-            message: `Nakkarin has approved the estimation. You can now create the budget.`,
-            type: 'info',
-            is_read: false,
-            related_entity_type: 'project',
-            related_entity_id: costing.project_id,
-          });
-        }
-      } else if (projectStatus === 'budget_cm_approved') {
-        await supabase.from('project_costings').update({
-          status: 'evp_approved',
-          evp_approved_by: user.id,
-          evp_approved_at: new Date().toISOString(),
-          evp_comments: costingComment || null,
-        }).eq('id', costing.id);
-        await supabase.from('projects').update({ status: 'active' }).eq('id', costing.project_id);
-        const [cc, acct] = await Promise.all([
-          supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle(),
-          supabase.from('user_profiles').select('*').eq('role', 'accounts_supervisor').maybeSingle(),
-        ]);
-        if (cc.data) {
-          await supabase.from('notifications').insert({
-            user_id: cc.data.id,
-            title: `Project activated — ${costing.project.name}`,
-            message: `Budget approved by Nakkarin. The project is now active. You can create purchase orders.`,
-            type: 'info',
-            is_read: false,
-            related_entity_type: 'project',
-            related_entity_id: costing.project_id,
-          });
-        }
-        if (acct.data) {
-          await supabase.from('notifications').insert({
-            user_id: acct.data.id,
-            title: `New active project — ${costing.project.name}`,
-            message: `Project ${costing.project.name} is now active. Cash receipts and payments can be recorded.`,
-            type: 'info',
-            is_read: false,
-            related_entity_type: 'project',
-            related_entity_id: costing.project_id,
-          });
-        }
-      }
-    }
-
-    setCostingReviewModal(null);
-    setCostingComment('');
-    setCostingAction(false);
-    loadData();
-  }
-
-  async function rejectCostingItem(costing: CostingWithProject) {
-    if (!user || !costingComment.trim()) return;
-    setCostingAction(true);
-    const role = profile?.role;
-    const projectStatus = costing.project.status;
-    const stageStr = stageLabel(projectStatus);
-
-    const rejectStatus = role === 'construction_manager' ? 'cm_rejected' : 'evp_rejected';
-    const backStatus = projectStatus.startsWith('budget') ? 'budget_draft' : 'estimation_draft';
-    const stageFullLabel = `${stageStr} — ${role === 'construction_manager' ? 'CM Review' : 'EVP Approval'}`;
-
-    const updateData: Record<string, unknown> = { status: rejectStatus };
-    if (role === 'construction_manager') {
-      updateData.cm_approved_by = user.id;
-      updateData.cm_approved_at = new Date().toISOString();
-      updateData.cm_comments = costingComment;
-    } else {
-      updateData.evp_approved_by = user.id;
-      updateData.evp_approved_at = new Date().toISOString();
-      updateData.evp_comments = costingComment;
-    }
-
-    await supabase.from('project_costings').update(updateData).eq('id', costing.id);
-    await supabase.from('projects').update({
-      status: backStatus,
-      last_rejection_comment: costingComment,
-      last_rejected_by: user.id,
-      last_rejected_at: new Date().toISOString(),
-      last_rejected_stage: stageFullLabel,
-    }).eq('id', costing.project_id);
-
-    const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
-    if (cc.data) {
-      await supabase.from('notifications').insert({
-        user_id: cc.data.id,
-        title: `${stageFullLabel} rejected`,
-        message: `Rejected by ${profileName(user.id)}: ${costingComment}`,
-        type: 'warning',
-        is_read: false,
-        related_entity_type: 'project',
-        related_entity_id: costing.project_id,
-      });
-    }
-
-    setCostingReviewModal(null);
-    setCostingComment('');
-    setCostingAction(false);
-    loadData();
-  }
-
   const role = profile?.role ?? '';
-  const isReadOnly = role === 'accounts_manager';
-  const filteredCostings = filterCostings();
-  const filteredReports = filterReports();
-  const filteredInvoices = filterInvoices();
-  const canCreate = role === 'cost_controller';
 
-  function canReviewReport(report: ProgressReport): boolean {
-    if (role === 'construction_manager') return report.status === 'submitted';
-    if (role === 'evp') return report.status === 'cm_approved';
-    return false;
+  // ─── PO Filtering ───────────────────────────────────────────────────────────
+
+  function filterPendingPOs(): PurchaseOrder[] {
+    if (!profile || tab !== 'pending') return [];
+    switch (role) {
+      case 'cost_controller':      return allPOs.filter(po => po.status === 'pending_cc');
+      case 'construction_manager': return allPOs.filter(po => po.status === 'pending_cm');
+      case 'evp':                  return allPOs.filter(po => po.status === 'pending_evp' || po.status === 'pending_revision_approval');
+      case 'ceo':                  return allPOs.filter(po => po.status === 'pending_ceo');
+      case 'accounts_manager':     return allPOs;
+      default: return [];
+    }
   }
 
-  function canReviewCosting(costing: CostingWithProject): boolean {
-    if (role === 'construction_manager') {
-      return costing.status === 'submitted' && ['estimation_submitted', 'budget_submitted'].includes(costing.project.status);
+  function filterWithOthersPOs(): PurchaseOrder[] {
+    if (!profile || tab !== 'with_others') return [];
+    switch (role) {
+      case 'cost_controller':      return allPOs.filter(po => ['pending_cm', 'pending_evp', 'pending_ceo'].includes(po.status));
+      case 'construction_manager': return allPOs.filter(po => ['pending_evp', 'pending_ceo'].includes(po.status));
+      case 'evp':                  return allPOs.filter(po => ['pending_cc', 'pending_cm'].includes(po.status));
+      case 'procurement':          return allPOs;
+      default: return [];
     }
-    if (role === 'evp') {
-      return costing.status === 'cm_approved' && ['estimation_cm_approved', 'budget_cm_approved'].includes(costing.project.status);
-    }
-    return false;
   }
 
-  function filterTransfers(): ProjectCashTransfer[] {
-    if (role === 'evp') {
-      if (tab === 'pending') return transfers.filter(t => t.status === 'proposed');
-      if (tab === 'completed') return transfers.filter(t => t.status === 'evp_recommended' || t.status === 'ceo_approved' || t.status === 'rejected');
+  function filterCompletedPOs(): PurchaseOrder[] {
+    if (!profile || tab !== 'completed') return [];
+    switch (role) {
+      case 'construction_manager': return completedPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
+      case 'evp':                  return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
+      case 'ceo':                  return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_EVP);
+      case 'cost_controller':
+      case 'accounts_manager':     return completedPOs;
+      default: return [];
     }
-    if (role === 'ceo') {
-      if (tab === 'pending') return transfers.filter(t => t.status === 'evp_recommended');
-      if (tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved' || t.status === 'rejected');
-    }
-    if (role === 'cost_controller') {
-      if (tab === 'with_others') return transfers.filter(t => t.status === 'proposed' || t.status === 'evp_recommended');
-      if (tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved' || t.status === 'rejected');
-    }
-    if (role === 'accounts_supervisor') {
-      if (tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved');
-    }
-    if (role === 'accounts_manager') {
-      return transfers;
-    }
-    return [];
   }
+
+  function canApprovePO(po: PurchaseOrder): boolean {
+    switch (role) {
+      case 'cost_controller':      return po.status === 'pending_cc';
+      case 'construction_manager': return po.status === 'pending_cm';
+      case 'evp':                  return po.status === 'pending_evp';
+      case 'ceo':                  return po.status === 'pending_ceo';
+      default: return false;
+    }
+  }
+
+  // ─── PO Actions ─────────────────────────────────────────────────────────────
+
+  async function approvePO(po: PurchaseOrder) {
+    if (!user || poAction) return;
+    setPoAction(true);
+    const params: POActionParams = {
+      poId: po.id,
+      actorId: user.id,
+      projectName: (po.project as Project)?.name ?? '',
+      projectId: po.project_id,
+      poDescription: po.description ?? '',
+      poAmountInclVat: po.po_amount_incl_vat,
+      currentStatus: po.status as never,
+    };
+    let result: { error: string | null };
+    if (role === 'cost_controller')      result = await approvePO_CC(params);
+    else if (role === 'construction_manager') result = await approvePO_CM(params);
+    else if (role === 'evp')             result = await approvePO_EVP(params);
+    else if (role === 'ceo')             result = await approvePO_CEO(params);
+    else { setPoAction(false); return; }
+    if (result.error) alert('Failed to approve PO: ' + result.error);
+    setPoReviewModal(null);
+    setPoRejectReason('');
+    setPoAction(false);
+    loadData();
+  }
+
+  async function handleRejectPO(po: PurchaseOrder) {
+    if (!user || !poRejectReason.trim() || poAction) return;
+    setPoAction(true);
+    const params: POActionParams = {
+      poId: po.id,
+      actorId: user.id,
+      projectName: (po.project as Project)?.name ?? '',
+      projectId: po.project_id,
+      poDescription: po.description ?? '',
+      poAmountInclVat: po.po_amount_incl_vat,
+      currentStatus: po.status as never,
+    };
+    const result = await rejectPO(params, user.id, poRejectReason.trim());
+    if (result.error) alert('Failed to reject PO: ' + result.error);
+    setPoReviewModal(null);
+    setPoRejectReason('');
+    setPoAction(false);
+    loadData();
+  }
+
+  // ─── Invoice Filtering & Actions ────────────────────────────────────────────
 
   function filterInvoices(): VendorInvoice[] {
     if (role === 'accounts_manager') return invoices;
     if (tab === 'pending') {
       if (role === 'construction_manager') return invoices.filter(i => i.status === 'received');
-      if (role === 'evp') return invoices.filter(i => i.status === 'approved_cm');
-      if (role === 'ceo') return invoices.filter(i => i.status === 'approved_evp');
-      if (role === 'cost_controller') return invoices.filter(i => i.status === 'rejected');
+      if (role === 'evp')                  return invoices.filter(i => i.status === 'approved_cm');
+      if (role === 'ceo')                  return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'cost_controller')      return invoices.filter(i => i.status === 'rejected');
     }
     if (tab === 'with_others') {
-      if (role === 'cost_controller') return invoices.filter(i => i.status === 'received' || i.status === 'approved_cm');
-      if (role === 'construction_manager') return invoices.filter(i => i.status === 'approved_cm');
-      if (role === 'evp') return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'cost_controller')      return invoices.filter(i => i.status === 'received' || i.status === 'approved_cm');
+      if (role === 'construction_manager') return invoices.filter(i => i.status === 'approved_cm' || i.status === 'approved_evp');
+      if (role === 'evp')                  return invoices.filter(i => i.status === 'approved_evp');
     }
     if (tab === 'completed') {
       if (role === 'construction_manager') return invoices.filter(i => i.status === 'approved_cm' || i.status === 'rejected');
-      if (role === 'evp') return invoices.filter(i => i.status === 'approved_evp');
-      if (role === 'ceo') return invoices.filter(i => i.status === 'approved_evp');
-      if (role === 'cost_controller') return invoices.filter(i => i.status === 'approved_cm' || i.status === 'approved_evp');
+      if (role === 'evp')                  return invoices.filter(i => i.status === 'approved_evp' || i.status === 'rejected');
+      if (role === 'ceo')                  return invoices.filter(i => i.status === 'approved_evp');
+      if (role === 'cost_controller')      return invoices.filter(i => i.status === 'approved_cm' || i.status === 'approved_evp');
     }
     return [];
+  }
+
+  function canApproveInvoice(invoice: VendorInvoice): boolean {
+    if (role === 'construction_manager') return invoice.status === 'received';
+    if (role === 'evp')                  return invoice.status === 'approved_cm';
+    if (role === 'ceo')                  return invoice.status === 'approved_evp';
+    return false;
+  }
+
+  function canRejectInvoice(invoice: VendorInvoice): boolean {
+    if (role === 'construction_manager') return invoice.status === 'received';
+    if (role === 'evp')                  return invoice.status === 'approved_cm';
+    if (role === 'ceo')                  return invoice.status === 'approved_evp';
+    return false;
+  }
+
+  function invoiceApproveLabel(invoice: VendorInvoice): string {
+    if (role === 'construction_manager') return 'Approve — Send to EVP';
+    if (role === 'evp') return invoice.invoice_amount_incl_vat >= INVOICE_CEO_THRESHOLD ? 'Approve — Escalate to CEO' : 'Approve — Release for Payment';
+    if (role === 'ceo') return 'Approve — Release for Payment';
+    return 'Approve';
   }
 
   async function handleApproveInvoice(invoice: VendorInvoice) {
     if (!user || invoiceAction) return;
     setInvoiceAction(true);
-    const po = invoice.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const po = invoice.purchase_order as { project?: { name: string } } | undefined;
     const projectName = po?.project?.name ?? '';
     const invoiceNo = invoice.vendor_invoice_no ?? invoice.id.slice(0, 8);
     let result: { error: string | null };
-    if (role === 'construction_manager') {
-      result = await approveInvoiceCM(invoice.id, user.id, projectName, invoiceNo, invoice.project_id);
-    } else if (role === 'evp') {
-      result = await approveInvoiceEVP(invoice.id, user.id, invoice.invoice_amount_incl_vat, projectName, invoiceNo, invoice.project_id);
-    } else if (role === 'ceo') {
-      result = await approveInvoiceCEO(invoice.id, user.id, projectName, invoiceNo, invoice.invoice_amount_incl_vat, invoice.project_id);
-    } else {
-      setInvoiceAction(false);
-      return;
-    }
+    if (role === 'construction_manager') result = await approveInvoiceCM(invoice.id, user.id, projectName, invoiceNo, invoice.project_id);
+    else if (role === 'evp')             result = await approveInvoiceEVP(invoice.id, user.id, invoice.invoice_amount_incl_vat, projectName, invoiceNo, invoice.project_id);
+    else if (role === 'ceo')             result = await approveInvoiceCEO(invoice.id, user.id, projectName, invoiceNo, invoice.invoice_amount_incl_vat, invoice.project_id);
+    else { setInvoiceAction(false); return; }
     if (result.error) alert('Failed to approve invoice: ' + result.error);
     setInvoiceAction(false);
     loadData();
@@ -533,7 +401,7 @@ export default function Approvals() {
   async function handleRejectInvoice() {
     if (!invoiceRejectModal || !user || !invoiceRejectComment.trim() || invoiceAction) return;
     setInvoiceAction(true);
-    const po = invoiceRejectModal.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const po = invoiceRejectModal.purchase_order as { project?: { name: string } } | undefined;
     const projectName = po?.project?.name ?? '';
     const invoiceNo = invoiceRejectModal.vendor_invoice_no ?? invoiceRejectModal.id.slice(0, 8);
     const result = await rejectInvoice(invoiceRejectModal.id, user.id, invoiceRejectComment.trim(), projectName, invoiceNo, invoiceRejectModal.project_id);
@@ -546,7 +414,7 @@ export default function Approvals() {
 
   async function handleRejectInvoiceFromModal(inv: VendorInvoice, comment: string) {
     if (!user) return;
-    const po = inv.purchase_order as { pss_po_no?: string; project?: { name: string } } | undefined;
+    const po = inv.purchase_order as { project?: { name: string } } | undefined;
     const projectName = po?.project?.name ?? '';
     const invoiceNo = inv.vendor_invoice_no ?? inv.id.slice(0, 8);
     const result = await rejectInvoice(inv.id, user.id, comment, projectName, invoiceNo, inv.project_id);
@@ -555,29 +423,168 @@ export default function Approvals() {
     loadData();
   }
 
+  // ─── Costing Actions ────────────────────────────────────────────────────────
+
+  function filterCostings(): CostingWithProject[] {
+    if (!profile) return [];
+    if (role === 'ceo' || role === 'accounts_manager') return costings;
+    if (tab === 'pending') {
+      if (role === 'construction_manager') return costings.filter(c => c.status === 'submitted' && ['estimation_submitted', 'budget_submitted'].includes(c.project.status));
+      if (role === 'evp') return costings.filter(c => c.status === 'cm_approved' && ['estimation_cm_approved', 'budget_cm_approved'].includes(c.project.status));
+    }
+    if (tab === 'with_others') {
+      if (role === 'cost_controller') return costings.filter(c => c.status === 'submitted' || c.status === 'cm_approved');
+      if (role === 'construction_manager') return costings.filter(c => c.status === 'cm_approved');
+    }
+    if (tab === 'completed') {
+      if (role === 'evp') return costings.filter(c => c.status === 'evp_approved' || c.status === 'evp_rejected');
+      if (role === 'construction_manager') return costings.filter(c => ['evp_approved', 'evp_rejected', 'cm_rejected'].includes(c.status));
+      if (role === 'cost_controller') return costings.filter(c => ['evp_approved', 'cm_rejected', 'evp_rejected'].includes(c.status));
+    }
+    return [];
+  }
+
+  function canReviewCosting(costing: CostingWithProject): boolean {
+    if (role === 'construction_manager') return costing.status === 'submitted' && ['estimation_submitted', 'budget_submitted'].includes(costing.project.status);
+    if (role === 'evp') return costing.status === 'cm_approved' && ['estimation_cm_approved', 'budget_cm_approved'].includes(costing.project.status);
+    return false;
+  }
+
+  async function approveCostingItem(costing: CostingWithProject) {
+    if (!user) return;
+    setCostingAction(true);
+    const projectStatus = costing.project.status;
+    if (role === 'construction_manager') {
+      await supabase.from('project_costings').update({ status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: costingComment || null }).eq('id', costing.id);
+      const nextStatus = projectStatus === 'estimation_submitted' ? 'estimation_cm_approved' : 'budget_cm_approved';
+      await supabase.from('projects').update({ status: nextStatus }).eq('id', costing.project_id);
+      const evp = await supabase.from('user_profiles').select('*').eq('role', 'evp').maybeSingle();
+      if (evp.data) {
+        const label = projectStatus === 'estimation_submitted' ? 'Estimation' : 'Budget';
+        await supabase.from('notifications').insert({ user_id: evp.data.id, title: `${label} costing ready for EVP approval — ${costing.project.name}`, message: `Construction Manager has reviewed and approved. Awaiting your final sign-off.`, type: 'info', is_read: false, related_entity_type: 'project_costing', related_entity_id: costing.project_id });
+      }
+    } else if (role === 'evp') {
+      await supabase.from('project_costings').update({ status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: costingComment || null }).eq('id', costing.id);
+      const nextStatus = projectStatus === 'estimation_cm_approved' ? 'estimation_approved' : 'active';
+      await supabase.from('projects').update({ status: nextStatus }).eq('id', costing.project_id);
+      const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
+      if (cc.data) await supabase.from('notifications').insert({ user_id: cc.data.id, title: `Costing approved — ${costing.project.name}`, message: `EVP has given final approval. Project status updated.`, type: 'success', is_read: false, related_entity_type: 'project_costing', related_entity_id: costing.project_id });
+    }
+    setCostingReviewModal(null);
+    setCostingComment('');
+    setCostingAction(false);
+    loadData();
+  }
+
+  async function rejectCostingItem(costing: CostingWithProject) {
+    if (!user || !costingComment.trim()) return;
+    setCostingAction(true);
+    const projectStatus = costing.project.status;
+    const stageStr = stageLabel(projectStatus);
+    const rejectStatus = role === 'construction_manager' ? 'cm_rejected' : 'evp_rejected';
+    const backStatus = projectStatus.startsWith('budget') ? 'budget_draft' : 'estimation_draft';
+    const stageFullLabel = `${stageStr} — ${role === 'construction_manager' ? 'CM Review' : 'EVP Approval'}`;
+    const updateData: Record<string, unknown> = { status: rejectStatus };
+    if (role === 'construction_manager') { updateData.cm_approved_by = user.id; updateData.cm_approved_at = new Date().toISOString(); updateData.cm_comments = costingComment; }
+    else { updateData.evp_approved_by = user.id; updateData.evp_approved_at = new Date().toISOString(); updateData.evp_comments = costingComment; }
+    await supabase.from('project_costings').update(updateData).eq('id', costing.id);
+    await supabase.from('projects').update({ status: backStatus, last_rejection_comment: costingComment, last_rejected_by: user.id, last_rejected_at: new Date().toISOString(), last_rejected_stage: stageFullLabel }).eq('id', costing.project_id);
+    const cc = await supabase.from('user_profiles').select('*').eq('role', 'cost_controller').maybeSingle();
+    if (cc.data) await supabase.from('notifications').insert({ user_id: cc.data.id, title: `${stageFullLabel} rejected`, message: `Rejected by ${profileName(user.id)}: ${costingComment}`, type: 'warning', is_read: false, related_entity_type: 'project', related_entity_id: costing.project_id });
+    setCostingReviewModal(null);
+    setCostingComment('');
+    setCostingAction(false);
+    loadData();
+  }
+
+  // ─── Report Filtering & Actions ─────────────────────────────────────────────
+
+  function filterReports(): ProgressReport[] {
+    if (!profile) return [];
+    if (role === 'ceo' || role === 'accounts_manager') return reports;
+    if (tab === 'pending') {
+      if (role === 'cost_controller')      return reports.filter(r => r.status === 'draft' || r.status === 'cm_rejected' || r.status === 'evp_rejected');
+      if (role === 'construction_manager') return reports.filter(r => r.status === 'submitted');
+      if (role === 'evp')                  return reports.filter(r => r.status === 'cm_approved');
+      return [];
+    }
+    if (tab === 'with_others') {
+      if (role === 'cost_controller')      return reports.filter(r => r.status === 'submitted' || r.status === 'cm_approved');
+      if (role === 'construction_manager') return reports.filter(r => r.status === 'cm_approved');
+      return [];
+    }
+    if (tab === 'completed') return reports.filter(r => r.status === 'evp_approved' || r.status === 'cm_rejected' || r.status === 'evp_rejected');
+    return [];
+  }
+
+  function canReviewReport(report: ProgressReport): boolean {
+    if (role === 'construction_manager') return report.status === 'submitted';
+    if (role === 'evp') return report.status === 'cm_approved';
+    return false;
+  }
+
+  async function approveReport(report: ProgressReport) {
+    if (!user) return;
+    let update: Record<string, unknown> = {};
+    let invoiceUpdate: Record<string, unknown> | null = null;
+    if (role === 'construction_manager') update = { status: 'cm_approved', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: reviewComment };
+    else if (role === 'evp') { update = { status: 'evp_approved', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: reviewComment }; if (report.vendor_invoice_id) invoiceUpdate = { status: 'released' }; }
+    await supabase.from('progress_reports').update(update).eq('id', report.id);
+    if (invoiceUpdate && report.vendor_invoice_id) await supabase.from('vendor_invoices').update(invoiceUpdate).eq('id', report.vendor_invoice_id);
+    setReviewModal(null);
+    setReviewComment('');
+    loadData();
+  }
+
+  async function rejectReport(report: ProgressReport) {
+    if (!user) return;
+    let update: Record<string, unknown> = {};
+    if (role === 'construction_manager') update = { status: 'cm_rejected', cm_approved_by: user.id, cm_approved_at: new Date().toISOString(), cm_comments: reviewComment };
+    else if (role === 'evp') update = { status: 'evp_rejected', evp_approved_by: user.id, evp_approved_at: new Date().toISOString(), evp_comments: reviewComment };
+    await supabase.from('progress_reports').update(update).eq('id', report.id);
+    setReviewModal(null);
+    setReviewComment('');
+    loadData();
+  }
+
+  async function submitReport(data: ProgressReportForm) {
+    if (!user) return;
+    setSubmitting(true);
+    await supabase.from('progress_reports').insert({ po_id: data.po_id, vendor_invoice_id: data.vendor_invoice_id || null, project_id: data.project_id, prepared_by: user.id, report_date: data.report_date, description: data.description, percentage_complete: Number(data.percentage_complete), notes: data.notes, site_checklist: { work_complete: data.work_complete, materials_on_site: data.materials_on_site, quality_check: data.quality_check, safety_compliance: data.safety_compliance, documentation: data.documentation }, status: 'submitted' });
+    reset();
+    setShowForm(false);
+    setSubmitting(false);
+    loadData();
+  }
+
+  // ─── Transfer Filtering & Actions ───────────────────────────────────────────
+
+  function filterTransfers(): ProjectCashTransfer[] {
+    if (role === 'evp') {
+      if (tab === 'pending') return transfers.filter(t => t.status === 'proposed');
+      if (tab === 'completed') return transfers.filter(t => ['evp_recommended', 'ceo_approved', 'rejected'].includes(t.status));
+    }
+    if (role === 'ceo') {
+      if (tab === 'pending') return transfers.filter(t => t.status === 'evp_recommended');
+      if (tab === 'completed') return transfers.filter(t => ['ceo_approved', 'rejected'].includes(t.status));
+    }
+    if (role === 'cost_controller') {
+      if (tab === 'with_others') return transfers.filter(t => t.status === 'proposed' || t.status === 'evp_recommended');
+      if (tab === 'completed') return transfers.filter(t => ['ceo_approved', 'rejected'].includes(t.status));
+    }
+    if (role === 'accounts_supervisor' && tab === 'completed') return transfers.filter(t => t.status === 'ceo_approved');
+    if (role === 'accounts_manager') return transfers;
+    return [];
+  }
+
   async function handleTransferRecommend(t: ProjectCashTransfer) {
     if (!user) return;
     setTransferAction(true);
-    const { data: actorProfile } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
-    const actorName = (actorProfile as { full_name: string } | null)?.full_name ?? 'A team member';
-    await supabase.from('project_cash_transfers').update({
-      status: 'evp_recommended',
-      recommended_by: user.id,
-      recommended_at: new Date().toISOString(),
-      recommended_notes: transferNotes || null,
-    }).eq('id', t.id);
-    const ceoProf = profiles.find(p => p.role === 'ceo');
-    if (ceoProf) {
-      await supabase.from('notifications').insert({
-        user_id: ceoProf.id,
-        title: `Margin transfer requires your approval`,
-        message: `${actorName} recommends approving a transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}.${transferNotes ? ` ${transferNotes}` : ''} Requires your final approval.`,
-        type: 'info',
-        is_read: false,
-        related_entity_type: 'project_cash_transfer',
-        related_entity_id: t.id,
-      });
-    }
+    const { data: actor } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
+    const actorName = (actor as { full_name: string } | null)?.full_name ?? 'EVP';
+    await supabase.from('project_cash_transfers').update({ status: 'evp_recommended', recommended_by: user.id, recommended_at: new Date().toISOString(), recommended_notes: transferNotes || null }).eq('id', t.id);
+    const ceo = profiles.find(p => p.role === 'ceo');
+    if (ceo) await supabase.from('notifications').insert({ user_id: ceo.id, title: 'Margin transfer requires your approval', message: `${actorName} recommends approving a transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}.${transferNotes ? ` ${transferNotes}` : ''} Requires your final approval.`, type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
     setTransferModal(null);
     setTransferNotes('');
     setTransferAction(false);
@@ -588,39 +595,16 @@ export default function Approvals() {
     if (!user) return;
     setTransferAction(true);
     setTransferApprovalError(null);
-    const { data: actorProfile } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
-    const actorName = (actorProfile as { full_name: string } | null)?.full_name ?? 'A team member';
-    const { error } = await supabase.from('project_cash_transfers').update({
-      status: 'ceo_approved',
-      approved_by: user.id,
-      approved_at: new Date().toISOString(),
-      transfer_date: new Date().toISOString().slice(0, 10),
-    }).eq('id', t.id);
-    if (error) {
-      setTransferApprovalError(error.message);
-      setTransferAction(false);
-      return;
-    }
-    const ccProf = profiles.find(p => p.role === 'cost_controller');
-    const acctProf = profiles.find(p => p.role === 'accounts_supervisor');
+    const { data: actor } = await supabase.from('user_profiles').select('full_name').eq('id', user.id).maybeSingle();
+    const actorName = (actor as { full_name: string } | null)?.full_name ?? 'CEO';
+    const { error } = await supabase.from('project_cash_transfers').update({ status: 'ceo_approved', approved_by: user.id, approved_at: new Date().toISOString(), transfer_date: new Date().toISOString().slice(0, 10) }).eq('id', t.id);
+    if (error) { setTransferApprovalError(error.message); setTransferAction(false); return; }
     const fromName = (t.from_project as Project)?.name ?? '';
     const toName = (t.to_project as Project)?.name ?? '';
     const approvedDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    if (ccProf) {
-      await supabase.from('notifications').insert({
-        user_id: ccProf.id,
-        title: `Margin transfer approved — ${fmtTHB(t.amount)}`,
-        message: `${actorName} has approved the transfer of ${fmtTHB(t.amount)} from ${fromName} to ${toName}.`,
-        type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
-    }
-    if (acctProf) {
-      await supabase.from('notifications').insert({
-        user_id: acctProf.id,
-        title: `Margin transfer approved for your records`,
-        message: `${fmtTHB(t.amount)} transferred from ${fromName} to ${toName} approved by CEO on ${approvedDate}.`,
-        type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
+    for (const targetRole of ['cost_controller', 'accounts_supervisor'] as const) {
+      const p = profiles.find(pr => pr.role === targetRole);
+      if (p) await supabase.from('notifications').insert({ user_id: p.id, title: `Margin transfer approved — ${fmtTHB(t.amount)}`, message: targetRole === 'accounts_supervisor' ? `${fmtTHB(t.amount)} from ${fromName} to ${toName} approved by CEO on ${approvedDate}.` : `${actorName} approved transfer of ${fmtTHB(t.amount)} from ${fromName} to ${toName}.`, type: 'info', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
     }
     setTransferModal(null);
     setTransferNotes('');
@@ -631,123 +615,48 @@ export default function Approvals() {
   async function handleTransferReject(t: ProjectCashTransfer) {
     if (!user || !transferRejectReason.trim()) return;
     setTransferAction(true);
-    await supabase.from('project_cash_transfers').update({
-      status: 'rejected',
-      rejected_by: user.id,
-      rejected_at: new Date().toISOString(),
-      rejection_reason: transferRejectReason.trim(),
-    }).eq('id', t.id);
-    const ccProf = profiles.find(p => p.role === 'cost_controller');
-    if (ccProf) {
-      await supabase.from('notifications').insert({
-        user_id: ccProf.id,
-        title: `Transfer proposal rejected`,
-        message: `${profileName(user.id)} rejected the transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}. Reason: ${transferRejectReason.trim()}`,
-        type: 'warning', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id,
-      });
-    }
+    await supabase.from('project_cash_transfers').update({ status: 'rejected', rejected_by: user.id, rejected_at: new Date().toISOString(), rejection_reason: transferRejectReason.trim() }).eq('id', t.id);
+    const cc = profiles.find(p => p.role === 'cost_controller');
+    if (cc) await supabase.from('notifications').insert({ user_id: cc.id, title: 'Transfer proposal rejected', message: `${profileName(user.id)} rejected the transfer of ${fmtTHB(t.amount)} from ${(t.from_project as Project)?.name ?? ''} to ${(t.to_project as Project)?.name ?? ''}. Reason: ${transferRejectReason.trim()}`, type: 'warning', is_read: false, related_entity_type: 'project_cash_transfer', related_entity_id: t.id });
     setTransferModal(null);
     setTransferRejectReason('');
     setTransferAction(false);
     loadData();
   }
 
-  function filterPendingPOs(): PurchaseOrder[] {
-    if (!profile) return [];
-    const r = profile.role;
-    if (r === 'accounts_manager') return pendingPOs;
-    if (tab === 'pending') {
-      if (r === 'construction_manager') return pendingPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
-      if (r === 'evp') return pendingPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
-      if (r === 'ceo') return pendingPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_EVP);
-    }
-    if (tab === 'with_others') {
-      if (r === 'cost_controller') return pendingPOs;
-    }
-    return [];
-  }
+  // ─── Derived state ───────────────────────────────────────────────────────────
 
-  function filterCompletedPOs(): PurchaseOrder[] {
-    if (!profile || tab !== 'completed') return [];
-    const r = profile.role;
-    if (r === 'construction_manager') return completedPOs.filter(po => po.po_amount_incl_vat < PO_THRESHOLD_CM);
-    if (r === 'evp') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP);
-    if (r === 'ceo') return completedPOs.filter(po => po.po_amount_incl_vat >= PO_THRESHOLD_EVP);
-    if (r === 'cost_controller' || r === 'accounts_manager') return completedPOs;
-    return [];
-  }
+  const isReadOnly = role === 'accounts_manager';
+  const canCreate  = role === 'cost_controller';
 
-  function canApprovePO(po: PurchaseOrder): boolean {
-    const r = profile?.role ?? '';
-    if (r === 'construction_manager') return po.po_amount_incl_vat < PO_THRESHOLD_CM;
-    if (r === 'evp') return po.po_amount_incl_vat >= PO_THRESHOLD_CM && po.po_amount_incl_vat < PO_THRESHOLD_EVP;
-    if (r === 'ceo') return po.po_amount_incl_vat >= PO_THRESHOLD_EVP;
-    return false;
-  }
+  const filteredPendingPOs  = filterPendingPOs();
+  const filteredWithOthersPOs = filterWithOthersPOs();
+  const filteredCompletedPOs = filterCompletedPOs();
+  const filteredInvoices    = filterInvoices();
+  const filteredCostings    = filterCostings();
+  const filteredReports     = filterReports();
+  const filteredTransfers   = filterTransfers();
 
-  function poApproverLabel(po: PurchaseOrder): string {
-    if (po.po_amount_incl_vat < PO_THRESHOLD_CM) return 'CM';
-    if (po.po_amount_incl_vat < PO_THRESHOLD_EVP) return 'EVP';
-    return 'CEO';
-  }
+  const showPOPendingSection   = tab === 'pending'     && filteredPendingPOs.length > 0;
+  const showPOPipelineSection  = tab === 'with_others' && filteredWithOthersPOs.length > 0;
+  const showPOCompletedSection = tab === 'completed'   && filteredCompletedPOs.length > 0;
+  const showTransfersSection   = filteredTransfers.length > 0;
+  const showInvoicesSection    = filteredInvoices.length > 0;
+  const showCostingSection     = role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'accounts_manager' || (role === 'cost_controller' && tab === 'with_others');
+  const showReportsSection     = ['construction_manager', 'evp', 'cost_controller', 'ceo', 'accounts_manager'].includes(role);
 
-  async function approvePO(po: PurchaseOrder) {
-    if (!user) return;
-    setPoAction(true);
-    const projectName = (po.project as Project)?.name ?? '';
-    const projectCode = PROJECT_CODE_MAP[projectName] ?? projectName.substring(0, 4).toUpperCase();
-    const { data: pssNo, error: rpcError } = await supabase.rpc('generate_pss_po_number', { p_project_code: projectCode });
-    if (rpcError || !pssNo) { setPoAction(false); return; }
-    await supabase.from('purchase_orders').update({
-      status: 'approved',
-      pss_po_no: pssNo,
-      approved_by: user.id,
-      approved_at: new Date().toISOString(),
-    }).eq('id', po.id);
-    const { data: ccProfile } = await supabase.from('user_profiles').select('id').eq('role', 'cost_controller').maybeSingle();
-    if (ccProfile) {
-      await supabase.from('notifications').insert({
-        user_id: (ccProfile as { id: string }).id,
-        title: `PO approved — ${pssNo} assigned`,
-        message: `Your purchase order for ${(po.vendor as { name: string })?.name ?? 'supplier'} on ${projectName} has been approved. PSS number: ${pssNo}`,
-        type: 'success',
-        is_read: false,
-        related_entity_type: 'project',
-        related_entity_id: po.project_id,
-      });
-    }
-    setPoReviewModal(null);
-    setPoRejectReason('');
-    setPoAction(false);
-    loadData();
-  }
+  const actionableReports = filteredReports.filter(r => canReviewReport(r)).length;
+  const totalPending = tab === 'pending'
+    ? filteredPendingPOs.length + filteredInvoices.length + filteredTransfers.length + filteredCostings.length + actionableReports
+    : 0;
 
-  async function rejectPO(po: PurchaseOrder) {
-    if (!user || !poRejectReason.trim()) return;
-    setPoAction(true);
-    await supabase.from('purchase_orders').update({
-      status: 'draft',
-      rejected_by: user.id,
-      rejected_at: new Date().toISOString(),
-      rejection_reason: poRejectReason.trim(),
-    }).eq('id', po.id);
-    const { data: ccProfile } = await supabase.from('user_profiles').select('id').eq('role', 'cost_controller').maybeSingle();
-    if (ccProfile) {
-      await supabase.from('notifications').insert({
-        user_id: (ccProfile as { id: string }).id,
-        title: `PO rejected — ${(po.project as Project)?.name ?? ''}`,
-        message: `Purchase order for ${(po.vendor as { name: string })?.name ?? 'supplier'} was rejected. Reason: ${poRejectReason.trim()}`,
-        type: 'warning',
-        is_read: false,
-        related_entity_type: 'project',
-        related_entity_id: po.project_id,
-      });
-    }
-    setPoReviewModal(null);
-    setPoRejectReason('');
-    setPoAction(false);
-    loadData();
-  }
+  const pendingSummaryParts = tab === 'pending' ? [
+    filteredPendingPOs.length > 0    && `${filteredPendingPOs.length} PO${filteredPendingPOs.length !== 1 ? 's' : ''}`,
+    filteredInvoices.length > 0      && `${filteredInvoices.length} invoice${filteredInvoices.length !== 1 ? 's' : ''}`,
+    filteredTransfers.length > 0     && `${filteredTransfers.length} transfer${filteredTransfers.length !== 1 ? 's' : ''}`,
+    filteredCostings.length > 0      && `${filteredCostings.length} costing${filteredCostings.length !== 1 ? 's' : ''}`,
+    actionableReports > 0            && `${actionableReports} progress report${actionableReports !== 1 ? 's' : ''}`,
+  ].filter(Boolean) as string[] : [];
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -755,62 +664,53 @@ export default function Approvals() {
     </div>
   );
 
-  const showCostingSection = role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'accounts_manager' ||
-    (role === 'cost_controller' && tab === 'with_others');
-
-  const filteredTransfers = filterTransfers();
-  const showTransfersSection = (role === 'evp' || role === 'ceo' || role === 'cost_controller' || role === 'accounts_supervisor' || role === 'accounts_manager') &&
-    filteredTransfers.length > 0;
-
-  const filteredPOs = filterPendingPOs();
-  const showPOSection = filteredPOs.length > 0 &&
-    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'accounts_manager' ||
-     (role === 'cost_controller' && tab === 'with_others'));
-
-  const filteredCompletedPOs = filterCompletedPOs();
-  const showCompletedPOSection = tab === 'completed' && filteredCompletedPOs.length > 0 &&
-    (role === 'construction_manager' || role === 'evp' || role === 'ceo' || role === 'cost_controller' || role === 'accounts_manager');
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-5">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Approvals</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Project costing & progress report workflow</p>
+          <p className="text-sm text-gray-500 mt-0.5">Purchase orders · Supplier invoices · Margin transfers · Costings · Progress reports</p>
         </div>
         <div className="flex items-center gap-3">
           {isReadOnly && (
             <span className="flex items-center gap-1.5 text-xs font-medium text-[#EF9F27] bg-[#EF9F27]/10 border border-[#EF9F27]/20 px-3 py-1.5 rounded-lg">
-              <FileText size={13} />
-              Read-only view
+              <FileText size={13} />Read-only view
             </span>
           )}
           {canCreate && (
-            <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
-            >
-              <Plus size={16} />
-              New Progress Report
+            <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors">
+              <Plus size={16} />New Progress Report
             </button>
           )}
         </div>
       </div>
 
+      {/* Pending action banner */}
+      {tab === 'pending' && totalPending > 0 && (
+        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+          <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800">
+            <span className="font-semibold">{totalPending} item{totalPending !== 1 ? 's' : ''} require your attention:</span>{' '}
+            {pendingSummaryParts.join(', ')}.
+          </p>
+        </div>
+      )}
+
+      {/* Tabs */}
       <div className="flex gap-1 bg-white border border-gray-200 rounded-lg p-1 w-fit">
         {(['pending', 'with_others', 'completed'] as ApprovalTab[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${tab === t ? 'bg-[#0f1923] text-white' : 'text-gray-500 hover:text-gray-700'}`}
-          >
+          <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === t ? 'bg-[#0f1923] text-white' : 'text-gray-500 hover:text-gray-700'}`}>
             {t === 'with_others' ? 'With Others' : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
 
+      {/* ── Margin Transfers ─────────────────────────────────────────────────── */}
       {showTransfersSection && (
-        <div className="space-y-3">
+        <div className="space-y-3" ref={transfersRef}>
           <div className="flex items-center gap-2">
             <ArrowRightLeft size={16} className="text-[#1D9E75]" />
             <h2 className="text-sm font-semibold text-[#0f1923]">Margin Transfers</h2>
@@ -818,13 +718,13 @@ export default function Approvals() {
           </div>
           {filteredTransfers.map(t => {
             const fromProj = t.from_project as Project;
-            const toProj = t.to_project as Project;
+            const toProj   = t.to_project   as Project;
             const pos = transferPositions.get(t.from_project_id);
             const statusMap: Record<string, { label: string; cls: string }> = {
-              proposed: { label: 'Proposed', cls: 'bg-gray-100 text-gray-600' },
-              evp_recommended: { label: 'EVP Recommended', cls: 'bg-blue-50 text-blue-600' },
-              ceo_approved: { label: 'CEO Approved', cls: 'bg-[#1D9E75]/10 text-[#1D9E75]' },
-              rejected: { label: 'Rejected', cls: 'bg-[#E24B4A]/10 text-[#E24B4A]' },
+              proposed:        { label: 'Proposed',         cls: 'bg-gray-100 text-gray-600' },
+              evp_recommended: { label: 'EVP Recommended',  cls: 'bg-blue-50 text-blue-600' },
+              ceo_approved:    { label: 'CEO Approved',     cls: 'bg-[#1D9E75]/10 text-[#1D9E75]' },
+              rejected:        { label: 'Rejected',         cls: 'bg-[#E24B4A]/10 text-[#E24B4A]' },
             };
             const s = statusMap[t.status] ?? { label: t.status, cls: 'bg-gray-100 text-gray-600' };
             return (
@@ -834,17 +734,11 @@ export default function Approvals() {
                     <div className="flex items-center gap-2 mb-2">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
                     </div>
-                    <p className="text-sm font-semibold text-gray-800">
-                      {fromProj?.name ?? '—'} → {toProj?.name ?? '—'}
-                    </p>
+                    <p className="text-sm font-semibold text-gray-800">{fromProj?.name ?? '—'} → {toProj?.name ?? '—'}</p>
                     <p className="text-xs text-gray-500 mt-0.5">Proposed by {profileName(t.proposed_by)} · {formatDate(t.proposed_at)}</p>
                     {t.reason && <p className="text-xs text-gray-600 mt-2 italic">"{t.reason}"</p>}
-                    {t.recommended_notes && (
-                      <p className="text-xs text-gray-500 mt-1"><span className="font-medium">EVP notes:</span> {t.recommended_notes}</p>
-                    )}
-                    {t.rejection_reason && (
-                      <p className="text-xs text-[#E24B4A] mt-1"><span className="font-medium">Rejection reason:</span> {t.rejection_reason}</p>
-                    )}
+                    {t.recommended_notes && <p className="text-xs text-gray-500 mt-1"><span className="font-medium">EVP notes:</span> {t.recommended_notes}</p>}
+                    {t.rejection_reason && <p className="text-xs text-[#E24B4A] mt-1"><span className="font-medium">Rejection:</span> {t.rejection_reason}</p>}
                   </div>
                   <div className="shrink-0 text-right space-y-0.5">
                     <p className="text-lg font-bold text-[#0f1923]">{fmtTHB(t.amount)}</p>
@@ -859,34 +753,14 @@ export default function Approvals() {
                 </div>
                 {tab === 'pending' && role === 'evp' && t.status === 'proposed' && (
                   <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
-                    <button
-                      onClick={() => { setTransferModal(t); setTransferModalMode('reject'); setTransferRejectReason(''); }}
-                      className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5"
-                    >
-                      <XCircle size={13} /> Reject
-                    </button>
-                    <button
-                      onClick={() => { setTransferModal(t); setTransferModalMode('recommend'); setTransferNotes(''); }}
-                      className="flex items-center gap-1.5 bg-[#378ADD] text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#2a6fb5]"
-                    >
-                      <CheckCircle size={13} /> Recommend Approval
-                    </button>
+                    <button onClick={() => { setTransferModal(t); setTransferModalMode('reject'); setTransferRejectReason(''); }} className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5"><XCircle size={13} /> Reject</button>
+                    <button onClick={() => { setTransferModal(t); setTransferModalMode('recommend'); setTransferNotes(''); }} className="flex items-center gap-1.5 bg-[#378ADD] text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#2a6fb5]"><CheckCircle size={13} /> Recommend Approval</button>
                   </div>
                 )}
                 {tab === 'pending' && role === 'ceo' && t.status === 'evp_recommended' && (
                   <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
-                    <button
-                      onClick={() => { setTransferModal(t); setTransferModalMode('reject'); setTransferRejectReason(''); }}
-                      className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5"
-                    >
-                      <XCircle size={13} /> Reject
-                    </button>
-                    <button
-                      onClick={() => { setTransferModal(t); setTransferModalMode('approve'); setTransferNotes(''); setTransferApprovalError(null); }}
-                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64]"
-                    >
-                      <CheckCircle size={13} /> Approve Transfer
-                    </button>
+                    <button onClick={() => { setTransferModal(t); setTransferModalMode('reject'); setTransferRejectReason(''); }} className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5"><XCircle size={13} /> Reject</button>
+                    <button onClick={() => { setTransferModal(t); setTransferModalMode('approve'); setTransferNotes(''); setTransferApprovalError(null); }} className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64]"><CheckCircle size={13} /> Approve Transfer</button>
                   </div>
                 )}
               </div>
@@ -895,69 +769,32 @@ export default function Approvals() {
         </div>
       )}
 
-      {showPOSection && (
-        <div className="space-y-3">
+      {/* ── Pending POs ──────────────────────────────────────────────────────── */}
+      {showPOPendingSection && (
+        <div className="space-y-3" ref={poRef}>
           <div className="flex items-center gap-2">
             <ShoppingCart size={16} className="text-[#EF9F27]" />
-            <h2 className="text-sm font-semibold text-[#0f1923]">Purchase Orders</h2>
-            <span className="bg-[#EF9F27]/10 text-[#EF9F27] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredPOs.length}</span>
+            <h2 className="text-sm font-semibold text-[#0f1923]">Purchase Orders — Pending Your Approval</h2>
+            <span className="bg-[#EF9F27]/10 text-[#EF9F27] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredPendingPOs.length}</span>
           </div>
-          {filteredPOs.map(po => {
-            const vendor = po.vendor as { name: string } | undefined;
-            const project = po.project as Project | undefined;
-            const approver = poApproverLabel(po);
-            return (
-              <div key={po.id} className="bg-white rounded-lg border-l-4 border-l-[#EF9F27] border border-gray-200 p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-xs font-semibold bg-[#EF9F27]/10 text-[#EF9F27] px-2 py-0.5 rounded-full">Pending Approval</span>
-                      <span className="text-xs text-gray-400">Requires {approver}</span>
-                      {po.has_supplier_milestones && (
-                        <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">Milestone PO</span>
-                      )}
-                    </div>
-                    <p className="text-sm font-semibold text-gray-800">{project?.name ?? '—'}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? 'No supplier assigned'} · {po.description ?? '—'}</p>
-                    {po.submitted_at && (
-                      <p className="text-xs text-gray-400 mt-0.5">Submitted {formatDate(po.submitted_at)}</p>
-                    )}
-                  </div>
-                  <div className="shrink-0 text-right space-y-0.5">
-                    <p className="text-xs text-gray-400">Contract excl VAT</p>
-                    <p className="text-sm font-semibold text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</p>
-                    <p className="text-xs text-gray-400">VAT 7%</p>
-                    <p className="text-xs text-gray-500">{fmtTHB(po.vat_7pct)}</p>
-                    <p className="text-xs text-gray-400">Total incl VAT</p>
-                    <p className="text-base font-bold text-[#0f1923]">{fmtTHB(po.po_amount_incl_vat)}</p>
-                    {po.wht_applies && (
-                      <p className="text-xs text-[#EF9F27]">WHT 3%: {fmtTHB(po.wht_3pct)}</p>
-                    )}
-                  </div>
-                </div>
-                {tab === 'pending' && canApprovePO(po) && (
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
-                    <button
-                      onClick={() => { setPoReviewModal(po); setPoRejectReason(''); }}
-                      className="flex items-center gap-2 bg-[#EF9F27] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#d48b1e] transition-colors"
-                    >
-                      <FileText size={13} />
-                      Review & Decide
-                    </button>
-                  </div>
-                )}
-                {tab === 'with_others' && role === 'cost_controller' && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <p className="text-xs text-gray-500">Awaiting {approver} approval</p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {filteredPendingPOs.map(po => renderPOCard(po, 'pending'))}
         </div>
       )}
 
-      {showCompletedPOSection && (
+      {/* ── POs in Pipeline ──────────────────────────────────────────────────── */}
+      {showPOPipelineSection && (
+        <div className="space-y-3" ref={poRef}>
+          <div className="flex items-center gap-2">
+            <ShoppingCart size={16} className="text-gray-400" />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Purchase Orders — In Pipeline</h2>
+            <span className="bg-gray-100 text-gray-500 text-xs font-semibold px-2 py-0.5 rounded-full">{filteredWithOthersPOs.length}</span>
+          </div>
+          {filteredWithOthersPOs.map(po => renderPOCard(po, 'with_others'))}
+        </div>
+      )}
+
+      {/* ── Completed POs ─────────────────────────────────────────────────────── */}
+      {showPOCompletedSection && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <ShoppingCart size={16} className="text-[#1D9E75]" />
@@ -965,48 +802,24 @@ export default function Approvals() {
             <span className="bg-[#1D9E75]/10 text-[#1D9E75] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredCompletedPOs.length}</span>
           </div>
           {filteredCompletedPOs.map(po => {
-            const vendor = po.vendor as { name: string } | undefined;
+            const vendor  = po.vendor  as { name: string } | undefined;
             const project = po.project as { name: string } | undefined;
-            const statusColors: Record<string, string> = {
-              approved: 'bg-[#1D9E75]/10 text-[#1D9E75]',
-              partially_paid: 'bg-[#EF9F27]/10 text-[#EF9F27]',
-              fully_paid: 'bg-[#378ADD]/10 text-[#378ADD]',
-            };
-            const statusColor = statusColors[po.status] ?? 'bg-gray-100 text-gray-600';
+            const statusColors: Record<string, string> = { approved: 'bg-[#1D9E75]/10 text-[#1D9E75]', partially_paid: 'bg-[#EF9F27]/10 text-[#EF9F27]', fully_paid: 'bg-[#378ADD]/10 text-[#378ADD]' };
             return (
               <div key={po.id} className="bg-white rounded-lg border-l-4 border-l-[#1D9E75] border border-gray-200 p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1.5">
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor}`}>
-                        {po.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                      </span>
-                      {po.pss_po_no && (
-                        <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{po.pss_po_no}</span>
-                      )}
-                      {po.has_supplier_milestones && (
-                        <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">Milestone PO</span>
-                      )}
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${statusColors[po.status] ?? 'bg-gray-100 text-gray-600'}`}>{po.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</span>
+                      {po.pss_po_no && <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{po.pss_po_no}</span>}
                     </div>
                     <p className="text-sm font-semibold text-gray-800">{project?.name ?? '—'}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? 'No supplier assigned'} · {po.description ?? '—'}</p>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
-                      {po.approved_at && (
-                        <span className="flex items-center gap-1">
-                          <CheckCircle size={10} className="text-[#1D9E75]" />
-                          Approved {formatDate(po.approved_at)}
-                        </span>
-                      )}
-                      {po.approved_by && (
-                        <span>by {profileName(po.approved_by)}</span>
-                      )}
-                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? 'No supplier'} · {po.description ?? '—'}</p>
+                    {po.approved_at && <p className="text-xs text-gray-400 mt-0.5">Approved {formatDate(po.approved_at)}{po.approved_by ? ` by ${profileName(po.approved_by)}` : ''}</p>}
                   </div>
-                  <div className="shrink-0 text-right space-y-0.5">
-                    <p className="text-xs text-gray-400">Contract excl VAT</p>
-                    <p className="text-sm font-semibold text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</p>
-                    <p className="text-xs text-gray-400">Total incl VAT</p>
+                  <div className="shrink-0 text-right">
                     <p className="text-base font-bold text-[#0f1923]">{fmtTHB(po.po_amount_incl_vat)}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">incl VAT</p>
                   </div>
                 </div>
               </div>
@@ -1015,131 +828,25 @@ export default function Approvals() {
         </div>
       )}
 
-      {showCostingSection && (
-        <div className="space-y-3">
+      {/* ── Supplier Invoices ─────────────────────────────────────────────────── */}
+      {showInvoicesSection && (
+        <div className="space-y-3" ref={invoicesRef}>
           <div className="flex items-center gap-2">
-            <DollarSign size={16} className="text-[#378ADD]" />
-            <h2 className="text-sm font-semibold text-[#0f1923]">Project Costings</h2>
-            {filteredCostings.length > 0 && (
-              <span className="bg-[#378ADD]/10 text-[#378ADD] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredCostings.length}</span>
-            )}
-          </div>
-
-          {filteredCostings.length === 0 ? (
-            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-              <CheckCircle className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-              <p className="text-gray-400 text-sm">No costing submissions in this queue</p>
-            </div>
-          ) : filteredCostings.map(costing => {
-            const stage = stageLabel(costing.project.status);
-            const marginPct = costing.gross_margin_pct ?? 0;
-            return (
-              <div key={costing.id} className="bg-white rounded-lg border-l-4 border-l-[#378ADD] border border-gray-200 p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-semibold text-[#378ADD] bg-[#378ADD]/10 px-2 py-0.5 rounded-full">{stage}</span>
-                      <Badge label={costing.status.replace(/_/g, ' ')} variant={statusVariant(costing.status)} />
-                    </div>
-                    <p className="text-sm font-semibold text-gray-800">{costing.project.name}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Submitted by {costing.submitterProfile?.full_name ?? '—'} on {formatDate(costing.submitted_at)}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right space-y-0.5">
-                    <p className="text-xs text-gray-400">Sales Price</p>
-                    <p className="text-sm font-semibold text-[#0f1923]">{fmtTHB(costing.sales_price_excl_vat)}</p>
-                    <p className="text-xs text-gray-400">Total Cost</p>
-                    <p className="text-sm font-medium text-gray-700">{fmtTHB(costing.total_cost_excl_vat)}</p>
-                    <p className="text-xs text-gray-400">Gross Margin</p>
-                    <p className={`text-sm font-bold ${marginPct > 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
-                      {marginPct.toFixed(1)}%
-                    </p>
-                  </div>
-                </div>
-
-                {(tab === 'pending' && canReviewCosting(costing)) && (
-                  <div className="mt-4 pt-3 border-t border-gray-100">
-                    <button
-                      onClick={() => { setCostingReviewModal(costing); setCostingComment(''); }}
-                      className="flex items-center gap-2 bg-[#378ADD] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#2a6fb5] transition-colors"
-                    >
-                      <FileText size={13} />
-                      Review & Decide
-                    </button>
-                  </div>
-                )}
-                {tab === 'completed' && (
-                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
-                    {costing.cm_approved_by && (
-                      <p className="text-xs text-[#1D9E75] flex items-center gap-1">
-                        <CheckCircle size={11} />
-                        CM approved by {profileName(costing.cm_approved_by)}{costing.cm_approved_at ? ` on ${formatDate(costing.cm_approved_at)}` : ''}
-                      </p>
-                    )}
-                    {costing.status === 'evp_approved' && costing.evp_approved_by && (
-                      <p className="text-xs text-[#1D9E75] flex items-center gap-1">
-                        <CheckCircle size={11} />
-                        EVP approved by {profileName(costing.evp_approved_by)}{costing.evp_approved_at ? ` on ${formatDate(costing.evp_approved_at)}` : ''}
-                      </p>
-                    )}
-                    {(costing.status === 'cm_rejected' || costing.status === 'evp_rejected') && (
-                      <p className="text-xs text-[#E24B4A] flex items-center gap-1">
-                        <XCircle size={11} />
-                        Rejected — sent back for revision
-                      </p>
-                    )}
-                  </div>
-                )}
-                {tab === 'with_others' && role === 'cost_controller' && (
-                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
-                    {costing.status === 'submitted' ? (
-                      <p className="text-xs text-gray-500">Waiting for CM review ({profileName(costing.cm_approved_by) !== '—' ? profileName(costing.cm_approved_by) : profiles.find(p => p.role === 'construction_manager')?.full_name ?? 'Construction Manager'})</p>
-                    ) : (
-                      <>
-                        <p className="text-xs text-[#1D9E75] flex items-center gap-1">
-                          <CheckCircle size={11} />
-                          CM approved by {profileName(costing.cm_approved_by)}{costing.cm_approved_at ? ` on ${formatDate(costing.cm_approved_at)}` : ''}
-                        </p>
-                        <p className="text-xs text-gray-500">Waiting for EVP final approval ({profiles.find(p => p.role === 'evp')?.full_name ?? 'EVP'})</p>
-                      </>
-                    )}
-                    {costing.submitted_at && (
-                      <p className="text-xs text-gray-400">Submitted {formatDate(costing.submitted_at)}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {filteredInvoices.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Receipt size={16} className="text-[#6366F1] opacity-80" style={{ color: '#2563eb' }} />
+            <Receipt size={16} className="text-[#2563eb]" />
             <h2 className="text-sm font-semibold text-[#0f1923]">Supplier Invoices</h2>
             <span className="bg-[#2563eb]/10 text-[#2563eb] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredInvoices.length}</span>
           </div>
-
           {filteredInvoices.map(invoice => {
-            const po = invoice.purchase_order as { pss_po_no?: string; description?: string; project?: { name: string } } | undefined;
-            const vendor = invoice.vendor as { name: string } | undefined;
+            const po        = invoice.purchase_order as { pss_po_no?: string; description?: string; project?: { name: string } } | undefined;
+            const vendor    = invoice.vendor as { name: string } | undefined;
             const projectName = po?.project?.name ?? '—';
             const invoiceStatusMap: Record<string, { label: string; cls: string; border: string }> = {
-              received:    { label: 'Awaiting CM Review', cls: 'bg-amber-50 text-amber-700', border: 'border-l-amber-400' },
-              approved_cm: { label: 'CM Approved', cls: 'bg-blue-50 text-blue-700', border: 'border-l-blue-400' },
-              approved_evp:{ label: 'EVP Approved', cls: 'bg-[#1D9E75]/10 text-[#1D9E75]', border: 'border-l-[#1D9E75]' },
-              rejected:    { label: 'Rejected', cls: 'bg-[#E24B4A]/10 text-[#E24B4A]', border: 'border-l-[#E24B4A]' },
+              received:     { label: 'Awaiting CM Review',         cls: 'bg-amber-50 text-amber-700',         border: 'border-l-amber-400' },
+              approved_cm:  { label: 'CM Approved — Awaiting EVP', cls: 'bg-blue-50 text-blue-700',           border: 'border-l-blue-400' },
+              approved_evp: { label: 'EVP Approved — Awaiting CEO',cls: 'bg-[#1D9E75]/10 text-[#1D9E75]',    border: 'border-l-[#1D9E75]' },
+              rejected:     { label: 'Rejected',                   cls: 'bg-[#E24B4A]/10 text-[#E24B4A]',    border: 'border-l-[#E24B4A]' },
             };
             const s = invoiceStatusMap[invoice.status] ?? { label: invoice.status, cls: 'bg-gray-100 text-gray-600', border: 'border-l-gray-300' };
-            const canApprove =
-              (role === 'construction_manager' && invoice.status === 'received') ||
-              (role === 'evp' && invoice.status === 'approved_cm') ||
-              (role === 'ceo' && invoice.status === 'approved_evp');
-            const canReject = role === 'construction_manager' && invoice.status === 'received';
-
             return (
               <div key={invoice.id} className={`bg-white rounded-lg border-l-4 ${s.border} border border-gray-200 p-5`}>
                 <div className="flex items-start justify-between gap-4">
@@ -1147,25 +854,12 @@ export default function Approvals() {
                     <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
                       {po?.pss_po_no && (
-                        <button
-                          onClick={() => setInvoiceDetailModal(invoice)}
-                          className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200 hover:text-gray-700 transition-colors"
-                        >
-                          {po.pss_po_no}
-                        </button>
+                        <button onClick={() => setInvoiceDetailModal(invoice)} className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200 transition-colors">{po.pss_po_no}</button>
                       )}
                     </div>
-                    <button
-                      onClick={() => setInvoiceDetailModal(invoice)}
-                      className="text-sm font-semibold text-gray-800 hover:text-[#1D9E75] transition-colors text-left"
-                    >
-                      {projectName}
-                    </button>
+                    <button onClick={() => setInvoiceDetailModal(invoice)} className="text-sm font-semibold text-gray-800 hover:text-[#1D9E75] transition-colors text-left">{projectName}</button>
                     <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {po?.description ?? '—'}</p>
-                    {invoice.vendor_invoice_no && (
-                      <p className="text-xs text-gray-400 mt-0.5">Invoice No: <span className="font-medium text-gray-600">{invoice.vendor_invoice_no}</span></p>
-                    )}
-                    <p className="text-xs text-gray-400 mt-0.5">Logged {formatDate(invoice.created_at)}</p>
+                    {invoice.vendor_invoice_no && <p className="text-xs text-gray-400 mt-0.5">Invoice No: <span className="font-medium text-gray-600">{invoice.vendor_invoice_no}</span></p>}
                     {invoice.status === 'rejected' && invoice.rejection_comment && (
                       <div className="mt-2 bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">
                         <p className="text-xs font-medium text-[#E24B4A] mb-0.5">Rejection reason:</p>
@@ -1176,41 +870,17 @@ export default function Approvals() {
                   <div className="shrink-0 text-right space-y-0.5">
                     <p className="text-xs text-gray-400">Amount (incl VAT)</p>
                     <p className="text-base font-bold text-[#0f1923]">{fmtTHB(invoice.invoice_amount_incl_vat)}</p>
-                    {invoice.wht_3pct > 0 && (
-                      <>
-                        <p className="text-xs text-gray-400">WHT 3%</p>
-                        <p className="text-xs text-[#EF9F27]">−{fmtTHB(invoice.wht_3pct)}</p>
-                        <p className="text-xs text-gray-400">Net Payable</p>
-                        <p className="text-sm font-semibold text-[#1D9E75]">{fmtTHB(invoice.net_payable)}</p>
-                      </>
-                    )}
+                    {invoice.wht_3pct > 0 && (<><p className="text-xs text-gray-400">WHT 3%</p><p className="text-xs text-[#EF9F27]">−{fmtTHB(invoice.wht_3pct)}</p><p className="text-xs text-gray-400">Net Payable</p><p className="text-sm font-semibold text-[#1D9E75]">{fmtTHB(invoice.net_payable)}</p></>)}
                   </div>
                 </div>
-
                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => setInvoiceDetailModal(invoice)}
-                    className="flex items-center gap-1.5 border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
-                  >
-                    <FileText size={12} /> View Details
-                  </button>
-
-                  {tab === 'pending' && canReject && (
-                    <button
-                      onClick={() => { setInvoiceRejectModal(invoice); setInvoiceRejectComment(''); }}
-                      className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
-                    >
-                      <XCircle size={13} /> Reject
-                    </button>
+                  <button onClick={() => setInvoiceDetailModal(invoice)} className="flex items-center gap-1.5 border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"><FileText size={12} /> View Details</button>
+                  {tab === 'pending' && canRejectInvoice(invoice) && (
+                    <button onClick={() => { setInvoiceRejectModal(invoice); setInvoiceRejectComment(''); }} className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"><XCircle size={13} /> Reject</button>
                   )}
-                  {tab === 'pending' && canApprove && (
-                    <button
-                      onClick={() => handleApproveInvoice(invoice)}
-                      disabled={invoiceAction}
-                      className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors disabled:opacity-60"
-                    >
-                      <CheckCircle size={13} />
-                      {invoiceAction ? 'Processing...' : role === 'construction_manager' ? 'Approve — Send to EVP' : role === 'evp' && invoice.invoice_amount_incl_vat >= 3000000 ? 'Approve — Escalate to CEO' : 'Approve — Release for Payment'}
+                  {tab === 'pending' && canApproveInvoice(invoice) && (
+                    <button onClick={() => handleApproveInvoice(invoice)} disabled={invoiceAction} className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors disabled:opacity-60">
+                      <CheckCircle size={13} />{invoiceAction ? 'Processing...' : invoiceApproveLabel(invoice)}
                     </button>
                   )}
                   {tab === 'with_others' && (
@@ -1227,76 +897,166 @@ export default function Approvals() {
         </div>
       )}
 
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <CheckCircle size={16} className="text-[#EF9F27]" />
-          <h2 className="text-sm font-semibold text-[#0f1923]">Progress Reports</h2>
-          {filteredReports.length > 0 && (
-            <span className="bg-[#EF9F27]/10 text-[#EF9F27] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredReports.length}</span>
-          )}
-        </div>
-
-        {filteredReports.length === 0 ? (
-          <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-            <Clock className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-            <p className="text-gray-400 text-sm">No progress reports in this queue</p>
+      {/* ── Project Costings ──────────────────────────────────────────────────── */}
+      {showCostingSection && (
+        <div className="space-y-3" ref={costingsRef}>
+          <div className="flex items-center gap-2">
+            <DollarSign size={16} className="text-[#378ADD]" />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Project Costings</h2>
+            {filteredCostings.length > 0 && <span className="bg-[#378ADD]/10 text-[#378ADD] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredCostings.length}</span>}
           </div>
-        ) : filteredReports.map(report => {
-          const po = (report as Record<string, unknown>).purchase_order as PurchaseOrder & { vendor?: { name: string } };
-          const project = (report as Record<string, unknown>).project as Project;
-          return (
-            <div key={report.id} className="bg-white rounded-lg border-l-4 border-l-[#EF9F27] border border-gray-200 p-5">
-              <div className="flex items-start justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Badge label={report.status.replace(/_/g, ' ')} variant={statusVariant(report.status)} />
-                    <span className="text-xs text-gray-400">{formatDate(report.report_date)}</span>
+          {filteredCostings.length === 0 ? (
+            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+              <CheckCircle className="w-8 h-8 text-gray-200 mx-auto mb-2" /><p className="text-gray-400 text-sm">No costing submissions in this queue</p>
+            </div>
+          ) : filteredCostings.map(costing => {
+            const stage = stageLabel(costing.project.status);
+            const marginPct = costing.gross_margin_pct ?? 0;
+            return (
+              <div key={costing.id} className="bg-white rounded-lg border-l-4 border-l-[#378ADD] border border-gray-200 p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-semibold text-[#378ADD] bg-[#378ADD]/10 px-2 py-0.5 rounded-full">{stage}</span>
+                      <Badge label={costing.status.replace(/_/g, ' ')} variant={statusVariant(costing.status)} />
+                    </div>
+                    <p className="text-sm font-semibold text-gray-800">{costing.project.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Submitted by {costing.submitterProfile?.full_name ?? '—'} on {formatDate(costing.submitted_at)}</p>
                   </div>
-                  <p className="text-sm font-semibold text-gray-800">{project?.name || '—'}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">PO: {po?.pss_po_no || '—'} · {po?.vendor?.name || '—'}</p>
-                  {report.description && <p className="text-xs text-gray-600 mt-2 italic">"{report.description}"</p>}
+                  <div className="shrink-0 text-right space-y-0.5">
+                    <p className="text-xs text-gray-400">Sales Price</p>
+                    <p className="text-sm font-semibold text-[#0f1923]">{fmtTHB(costing.sales_price_excl_vat)}</p>
+                    <p className="text-xs text-gray-400">Gross Margin</p>
+                    <p className={`text-sm font-bold ${marginPct > 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>{marginPct.toFixed(1)}%</p>
+                  </div>
                 </div>
-                <div className="text-right shrink-0 ml-4">
-                  <p className="text-2xl font-bold text-gray-900">{report.percentage_complete}%</p>
-                  <p className="text-xs text-gray-400">complete</p>
+                {tab === 'pending' && canReviewCosting(costing) && (
+                  <div className="mt-4 pt-3 border-t border-gray-100">
+                    <button onClick={() => { setCostingReviewModal(costing); setCostingComment(''); }} className="flex items-center gap-2 bg-[#378ADD] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#2a6fb5] transition-colors"><FileText size={13} />Review & Decide</button>
+                  </div>
+                )}
+                {tab === 'completed' && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 space-y-1">
+                    {costing.cm_approved_by && <p className="text-xs text-[#1D9E75] flex items-center gap-1"><CheckCircle size={11} />CM approved by {profileName(costing.cm_approved_by)}</p>}
+                    {costing.status === 'evp_approved' && costing.evp_approved_by && <p className="text-xs text-[#1D9E75] flex items-center gap-1"><CheckCircle size={11} />EVP approved by {profileName(costing.evp_approved_by)}</p>}
+                    {(costing.status === 'cm_rejected' || costing.status === 'evp_rejected') && <p className="text-xs text-[#E24B4A] flex items-center gap-1"><XCircle size={11} />Rejected — sent back for revision</p>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Progress Reports ──────────────────────────────────────────────────── */}
+      {showReportsSection && (
+        <div className="space-y-3" ref={reportsRef}>
+          <div className="flex items-center gap-2">
+            <CheckCircle size={16} className="text-[#EF9F27]" />
+            <h2 className="text-sm font-semibold text-[#0f1923]">Progress Reports</h2>
+            {filteredReports.length > 0 && <span className="bg-[#EF9F27]/10 text-[#EF9F27] text-xs font-semibold px-2 py-0.5 rounded-full">{filteredReports.length}</span>}
+          </div>
+          {filteredReports.length === 0 ? (
+            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+              <Clock className="w-8 h-8 text-gray-200 mx-auto mb-2" /><p className="text-gray-400 text-sm">No progress reports in this queue</p>
+            </div>
+          ) : filteredReports.map(report => {
+            const po      = (report as Record<string, unknown>).purchase_order as PurchaseOrder & { vendor?: { name: string } };
+            const project = (report as Record<string, unknown>).project as Project;
+            return (
+              <div key={report.id} className="bg-white rounded-lg border-l-4 border-l-[#EF9F27] border border-gray-200 p-5">
+                <div className="flex items-start justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge label={report.status.replace(/_/g, ' ')} variant={statusVariant(report.status)} />
+                      <span className="text-xs text-gray-400">{formatDate(report.report_date)}</span>
+                    </div>
+                    <p className="text-sm font-semibold text-gray-800">{project?.name || '—'}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">PO: {po?.pss_po_no || '—'} · {po?.vendor?.name || '—'}</p>
+                    {report.description && <p className="text-xs text-gray-600 mt-2 italic">"{report.description}"</p>}
+                  </div>
+                  <div className="text-right shrink-0 ml-4">
+                    <p className="text-2xl font-bold text-gray-900">{report.percentage_complete}%</p>
+                    <p className="text-xs text-gray-400">complete</p>
+                  </div>
+                </div>
+                {report.site_checklist && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {Object.entries(report.site_checklist as Record<string, boolean>).map(([key, val]) => (
+                      <div key={key} className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${val ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'bg-gray-100 text-gray-400'}`}>
+                        {val ? <CheckCircle size={11} /> : <XCircle size={11} />}
+                        {key.replace(/_/g, ' ')}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {report.cm_comments && <p className="mt-2 text-xs text-gray-500"><span className="font-medium">CM comments:</span> {report.cm_comments}</p>}
+                {tab === 'pending' && canReviewReport(report) && (
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <button onClick={() => { setReviewModal(report); setReviewComment(''); }} className="flex items-center gap-2 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors"><CheckCircle size={13} />Review & Decide</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* All-clear empty state */}
+      {tab === 'pending' && totalPending === 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <CheckCircle className="w-12 h-12 text-[#1D9E75]/30 mx-auto mb-3" />
+          <p className="text-gray-700 font-medium">All caught up</p>
+          <p className="text-gray-400 text-sm mt-1">No items require your approval right now.</p>
+        </div>
+      )}
+
+      {/* ═══════════════ MODALS ═══════════════ */}
+
+      {/* PO Review Modal */}
+      {poReviewModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">Review Purchase Order</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{(poReviewModal.project as Project)?.name ?? '—'}</p>
+              </div>
+              <button onClick={() => setPoReviewModal(null)}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-xs">
+                <div className="flex justify-between"><span className="text-gray-500">Supplier</span><span className="font-medium">{(poReviewModal.vendor as { name: string })?.name ?? 'Not assigned'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Description</span><span className="font-medium text-right max-w-[60%]">{poReviewModal.description ?? '—'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Pipeline Stage</span><span className="font-medium">{poStageLabel(poReviewModal.status)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Your Mandate</span><span className="font-medium">{poRequiredApprover(poReviewModal)} approval</span></div>
+                <div className="border-t border-gray-200 pt-2 mt-1 space-y-1.5">
+                  <div className="flex justify-between"><span className="text-gray-500">Contract excl VAT</span><span>{fmtTHB(poReviewModal.po_amount_excl_vat)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">VAT 7%</span><span>{fmtTHB(poReviewModal.vat_7pct)}</span></div>
+                  {poReviewModal.wht_applies && <div className="flex justify-between text-[#EF9F27]"><span>WHT 3%</span><span>{fmtTHB(poReviewModal.wht_3pct)}</span></div>}
+                  <div className="flex justify-between font-semibold text-[#0f1923] border-t border-gray-200 pt-1.5"><span>Total incl VAT</span><span className="text-base">{fmtTHB(poReviewModal.po_amount_incl_vat)}</span></div>
                 </div>
               </div>
-
-              {report.site_checklist && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {Object.entries(report.site_checklist as Record<string, boolean>).map(([key, val]) => (
-                    <div key={key} className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${val ? 'bg-[#1D9E75]/10 text-[#1D9E75]' : 'bg-gray-100 text-gray-400'}`}>
-                      {val ? <CheckCircle size={11} /> : <XCircle size={11} />}
-                      {key.replace(/_/g, ' ')}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {report.notes && (
-                <p className="mt-2 text-xs text-gray-500 bg-gray-50 rounded p-2">{report.notes}</p>
-              )}
-
-              {report.cm_comments && (
-                <p className="mt-2 text-xs text-gray-500"><span className="font-medium">CM comments:</span> {report.cm_comments}</p>
-              )}
-
-              {tab === 'pending' && canReviewReport(report) && (
-                <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3">
-                  <button
-                    onClick={() => { setReviewModal(report); setReviewComment(''); }}
-                    className="flex items-center gap-2 bg-[#1D9E75] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#178a64] transition-colors"
-                  >
-                    <CheckCircle size={13} />
-                    Review & Decide
-                  </button>
-                </div>
-              )}
+              {poReviewModal.notes && <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 italic">"{poReviewModal.notes}"</div>}
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason (required to reject)</label>
+                <textarea value={poRejectReason} onChange={e => setPoRejectReason(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#EF9F27]/30 resize-none" placeholder="Explain why this PO is being rejected..." />
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => handleRejectPO(poReviewModal)} disabled={!poRejectReason.trim() || poAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60">
+                  <XCircle size={15} />Reject — Send Back
+                </button>
+                <button onClick={() => approvePO(poReviewModal)} disabled={poAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
+                  <CheckCircle size={15} />
+                  {poAction ? 'Processing...' : role === 'evp' && poReviewModal.po_amount_incl_vat >= PO_THRESHOLD_EVP ? 'Approve — Escalate to CEO' : role === 'construction_manager' ? 'Approve — Forward to EVP' : role === 'cost_controller' ? 'Approve — Forward to CM' : 'Approve & Assign PSS No.'}
+                </button>
+              </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        </div>
+      )}
 
+      {/* Costing Review Modal */}
       {costingReviewModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl w-full max-w-lg border border-gray-200 my-4">
@@ -1319,9 +1079,7 @@ export default function Approvals() {
                     <span>{fmtTHB((costingReviewModal[k as keyof ProjectCosting] as number) ?? 0)}</span>
                   </div>
                 ))}
-                <div className="flex justify-between py-2 border-t border-gray-200 font-semibold">
-                  <span>Total Cost</span><span>{fmtTHB(costingReviewModal.total_cost_excl_vat)}</span>
-                </div>
+                <div className="flex justify-between py-2 border-t border-gray-200 font-semibold"><span>Total Cost</span><span>{fmtTHB(costingReviewModal.total_cost_excl_vat)}</span></div>
                 <div className="flex justify-between py-1">
                   <span className="text-gray-500">Gross Margin</span>
                   <span className={`font-medium ${costingReviewModal.gross_margin_amount > 0 ? 'text-[#1D9E75]' : 'text-[#E24B4A]'}`}>
@@ -1330,36 +1088,13 @@ export default function Approvals() {
                 </div>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">
-                  Comments {canReviewCosting(costingReviewModal) ? '(required to reject)' : '(read-only)'}
-                </label>
-                <textarea
-                  value={costingComment}
-                  onChange={e => setCostingComment(e.target.value)}
-                  rows={3}
-                  disabled={!canReviewCosting(costingReviewModal)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none disabled:bg-gray-50 disabled:text-gray-400"
-                  placeholder="Add review comments..."
-                />
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Comments {canReviewCosting(costingReviewModal) ? '(required to reject)' : '(read-only)'}</label>
+                <textarea value={costingComment} onChange={e => setCostingComment(e.target.value)} rows={3} disabled={!canReviewCosting(costingReviewModal)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none disabled:bg-gray-50 disabled:text-gray-400" placeholder="Add review comments..." />
               </div>
               {canReviewCosting(costingReviewModal) ? (
                 <div className="flex gap-3">
-                  <button
-                    onClick={() => rejectCostingItem(costingReviewModal)}
-                    disabled={!costingComment.trim() || costingAction}
-                    className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60"
-                  >
-                    <XCircle size={15} />
-                    Reject — Send Back
-                  </button>
-                  <button
-                    onClick={() => approveCostingItem(costingReviewModal)}
-                    disabled={costingAction}
-                    className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60"
-                  >
-                    <CheckCircle size={15} />
-                    Approve
-                  </button>
+                  <button onClick={() => rejectCostingItem(costingReviewModal)} disabled={!costingComment.trim() || costingAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60"><XCircle size={15} />Reject — Send Back</button>
+                  <button onClick={() => approveCostingItem(costingReviewModal)} disabled={costingAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60"><CheckCircle size={15} />Approve</button>
                 </div>
               ) : (
                 <p className="text-xs text-gray-400 italic text-center">Read-only view — no action available for your role</p>
@@ -1369,6 +1104,7 @@ export default function Approvals() {
         </div>
       )}
 
+      {/* Progress Report Review Modal */}
       {reviewModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
@@ -1377,37 +1113,20 @@ export default function Approvals() {
               <button onClick={() => setReviewModal(null)}><X size={16} className="text-gray-400" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="bg-gray-50 rounded-lg p-3 text-sm">
-                <p className="font-medium text-gray-800">{(reviewModal as Record<string, unknown> & { project?: { name: string } }).project?.name}</p>
-                <p className="text-gray-500 text-xs mt-0.5">Progress: {reviewModal.percentage_complete}%</p>
-                {reviewModal.description && <p className="text-gray-600 text-xs mt-1 italic">"{reviewModal.description}"</p>}
+              <div className="bg-gray-50 rounded-lg p-3 space-y-1 text-xs">
+                <div className="flex justify-between"><span className="text-gray-500">Project</span><span className="font-medium">{((reviewModal as Record<string, unknown>).project as Project)?.name ?? '—'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Report Date</span><span>{formatDate(reviewModal.report_date)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Progress</span><span className="font-bold text-[#1D9E75]">{reviewModal.percentage_complete}%</span></div>
               </div>
+              {reviewModal.description && <p className="text-sm text-gray-700 italic">"{reviewModal.description}"</p>}
               <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Comments (optional)</label>
-                <textarea
-                  value={reviewComment}
-                  onChange={e => setReviewComment(e.target.value)}
-                  rows={3}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none"
-                  placeholder="Add review comments..."
-                />
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Comments</label>
+                <textarea value={reviewComment} onChange={e => setReviewComment(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none" placeholder="Add review comments..." />
               </div>
               {canReviewReport(reviewModal) ? (
                 <div className="flex gap-3">
-                  <button
-                    onClick={() => reject(reviewModal)}
-                    className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5"
-                  >
-                    <XCircle size={15} />
-                    Reject
-                  </button>
-                  <button
-                    onClick={() => approve(reviewModal)}
-                    className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64]"
-                  >
-                    <CheckCircle size={15} />
-                    Approve
-                  </button>
+                  <button onClick={() => rejectReport(reviewModal)} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5"><XCircle size={15} />Reject</button>
+                  <button onClick={() => approveReport(reviewModal)} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64]"><CheckCircle size={15} />Approve</button>
                 </div>
               ) : (
                 <p className="text-xs text-gray-400 italic text-center">Read-only view — no action available for your role</p>
@@ -1417,67 +1136,42 @@ export default function Approvals() {
         </div>
       )}
 
+      {/* Transfer Confirm/Approve Modal */}
       {transferModal && transferModalMode !== 'reject' && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-800">
-                {transferModalMode === 'recommend' ? 'Confirm EVP Recommendation' : 'Approve Margin Transfer'}
-              </h2>
+              <h2 className="text-base font-semibold text-gray-800">{transferModalMode === 'recommend' ? 'Confirm EVP Recommendation' : 'Approve Margin Transfer'}</h2>
               <button onClick={() => setTransferModal(null)}><X size={16} className="text-gray-400" /></button>
             </div>
             <div className="p-6 space-y-4">
               <div className="bg-[#F8F8F7] rounded-lg p-3 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">From</span>
-                  <span className="font-medium">{(transferModal.from_project as Project)?.name ?? '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">To</span>
-                  <span className="font-medium">{(transferModal.to_project as Project)?.name ?? '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Amount</span>
-                  <span className="font-bold text-[#1D9E75]">{fmtTHB(transferModal.amount)}</span>
-                </div>
+                <div className="flex justify-between"><span className="text-gray-500">From</span><span className="font-medium">{(transferModal.from_project as Project)?.name ?? '—'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">To</span><span className="font-medium">{(transferModal.to_project as Project)?.name ?? '—'}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Amount</span><span className="font-bold text-[#1D9E75]">{fmtTHB(transferModal.amount)}</span></div>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">
-                  {transferModalMode === 'recommend' ? 'EVP Recommendation Notes (optional)' : 'Notes (optional)'}
-                </label>
-                <textarea
-                  value={transferNotes}
-                  onChange={e => setTransferNotes(e.target.value)}
-                  rows={3}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none"
-                  placeholder="Add notes..."
-                />
+                <label className="text-xs font-medium text-gray-600 mb-1 block">{transferModalMode === 'recommend' ? 'EVP Recommendation Notes (optional)' : 'Notes (optional)'}</label>
+                <textarea value={transferNotes} onChange={e => setTransferNotes(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 resize-none" placeholder="Add notes..." />
               </div>
+              {transferApprovalError && transferModalMode === 'approve' && (
+                <div className="rounded-lg border border-[#E24B4A]/30 bg-[#E24B4A]/5 p-3">
+                  <p className="text-xs font-semibold text-[#E24B4A] mb-1">Transfer blocked by system:</p>
+                  <p className="text-xs text-[#c73d3c]">{transferApprovalError}</p>
+                </div>
+              )}
             </div>
-            {transferApprovalError && transferModalMode === 'approve' && (
-              <div className="mx-6 mb-0 rounded-lg border border-[#E24B4A]/30 bg-[#E24B4A]/5 p-3">
-                <p className="text-xs font-semibold text-[#E24B4A] mb-1">Transfer blocked by system:</p>
-                <p className="text-xs text-[#c73d3c]">{transferApprovalError}</p>
-                <p className="text-xs text-[#E24B4A] mt-1">The transfer was not executed. Check the available margin and try a smaller amount.</p>
-              </div>
-            )}
             <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
-              <button onClick={() => setTransferModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
-                Cancel
-              </button>
-              <button
-                onClick={() => transferModalMode === 'recommend' ? handleTransferRecommend(transferModal) : handleTransferApprove(transferModal)}
-                disabled={transferAction}
-                className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60"
-              >
-                <CheckCircle size={14} />
-                {transferAction ? 'Processing...' : transferModalMode === 'recommend' ? 'Confirm Recommendation' : 'Approve Transfer'}
+              <button onClick={() => setTransferModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button onClick={() => transferModalMode === 'recommend' ? handleTransferRecommend(transferModal) : handleTransferApprove(transferModal)} disabled={transferAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
+                <CheckCircle size={14} />{transferAction ? 'Processing...' : transferModalMode === 'recommend' ? 'Confirm Recommendation' : 'Approve Transfer'}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Transfer Reject Modal */}
       {transferModal && transferModalMode === 'reject' && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
@@ -1486,160 +1180,43 @@ export default function Approvals() {
               <button onClick={() => setTransferModal(null)}><X size={16} className="text-gray-400" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="text-xs text-gray-600">
-                Rejecting transfer of <span className="font-semibold">{fmtTHB(transferModal.amount)}</span> from{' '}
-                <span className="font-semibold">{(transferModal.from_project as Project)?.name ?? '—'}</span>
-              </div>
+              <p className="text-xs text-gray-600">Rejecting transfer of <span className="font-semibold">{fmtTHB(transferModal.amount)}</span> from <span className="font-semibold">{(transferModal.from_project as Project)?.name ?? '—'}</span></p>
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason *</label>
-                <textarea
-                  value={transferRejectReason}
-                  onChange={e => setTransferRejectReason(e.target.value)}
-                  rows={3}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none"
-                  placeholder="Explain the reason for rejection..."
-                />
+                <textarea value={transferRejectReason} onChange={e => setTransferRejectReason(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none" placeholder="Explain the reason for rejection..." />
               </div>
             </div>
             <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
-              <button onClick={() => setTransferModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">
-                Cancel
-              </button>
-              <button
-                onClick={() => handleTransferReject(transferModal)}
-                disabled={!transferRejectReason.trim() || transferAction}
-                className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60"
-              >
-                <XCircle size={14} />
-                {transferAction ? 'Processing...' : 'Confirm Rejection'}
+              <button onClick={() => setTransferModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+              <button onClick={() => handleTransferReject(transferModal)} disabled={!transferRejectReason.trim() || transferAction} className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60">
+                <XCircle size={14} />{transferAction ? 'Processing...' : 'Confirm Rejection'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {poReviewModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div>
-                <h2 className="text-base font-semibold text-gray-800">Review Purchase Order</h2>
-                <p className="text-xs text-gray-400 mt-0.5">{(poReviewModal.project as Project)?.name ?? '—'}</p>
-              </div>
-              <button onClick={() => setPoReviewModal(null)}><X size={16} className="text-gray-400" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Supplier</span>
-                  <span className="font-medium">{(poReviewModal.vendor as { name: string })?.name ?? 'Not assigned'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Description</span>
-                  <span className="font-medium text-right max-w-[60%]">{poReviewModal.description ?? '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Type</span>
-                  <span className="font-medium">{poReviewModal.has_supplier_milestones ? 'Milestone PO' : 'Simple PO'}</span>
-                </div>
-                <div className="border-t border-gray-200 pt-2 mt-1 space-y-1.5">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Contract excl VAT</span>
-                    <span>{fmtTHB(poReviewModal.po_amount_excl_vat)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">VAT 7%</span>
-                    <span>{fmtTHB(poReviewModal.vat_7pct)}</span>
-                  </div>
-                  {poReviewModal.wht_applies && (
-                    <div className="flex justify-between text-[#EF9F27]">
-                      <span>WHT 3%</span>
-                      <span>{fmtTHB(poReviewModal.wht_3pct)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between font-semibold text-[#0f1923] border-t border-gray-200 pt-1.5">
-                    <span>Total incl VAT</span>
-                    <span className="text-base">{fmtTHB(poReviewModal.po_amount_incl_vat)}</span>
-                  </div>
-                </div>
-              </div>
-              {poReviewModal.notes && (
-                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 italic">"{poReviewModal.notes}"</div>
-              )}
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason (required to reject)</label>
-                <textarea
-                  value={poRejectReason}
-                  onChange={e => setPoRejectReason(e.target.value)}
-                  rows={3}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#EF9F27]/30 resize-none"
-                  placeholder="Explain why this PO is being rejected..."
-                />
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => rejectPO(poReviewModal)}
-                  disabled={!poRejectReason.trim() || poAction}
-                  className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60"
-                >
-                  <XCircle size={15} />
-                  Reject — Send Back
-                </button>
-                <button
-                  onClick={() => approvePO(poReviewModal)}
-                  disabled={poAction}
-                  className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60"
-                >
-                  <CheckCircle size={15} />
-                  {poAction ? 'Processing...' : 'Approve & Assign PSS No.'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Invoice Reject Modal */}
       {invoiceRejectModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div>
                 <h2 className="text-base font-semibold text-gray-800">Reject Invoice</h2>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {invoiceRejectModal.vendor_invoice_no} — {fmtTHB(invoiceRejectModal.invoice_amount_incl_vat)}
-                </p>
+                <p className="text-xs text-gray-400 mt-0.5">{invoiceRejectModal.vendor_invoice_no} — {fmtTHB(invoiceRejectModal.invoice_amount_incl_vat)}</p>
               </div>
               <button onClick={() => setInvoiceRejectModal(null)}><X size={16} className="text-gray-400" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
-                The invoice will be returned to the Cost Controller with your comment. They will need to resolve the issue before resubmitting.
-              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">The invoice will be returned to the Cost Controller with your comment. They will need to resolve the issue before resubmitting.</div>
               <div>
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Reason for rejection <span className="text-[#E24B4A]">*</span></label>
-                <textarea
-                  value={invoiceRejectComment}
-                  onChange={e => setInvoiceRejectComment(e.target.value)}
-                  rows={4}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none"
-                  placeholder="e.g. Supplier did not finish the mounting, do not pay yet..."
-                  autoFocus
-                />
+                <textarea value={invoiceRejectComment} onChange={e => setInvoiceRejectComment(e.target.value)} rows={4} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none" placeholder="e.g. Work not yet completed on site..." autoFocus />
               </div>
               <div className="flex gap-3">
-                <button
-                  onClick={() => setInvoiceRejectModal(null)}
-                  className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRejectInvoice}
-                  disabled={!invoiceRejectComment.trim() || invoiceAction}
-                  className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60"
-                >
-                  <XCircle size={15} />
-                  {invoiceAction ? 'Rejecting...' : 'Confirm Rejection'}
+                <button onClick={() => setInvoiceRejectModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
+                <button onClick={handleRejectInvoice} disabled={!invoiceRejectComment.trim() || invoiceAction} className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60">
+                  <XCircle size={15} />{invoiceAction ? 'Rejecting...' : 'Confirm Rejection'}
                 </button>
               </div>
             </div>
@@ -1647,20 +1224,19 @@ export default function Approvals() {
         </div>
       )}
 
+      {/* Invoice Detail Modal */}
       {invoiceDetailModal && (
         <InvoiceDetailModal
           invoice={invoiceDetailModal}
           role={role ?? ''}
           approving={invoiceAction}
-          onApprove={() => {
-            handleApproveInvoice(invoiceDetailModal);
-            setInvoiceDetailModal(null);
-          }}
+          onApprove={() => { handleApproveInvoice(invoiceDetailModal); setInvoiceDetailModal(null); }}
           onReject={(comment) => handleRejectInvoiceFromModal(invoiceDetailModal, comment)}
           onClose={() => setInvoiceDetailModal(null)}
         />
       )}
 
+      {/* New Progress Report Form */}
       {showForm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl w-full max-w-lg border border-gray-200 my-4">
@@ -1686,7 +1262,7 @@ export default function Approvals() {
                 <label className="text-xs font-medium text-gray-600 mb-1 block">Purchase Order</label>
                 <select {...register('po_id', { required: true })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white">
                   <option value="">Select PO...</option>
-                  {pos.map(p => <option key={p.id} value={p.id}>{p.pss_po_no} – {(p as Record<string, unknown> & { vendor?: { name: string } }).vendor?.name}</option>)}
+                  {allPOs.map(p => <option key={p.id} value={p.id}>{p.pss_po_no} – {(p as Record<string, unknown> & { vendor?: { name: string } }).vendor?.name}</option>)}
                 </select>
               </div>
               <div>
@@ -1701,9 +1277,7 @@ export default function Approvals() {
                 <input {...register('description')} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30" placeholder="Work completed..." />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 mb-2 block">
-                  Percentage Complete: <span className="text-[#1D9E75] font-bold">{pctValue}%</span>
-                </label>
+                <label className="text-xs font-medium text-gray-600 mb-2 block">Percentage Complete: <span className="text-[#1D9E75] font-bold">{pctValue}%</span></label>
                 <input type="range" min="0" max="100" step="5" {...register('percentage_complete', { valueAsNumber: true })} className="w-full accent-[#1D9E75]" />
               </div>
               <div>
@@ -1729,9 +1303,7 @@ export default function Approvals() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowForm(false)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
-                <button type="submit" disabled={submitting} className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
-                  {submitting ? 'Submitting...' : 'Submit Report'}
-                </button>
+                <button type="submit" disabled={submitting} className="flex-1 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">{submitting ? 'Submitting...' : 'Submit Report'}</button>
               </div>
             </form>
           </div>
@@ -1739,4 +1311,47 @@ export default function Approvals() {
       )}
     </div>
   );
+
+  // ─── PO Card ────────────────────────────────────────────────────────────────
+
+  function renderPOCard(po: PurchaseOrder, viewMode: 'pending' | 'with_others') {
+    const vendor  = po.vendor  as { name: string } | undefined;
+    const project = po.project as Project | undefined;
+    const isActionable = viewMode === 'pending' && canApprovePO(po);
+    return (
+      <div key={po.id} className="bg-white rounded-lg border-l-4 border-l-[#EF9F27] border border-gray-200 p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+              <span className="text-xs font-semibold bg-[#EF9F27]/10 text-[#EF9F27] px-2 py-0.5 rounded-full">{poStageLabel(po.status)}</span>
+              <span className="text-xs text-gray-400">Requires {poRequiredApprover(po)}</span>
+              {po.has_supplier_milestones && <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">Milestone PO</span>}
+            </div>
+            <p className="text-sm font-semibold text-gray-800">{project?.name ?? '—'}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? 'No supplier assigned'} · {po.description ?? '—'}</p>
+            {po.submitted_at && <p className="text-xs text-gray-400 mt-0.5">Submitted {formatDate(po.submitted_at)}</p>}
+          </div>
+          <div className="shrink-0 text-right space-y-0.5">
+            <p className="text-xs text-gray-400">Contract excl VAT</p>
+            <p className="text-sm font-semibold text-gray-800">{fmtTHB(po.po_amount_excl_vat)}</p>
+            <p className="text-xs text-gray-400">Total incl VAT</p>
+            <p className="text-base font-bold text-[#0f1923]">{fmtTHB(po.po_amount_incl_vat)}</p>
+            {po.wht_applies && <p className="text-xs text-[#EF9F27]">WHT 3%: {fmtTHB(po.wht_3pct)}</p>}
+          </div>
+        </div>
+        {isActionable && (
+          <div className="mt-4 pt-3 border-t border-gray-100">
+            <button onClick={() => { setPoReviewModal(po); setPoRejectReason(''); }} className="flex items-center gap-2 bg-[#EF9F27] text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-[#d48b1e] transition-colors">
+              <FileText size={13} />Review & Decide
+            </button>
+          </div>
+        )}
+        {viewMode === 'with_others' && (
+          <div className="mt-3 pt-3 border-t border-gray-100">
+            <p className="text-xs text-gray-500">{poStageLabel(po.status)}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
 }

@@ -148,7 +148,8 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
     return <Navigate to="/login" replace />;
   }
 
-  const pendingApprovals = notifications.filter(n => !n.is_read && n.related_entity_type === 'progress_report').length;
+  const APPROVAL_ENTITY_TYPES = ['progress_report', 'purchase_order', 'vendor_invoice', 'project_cash_transfer', 'project_costing'];
+  const pendingApprovals = notifications.filter(n => !n.is_read && APPROVAL_ENTITY_TYPES.includes(n.related_entity_type ?? '')).length;
   const pendingPayments = releasedInvoiceCount;
   const ceoAlerts = notifications.filter(n => !n.is_read && n.type === 'alert').length;
 
