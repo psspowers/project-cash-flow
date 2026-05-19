@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import {
   CreditCard, AlertTriangle, X, CheckCircle, ChevronDown, Info,
-  Clock, CheckSquare, ChevronRight, Building2,
+  Clock, CheckSquare, ChevronRight, Building2, Pencil, Calendar, Hash, Banknote,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
@@ -126,6 +126,15 @@ export default function PaymentQueue() {
   const [clearNote, setClearNote] = useState('');
   const [savingClear, setSavingClear] = useState(false);
 
+  // Manager: edit request review
+  const [editRequestChecks, setEditRequestChecks] = useState<Check[]>([]);
+  const [editingCheck, setEditingCheck] = useState<Check | null>(null);
+  const [editBankAccount, setEditBankAccount] = useState('KBank PSS Main');
+  const [editCheckNo, setEditCheckNo] = useState('');
+  const [editCheckDate, setEditCheckDate] = useState('');
+  const [editPayee, setEditPayee] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
   // ── Role flags ──────────────────────────────────────────────────────────────
   const isSupervisor = profile?.role === 'accounts_supervisor';
   const isManager    = profile?.role === 'accounts_manager';
@@ -147,7 +156,20 @@ export default function PaymentQueue() {
   // ── Data ────────────────────────────────────────────────────────────────────
 
   async function loadData() {
-    const [{ data: inv }, { data: vouc }, { data: chk }, { data: proj }, { data: vend }] = await Promise.all([
+    const editCheckSelect = `
+      id, voucher_id, bank_account, check_no, check_date, payee, amount,
+      edit_request_status, edit_requested_by, edit_requested_at, edit_request_note,
+      payment_voucher:payment_vouchers(
+        id, voucher_no, net_paid, wht_amount, status,
+        vendor_invoice:vendor_invoices(
+          id, vendor_invoice_no,
+          project:projects(id, name),
+          purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, vendor:entities(name, bank_name, bank_account_no, bank_account_name))
+        )
+      )
+    `;
+
+    const [{ data: inv }, { data: vouc }, { data: chk }, { data: proj }, { data: vend }, { data: editChks }] = await Promise.all([
       supabase
         .from('vendor_invoices')
         .select('*, project:projects(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
@@ -163,12 +185,14 @@ export default function PaymentQueue() {
         .order('created_at', { ascending: false }),
       supabase.from('projects').select('id, name, status').order('name'),
       supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
+      supabase.from('checks').select(editCheckSelect).eq('edit_request_status', 'pending').order('edit_requested_at', { ascending: true }),
     ]);
     setInvoices(inv || []);
     setVouchers(vouc || []);
     setChecks(chk || []);
     setPoProjects(proj || []);
     setPoVendors(vend || []);
+    setEditRequestChecks((editChks || []) as Check[]);
     setLoading(false);
   }
 
@@ -484,6 +508,68 @@ export default function PaymentQueue() {
     } finally {
       setRejecting(false);
     }
+  }
+
+  // ── Manager: Edit Request Review ───────────────────────────────────────────
+
+  function openEditRequest(chk: Check) {
+    setEditingCheck(chk);
+    setEditBankAccount(chk.bank_account ?? 'KBank PSS Main');
+    setEditCheckNo(chk.check_no ?? '');
+    setEditCheckDate(chk.check_date ?? new Date().toISOString().substring(0, 10));
+    setEditPayee(chk.payee ?? '');
+  }
+
+  function closeEditRequest() {
+    setEditingCheck(null);
+    setEditBankAccount('KBank PSS Main');
+    setEditCheckNo('');
+    setEditCheckDate('');
+    setEditPayee('');
+  }
+
+  async function saveEditAndApprove() {
+    if (!editingCheck || !user) return;
+    setSavingEdit(true);
+    try {
+      await Promise.all([
+        supabase
+          .from('checks')
+          .update({
+            bank_account: editBankAccount,
+            check_no: editCheckNo.trim() || null,
+            check_date: editCheckDate || null,
+            payee: editPayee.trim() || null,
+            status: 'issued',
+            edit_request_status: 'approved',
+            signed_by_manager: user.id,
+          })
+          .eq('id', editingCheck.id),
+        supabase
+          .from('payment_vouchers')
+          .update({ status: 'issued', manager_approved_by: user.id, manager_approved_at: new Date().toISOString() })
+          .eq('id', editingCheck.voucher_id),
+      ]);
+
+      // Mark vendor invoice as paid
+      const invoiceId = (editingCheck as any).payment_voucher?.vendor_invoice?.id;
+      if (invoiceId) {
+        await supabase.from('vendor_invoices').update({ status: 'paid' }).eq('id', invoiceId);
+      }
+
+      closeEditRequest();
+      loadData();
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function declineEditRequest(checkId: string) {
+    await supabase
+      .from('checks')
+      .update({ edit_request_status: null, edit_requested_by: null, edit_requested_at: null, edit_request_note: null })
+      .eq('id', checkId);
+    loadData();
   }
 
   // ── Banking Officer: Issue Check ────────────────────────────────────────────
@@ -895,6 +981,71 @@ export default function PaymentQueue() {
           <p className="text-sm text-gray-500 mt-0.5">Payment pipeline visibility and co-sign authority</p>
         </div>
 
+        {/* PRIORITY — Edit Requests from Banking Officer */}
+        {editRequestChecks.length > 0 && (
+          <div className="border-2 border-orange-400/50 rounded-lg overflow-hidden shadow-sm">
+            <SectionHeader
+              icon={<Pencil size={14} />}
+              title="Action Required — Edit Requests from Banking"
+              count={editRequestChecks.length}
+              accent="amber"
+            />
+            <div className="p-4 space-y-3">
+              {editRequestChecks.map(chk => {
+                const pv  = (chk as any).payment_voucher;
+                const vi  = pv?.vendor_invoice;
+                const vPo = vi?.purchase_order;
+                const vendor = vPo?.vendor;
+                const vendorName = vendor?.name ?? vPo?.supplier_name_raw ?? chk.payee ?? '—';
+                const projectShort = vi?.project?.name?.split('–')[0]?.trim() ?? '—';
+                return (
+                  <div key={chk.id} className="bg-orange-50 rounded-md border border-orange-200 px-4 py-3">
+                    <div className="flex items-start justify-between gap-4 mb-2">
+                      <div className="min-w-0">
+                        {vPo?.pss_po_no && (
+                          <p className="text-xs font-medium text-[#1D9E75] mb-0.5">{vPo.pss_po_no}</p>
+                        )}
+                        <p className="text-sm font-semibold text-gray-800">{vendorName}</p>
+                        <p className="text-xs text-gray-500">{projectShort} · {pv?.voucher_no ?? '—'}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          Current bank: <span className="font-medium text-gray-600">{chk.bank_account ?? '—'}</span>
+                        </p>
+                        {chk.edit_request_note && (
+                          <p className="text-xs text-orange-700 mt-1 italic">
+                            "{chk.edit_request_note}"
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-lg font-bold text-gray-900">{formatTHB(chk.amount)}</p>
+                        {pv?.wht_amount > 0 && (
+                          <p className="text-xs text-orange-600">-{formatTHB(pv.wht_amount)} WHT</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => declineEditRequest(chk.id)}
+                        className="flex items-center gap-1 border border-gray-300 text-gray-600 px-3 py-1.5 rounded text-xs font-medium hover:bg-gray-100 transition-colors"
+                      >
+                        <X size={11} />
+                        Decline
+                      </button>
+                      <button
+                        onClick={() => openEditRequest(chk)}
+                        className="flex items-center gap-1.5 bg-orange-500 text-white px-4 py-1.5 rounded text-xs font-semibold hover:bg-orange-400 transition-colors"
+                      >
+                        <Pencil size={11} />
+                        Review &amp; Edit Details
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* A — Active: Co-Sign queue */}
         <div className="border border-gray-200 rounded-lg overflow-hidden">
           <SectionHeader
@@ -1066,6 +1217,129 @@ export default function PaymentQueue() {
         </div>
 
         {renderRejectModal()}
+
+        {/* Edit Request Review Modal */}
+        {editingCheck && (() => {
+          const pv  = (editingCheck as any).payment_voucher;
+          const vi  = pv?.vendor_invoice;
+          const vPo = vi?.purchase_order;
+          const vendorName = vPo?.vendor?.name ?? vPo?.supplier_name_raw ?? editingCheck.payee ?? '—';
+          const isOnline = editBankAccount === 'Online - KBank';
+          return (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-2xl">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
+                      <Pencil size={15} className="text-orange-500" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-semibold text-gray-900">Edit Payment Details</h2>
+                      <p className="text-xs text-gray-400">{pv?.voucher_no} · {vendorName}</p>
+                    </div>
+                  </div>
+                  <button onClick={closeEditRequest} className="text-gray-400 hover:text-gray-600">
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                  {/* Request note */}
+                  {editingCheck.edit_request_note && (
+                    <div className="flex items-start gap-2 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2.5">
+                      <Pencil size={12} className="text-orange-500 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium text-orange-700 mb-0.5">Banking officer's note</p>
+                        <p className="text-xs text-orange-600 italic">"{editingCheck.edit_request_note}"</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Amount reminder */}
+                  <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                    <span className="text-xs text-gray-500">Net Payment</span>
+                    <span className="text-base font-bold text-gray-900">{formatTHB(editingCheck.amount)}</span>
+                  </div>
+
+                  {/* Bank account */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                      <span className="flex items-center gap-1.5"><Banknote size={12} /> Payment Method / Bank</span>
+                    </label>
+                    <select
+                      value={editBankAccount}
+                      onChange={e => setEditBankAccount(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-orange-400/30 text-gray-800"
+                    >
+                      <option value="KBank PSS Main">KBank PSS Main — Check</option>
+                      <option value="SCB PSS Project">SCB PSS Project — Check</option>
+                      <option value="Online - KBank">Online - KBank (Transfer)</option>
+                    </select>
+                  </div>
+
+                  {/* Payee */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Payee Name</label>
+                    <input
+                      type="text"
+                      value={editPayee}
+                      onChange={e => setEditPayee(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400/30 text-gray-800"
+                    />
+                  </div>
+
+                  {/* Check/Txn No + Date */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        <span className="flex items-center gap-1"><Hash size={11} /> {isOnline ? 'Transaction No.' : 'Check No.'}</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={editCheckNo}
+                        onChange={e => setEditCheckNo(e.target.value)}
+                        placeholder={isOnline ? 'TXN...' : 'e.g. 1234567'}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400/30 text-gray-800 font-mono placeholder-gray-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        <span className="flex items-center gap-1"><Calendar size={11} /> {isOnline ? 'Txn Date' : 'Check Date'}</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={editCheckDate}
+                        onChange={e => setEditCheckDate(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400/30 text-gray-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 px-6 pb-5">
+                  <button
+                    onClick={closeEditRequest}
+                    className="flex-1 px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-sm hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveEditAndApprove}
+                    disabled={savingEdit}
+                    className="flex-1 px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-400 text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {savingEdit ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <><CheckCircle size={14} /> Save &amp; Approve for Payment</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {selectedPO && (
           <PODetailModal key={selectedPO.id} po={selectedPO} projects={poProjects} vendors={poVendors}
             onClose={() => setSelectedPO(null)} onSuccess={() => { setSelectedPO(null); loadData(); }} />

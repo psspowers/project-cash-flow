@@ -95,12 +95,18 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
       count = (released || []).filter(inv => !alreadyVouchered.has(inv.id)).length;
 
     } else if (profile.role === 'accounts_manager' || profile.role === 'ceo') {
-      // Count vouchers awaiting Manager co-sign
-      const { count: c } = await supabase
-        .from('payment_vouchers')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'pending_manager');
-      count = c ?? 0;
+      // Count vouchers awaiting Manager co-sign + pending edit requests
+      const [{ count: coSignCount }, { count: editReqCount }] = await Promise.all([
+        supabase
+          .from('payment_vouchers')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'pending_manager'),
+        supabase
+          .from('checks')
+          .select('id', { count: 'exact', head: true })
+          .eq('edit_request_status', 'pending'),
+      ]);
+      count = (coSignCount ?? 0) + (editReqCount ?? 0);
 
     } else if (profile.role === 'banking_finance_officer') {
       // Count approved vouchers awaiting check issuance

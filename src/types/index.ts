@@ -395,6 +395,11 @@ export interface Check {
   status: 'draft' | 'issued' | 'cleared' | 'bounced';
   cleared_at?: string;
   cleared_note?: string;
+  // Edit request fields
+  edit_request_status?: 'pending' | 'approved' | null;
+  edit_requested_by?: string | null;
+  edit_requested_at?: string | null;
+  edit_request_note?: string | null;
   created_at: string;
   // joined relations (populated by CheckManagement page queries)
   payment_voucher?: PaymentVoucher & {

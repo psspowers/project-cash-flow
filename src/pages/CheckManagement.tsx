@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   CreditCard, CheckCircle2, Clock, History,
   X, AlertCircle, ArrowRight, Calendar, Hash,
-  Building2, FileText, Banknote,
+  Building2, FileText, Banknote, Pencil, MessageSquare,
 } from 'lucide-react';
 import { format, parseISO, differenceInDays } from 'date-fns';
 import { supabase } from '../lib/supabase';
@@ -24,6 +24,10 @@ interface CheckRow {
   status: 'draft' | 'issued' | 'cleared' | 'bounced';
   cleared_at?: string;
   cleared_note?: string;
+  edit_request_status?: 'pending' | 'approved' | null;
+  edit_requested_by?: string | null;
+  edit_requested_at?: string | null;
+  edit_request_note?: string | null;
   created_at: string;
   payment_voucher?: {
     id: string;
@@ -56,6 +60,8 @@ interface PendingVoucher {
   check_id?: string;
   bank_account?: string;
   payee?: string;
+  edit_request_status?: 'pending' | 'approved' | null;
+  edit_request_note?: string | null;
   vendor_invoice?: {
     project?: { id: string; name: string };
     purchase_order?: {
@@ -110,11 +116,7 @@ function bankDetails(row: CheckRow | PendingVoucher): string {
 // ---------------------------------------------------------------------------
 
 function StageHeader({
-  icon,
-  label,
-  count,
-  total,
-  color,
+  icon, label, count, total, color,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -163,6 +165,11 @@ export default function CheckManagement() {
   const [issueCheckBankAccount, setIssueCheckBankAccount] = useState('KBank PSS Main');
   const [issuing, setIssuing] = useState(false);
 
+  // Change request modal
+  const [changeTarget, setChangeTarget] = useState<PendingVoucher | null>(null);
+  const [changeNote, setChangeNote] = useState('');
+  const [submittingChange, setSubmittingChange] = useState(false);
+
   // Mark cleared modal
   const [clearTarget, setClearTarget] = useState<CheckRow | null>(null);
   const [clearNote, setClearNote] = useState('');
@@ -188,6 +195,7 @@ export default function CheckManagement() {
     const checkSelect = `
       id, voucher_id, bank_account, check_no, check_date, payee, amount, status,
       cleared_at, cleared_note, created_at,
+      edit_request_status, edit_requested_by, edit_requested_at, edit_request_note,
       payment_voucher:payment_vouchers(
         id, voucher_no, voucher_date, net_paid, wht_amount, status,
         vendor_invoice:vendor_invoices(
@@ -214,19 +222,20 @@ export default function CheckManagement() {
         .order('created_at', { ascending: false }),
     ]);
 
-    // Approved vouchers — fetch their draft check id too
     const vouchers: PendingVoucher[] = (vData ?? []).map((v: any) => ({
       ...v,
       check_id: undefined,
       bank_account: undefined,
       payee: undefined,
+      edit_request_status: null,
+      edit_request_note: null,
     }));
 
     if (vouchers.length > 0) {
       const voucherIds = vouchers.map(v => v.id);
       const { data: draftChecks } = await supabase
         .from('checks')
-        .select('id, voucher_id, bank_account, payee')
+        .select('id, voucher_id, bank_account, payee, edit_request_status, edit_request_note')
         .in('voucher_id', voucherIds)
         .eq('status', 'draft');
       const draftMap = new Map((draftChecks ?? []).map((c: any) => [c.voucher_id, c]));
@@ -236,6 +245,8 @@ export default function CheckManagement() {
           v.check_id = dc.id;
           v.bank_account = dc.bank_account;
           v.payee = dc.payee;
+          v.edit_request_status = dc.edit_request_status;
+          v.edit_request_note = dc.edit_request_note;
         }
       });
     }
@@ -287,6 +298,38 @@ export default function CheckManagement() {
       await loadData();
     } finally {
       setIssuing(false);
+    }
+  }
+
+  // ── Change Request ─────────────────────────────────────────────────────────
+
+  function openChange(v: PendingVoucher) {
+    setChangeTarget(v);
+    setChangeNote('');
+  }
+
+  function closeChange() {
+    setChangeTarget(null);
+    setChangeNote('');
+  }
+
+  async function submitChangeRequest() {
+    if (!changeTarget?.check_id || !user) return;
+    setSubmittingChange(true);
+    try {
+      await supabase
+        .from('checks')
+        .update({
+          edit_request_status: 'pending',
+          edit_requested_by: user.id,
+          edit_requested_at: new Date().toISOString(),
+          edit_request_note: changeNote.trim() || null,
+        })
+        .eq('id', changeTarget.check_id);
+      closeChange();
+      await loadData();
+    } finally {
+      setSubmittingChange(false);
     }
   }
 
@@ -391,32 +434,72 @@ export default function CheckManagement() {
             {pendingVouchers.length === 0 && (
               <p className="text-center text-gray-500 text-xs py-8">No vouchers awaiting checks</p>
             )}
-            {pendingVouchers.map(v => (
-              <div key={v.id} className="bg-[#131f2e] rounded-lg p-3 border border-white/5 hover:border-amber-500/20 transition-colors">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div>
-                    <p className="text-xs font-semibold text-amber-300">{v.voucher_no}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{poNo(v)}</p>
+            {pendingVouchers.map(v => {
+              const editPending = v.edit_request_status === 'pending';
+              return (
+                <div key={v.id} className={`bg-[#131f2e] rounded-lg p-3 border transition-colors ${
+                  editPending
+                    ? 'border-orange-500/40'
+                    : 'border-white/5 hover:border-amber-500/20'
+                }`}>
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <p className="text-xs font-semibold text-amber-300">{v.voucher_no}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{poNo(v)}</p>
+                    </div>
+                    <p className="text-sm font-bold text-white shrink-0">{formatTHB(v.net_paid)}</p>
                   </div>
-                  <p className="text-sm font-bold text-white shrink-0">{formatTHB(v.net_paid)}</p>
-                </div>
-                <div className="space-y-1 mb-3">
-                  <InfoRow label="Supplier" value={supplierName(v)} />
-                  <InfoRow label="Project" value={projectName(v)} />
-                  <InfoRow label="Bank Acct" value={bankDetails(v)} />
-                  {v.wht_amount > 0 && (
-                    <InfoRow label="WHT" value={<span className="text-orange-400">-{formatTHB(v.wht_amount)}</span>} />
+                  <div className="space-y-1 mb-3">
+                    <InfoRow label="Supplier" value={supplierName(v)} />
+                    <InfoRow label="Project" value={projectName(v)} />
+                    <InfoRow label="Bank Acct" value={bankDetails(v)} />
+                    {v.wht_amount > 0 && (
+                      <InfoRow label="WHT" value={<span className="text-orange-400">-{formatTHB(v.wht_amount)}</span>} />
+                    )}
+                    <InfoRow label="Date" value={formatDate(v.voucher_date)} />
+                  </div>
+
+                  {/* Edit request pending badge */}
+                  {editPending && (
+                    <div className="flex items-start gap-1.5 mb-2.5 bg-orange-500/10 border border-orange-500/25 rounded-md px-2.5 py-1.5">
+                      <MessageSquare size={11} className="text-orange-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[11px] font-semibold text-orange-400">Edit Requested — Awaiting Accounts Manager</p>
+                        {v.edit_request_note && (
+                          <p className="text-[10px] text-orange-300/70 mt-0.5 italic">"{v.edit_request_note}"</p>
+                        )}
+                      </div>
+                    </div>
                   )}
-                  <InfoRow label="Date" value={formatDate(v.voucher_date)} />
+
+                  {/* Action buttons */}
+                  <div className="flex gap-2">
+                    {/* Change button — left of Issue Check */}
+                    {!editPending && v.check_id && (
+                      <button
+                        onClick={() => openChange(v)}
+                        title="Request detail change"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-white/10 text-gray-400 hover:text-white hover:border-white/25 text-[11px] font-medium transition-colors"
+                      >
+                        <Pencil size={11} />
+                        Change
+                      </button>
+                    )}
+                    <button
+                      onClick={() => !editPending && openIssue(v)}
+                      disabled={editPending}
+                      className={`flex-1 text-xs font-semibold rounded-md py-1.5 transition-colors ${
+                        editPending
+                          ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                          : 'bg-amber-500 hover:bg-amber-400 text-black'
+                      }`}
+                    >
+                      Issue Check
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => openIssue(v)}
-                  className="w-full bg-amber-500 hover:bg-amber-400 text-black text-xs font-semibold rounded-md py-1.5 transition-colors"
-                >
-                  Issue Check
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -518,6 +601,88 @@ export default function CheckManagement() {
         </div>
 
       </div>
+
+      {/* ── Change Request Modal ── */}
+      {changeTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0f1923] rounded-2xl border border-white/10 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-orange-500/15 flex items-center justify-center">
+                  <Pencil size={16} className="text-orange-400" />
+                </div>
+                <div>
+                  <h2 className="text-white font-semibold text-sm">Request Detail Change</h2>
+                  <p className="text-gray-400 text-xs">{changeTarget.voucher_no}</p>
+                </div>
+              </div>
+              <button onClick={closeChange} className="text-gray-500 hover:text-white transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              {/* Voucher summary */}
+              <div className="bg-[#131f2e] rounded-xl p-3 space-y-2 border border-white/5">
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <Building2 size={12} />
+                  <span className="font-medium text-white">{supplierName(changeTarget)}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <FileText size={12} />
+                  <span>{poNo(changeTarget)} · {projectName(changeTarget)}</span>
+                </div>
+                <div className="pt-1 border-t border-white/5 flex items-center justify-between">
+                  <span className="text-xs text-gray-400">Net Amount</span>
+                  <span className="text-lg font-bold text-white">{formatTHB(changeTarget.net_paid)}</span>
+                </div>
+              </div>
+
+              {/* Explanation */}
+              <div className="flex items-start gap-2 bg-orange-500/8 border border-orange-500/20 rounded-lg px-3 py-2.5">
+                <AlertCircle size={13} className="text-orange-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-orange-300/80 leading-relaxed">
+                  This sends the payment to the <strong className="text-orange-300">Accounts Manager</strong> to review and edit the details (bank account, payee, dates) before approving it for issuance.
+                </p>
+              </div>
+
+              {/* Note */}
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">
+                  Reason for change <span className="text-gray-500 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  value={changeNote}
+                  onChange={e => setChangeNote(e.target.value)}
+                  placeholder='e.g. "Supplier called to change bank — new account: KBank 123-4-56789-0"'
+                  rows={3}
+                  className="w-full bg-[#131f2e] border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500/50 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 pb-5 flex gap-3">
+              <button
+                onClick={closeChange}
+                className="flex-1 px-4 py-2 rounded-lg border border-white/10 text-gray-300 text-sm hover:bg-white/5 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitChangeRequest}
+                disabled={submittingChange}
+                className="flex-1 px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-400 text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {submittingChange ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <><Pencil size={14} /> Send to Accounts Manager</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Issue Check Modal ── */}
       {issueTarget && (() => {
