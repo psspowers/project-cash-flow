@@ -24,8 +24,23 @@ const TEST_ROLES = [
   { value: 'banking_finance_officer', label: 'Banking/Finance Exec' },
 ];
 
-export function notifHref(entityType: string | null | undefined, entityId: string | null | undefined): string | null {
+export function notifHref(
+  entityType: string | null | undefined,
+  entityId: string | null | undefined,
+  role?: string | null,
+): string | null {
   if (!entityType) return null;
+
+  // CEO has a dedicated approvals page — route all approval-type notifications there
+  if (role === 'ceo') {
+    if (entityType === 'project' && entityId) return `/projects/${entityId}?tab=costing`;
+    if (entityType === 'project_costing' && entityId) return `/projects/${entityId}?tab=costing`;
+    if (entityType === 'loan') return '/treasury';
+    if (entityType === 'check') return '/checks';
+    // Everything else actionable for the CEO lives on the CEO approvals page
+    return '/ceo-alerts';
+  }
+
   if (entityType === 'project' && entityId) return `/projects/${entityId}?tab=costing`;
   if (entityType === 'project_costing' && entityId) return `/projects/${entityId}?tab=costing`;
   if (entityType === 'purchase_order') return '/approvals?section=purchase_orders';
@@ -152,7 +167,7 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
                     <p className="text-[12px] text-gray-400">No notifications</p>
                   </div>
                 ) : dropdownItems.map(n => {
-                  const href = notifHref(n.related_entity_type, n.related_entity_id);
+                  const href = notifHref(n.related_entity_type, n.related_entity_id, profile?.role);
                   return (
                     <div
                       key={n.id}

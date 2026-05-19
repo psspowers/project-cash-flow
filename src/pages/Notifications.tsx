@@ -47,7 +47,7 @@ function formatGroupLabel(dateKey: string): string {
 }
 
 export default function Notifications() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,7 +95,7 @@ export default function Notifications() {
 
   function handleClick(n: Notification) {
     if (!n.is_read) markRead(n.id);
-    const href = notifHref(n.related_entity_type, n.related_entity_id);
+    const href = notifHref(n.related_entity_type, n.related_entity_id, profile?.role);
     if (href) navigate(href);
   }
 
@@ -172,7 +172,7 @@ export default function Notifications() {
               </p>
               <div className="bg-white border border-black/[0.07] rounded-xl overflow-hidden divide-y divide-gray-50">
                 {group.items.map(n => {
-                  const href = notifHref(n.related_entity_type, n.related_entity_id);
+                  const href = notifHref(n.related_entity_type, n.related_entity_id, profile?.role);
                   return (
                     <div
                       key={n.id}
