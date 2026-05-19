@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   CheckCircle, ArrowRightLeft, XCircle, X, FileCheck,
-  DollarSign, Clock, History, AlertTriangle,
+  DollarSign, Clock, History, AlertTriangle, ShoppingCart,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
@@ -15,7 +15,8 @@ import {
   approveInvoiceCEO, rejectInvoice,
   approveVoucherCosign, rejectVoucherCosign,
   approveTransferCEO, rejectTransferCEO,
-  TransferActionParams,
+  approvePO_CEO, rejectPO,
+  TransferActionParams, POActionParams,
 } from '../services/workflow';
 import InvoiceDetailModal from '../components/approvals/InvoiceDetailModal';
 import PODetailModal from '../components/pos/PODetailModal';
@@ -96,6 +97,12 @@ export default function CEOAlerts() {
   const [rejectComment, setRejectComment] = useState('');
   const [voucherAction, setVoucherAction] = useState(false);
 
+  // Pending POs requiring CEO approval
+  const [pendingPOs, setPendingPOs] = useState<PurchaseOrder[]>([]);
+  const [poAction, setPoAction] = useState(false);
+  const [poRejectModal, setPoRejectModal] = useState<PurchaseOrder | null>(null);
+  const [poRejectReason, setPoRejectReason] = useState('');
+
   // PO drill-down
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [poProjects, setPoProjects] = useState<Project[]>([]);
@@ -115,6 +122,7 @@ export default function CEOAlerts() {
       { data: profData },
       { data: proj },
       { data: vend },
+      { data: pendPOData },
     ] = await Promise.all([
       // Co-signature queue
       supabase
@@ -167,6 +175,12 @@ export default function CEOAlerts() {
       supabase.from('user_profiles').select('*'),
       supabase.from('projects').select('id, name, status').order('name'),
       supabase.from('entities').select('id, name').eq('type', 'vendor').eq('is_active', true).order('name'),
+      // Purchase orders pending CEO final approval
+      supabase
+        .from('purchase_orders')
+        .select('*, project:projects(*), vendor:entities!vendor_id(*)')
+        .eq('status', 'pending_ceo')
+        .order('created_at', { ascending: false }),
     ]);
 
     setPendingVouchers((pendVouData ?? []) as PaymentVoucher[]);
@@ -179,6 +193,7 @@ export default function CEOAlerts() {
     setProfiles((profData ?? []) as UserProfile[]);
     setPoProjects((proj ?? []) as Project[]);
     setPoVendors((vend ?? []) as Entity[]);
+    setPendingPOs((pendPOData ?? []) as PurchaseOrder[]);
     setLoading(false);
   }
 
@@ -189,6 +204,46 @@ export default function CEOAlerts() {
       .eq('id', poId)
       .maybeSingle();
     if (data) setSelectedPO(data as PurchaseOrder);
+  }
+
+  // ── PO approval ───────────────────────────────────────────────────────────
+
+  async function handleApprovePO(po: PurchaseOrder) {
+    if (!user || poAction) return;
+    setPoAction(true);
+    const params: POActionParams = {
+      poId: po.id,
+      actorId: user.id,
+      projectName: (po.project as Project)?.name ?? '',
+      projectId: po.project_id,
+      poDescription: po.description ?? '',
+      poAmountInclVat: po.po_amount_incl_vat,
+      currentStatus: po.status,
+    };
+    const { error } = await approvePO_CEO(params);
+    setPoAction(false);
+    if (error) { alert('Failed to approve PO: ' + error); return; }
+    await loadData();
+  }
+
+  async function handleRejectPO() {
+    if (!poRejectModal || !user || !poRejectReason.trim() || poAction) return;
+    setPoAction(true);
+    const params: POActionParams = {
+      poId: poRejectModal.id,
+      actorId: user.id,
+      projectName: (poRejectModal.project as Project)?.name ?? '',
+      projectId: poRejectModal.project_id,
+      poDescription: poRejectModal.description ?? '',
+      poAmountInclVat: poRejectModal.po_amount_incl_vat,
+      currentStatus: poRejectModal.status,
+    };
+    const { error } = await rejectPO(params, user.id, poRejectReason.trim());
+    setPoAction(false);
+    if (error) { alert('Failed to reject PO: ' + error); return; }
+    setPoRejectModal(null);
+    setPoRejectReason('');
+    await loadData();
   }
 
   // ── Voucher co-sign ────────────────────────────────────────────────────────
@@ -295,7 +350,7 @@ export default function CEOAlerts() {
 
   // ── Derived counts ─────────────────────────────────────────────────────────
 
-  const totalPending = pendingVouchers.length + pendingInvoices.length + pendingTransfers.length;
+  const totalPending = pendingPOs.length + pendingVouchers.length + pendingInvoices.length + pendingTransfers.length;
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -329,6 +384,72 @@ export default function CEOAlerts() {
         <div className="bg-[#1D9E75]/5 border border-[#1D9E75]/20 rounded-xl p-6 text-center">
           <CheckCircle size={28} className="text-[#1D9E75] mx-auto mb-2" />
           <p className="text-sm font-medium text-[#1D9E75]">All clear — nothing awaiting your approval</p>
+        </div>
+      )}
+
+      {/* Purchase Orders — CEO final approval */}
+      {pendingPOs.length > 0 && (
+        <div className="rounded-lg border border-gray-200 overflow-hidden">
+          <SectionHeader
+            icon={<ShoppingCart size={14} />}
+            title="Purchase Orders — Pending Your Final Approval"
+            count={pendingPOs.length}
+            accent="red"
+          />
+          <div className="bg-white">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gray-50/60 border-b border-gray-100">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Supplier</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Project</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Submitted</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Amount (incl. VAT)</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingPOs.map(po => {
+                  const vendorName = (po.vendor as Entity)?.name ?? po.supplier_name_raw ?? '—';
+                  const projectName = (po.project as Project)?.name?.split('–')[0]?.trim() ?? '—';
+                  return (
+                    <tr key={po.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      <td className="px-4 py-3 text-sm text-gray-800 font-medium">{vendorName}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 max-w-[140px] truncate">{projectName}</td>
+                      <td className="px-4 py-3 text-xs text-gray-600 max-w-[180px] truncate">{po.description || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{formatDate(po.submitted_at ?? po.po_date)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm font-bold text-[#E24B4A]">{formatTHB(po.po_amount_incl_vat)}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2 justify-end">
+                          <button
+                            onClick={() => setSelectedPO(po)}
+                            className="border border-gray-200 text-gray-600 px-2.5 py-1.5 rounded text-xs font-medium hover:bg-gray-50 transition-colors"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => { setPoRejectModal(po); setPoRejectReason(''); }}
+                            className="flex items-center gap-1.5 border border-[#E24B4A] text-[#E24B4A] px-2.5 py-1.5 rounded text-xs font-medium hover:bg-[#E24B4A]/5 transition-colors"
+                          >
+                            <XCircle size={12} /> Reject
+                          </button>
+                          <button
+                            onClick={() => handleApprovePO(po)}
+                            disabled={poAction}
+                            className="flex items-center gap-1.5 bg-[#1D9E75] text-white px-2.5 py-1.5 rounded text-xs font-medium hover:bg-[#178a64] disabled:opacity-60 transition-colors"
+                          >
+                            <CheckCircle size={12} /> Approve
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -710,6 +831,51 @@ export default function CEOAlerts() {
       {/* ══════════════════════════════════════════════════════════
           MODALS
       ══════════════════════════════════════════════════════════ */}
+
+      {/* PO reject modal */}
+      {poRejectModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl w-full max-w-md border border-gray-200 shadow-xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="text-base font-semibold text-gray-800">Reject Purchase Order</h2>
+              <button onClick={() => setPoRejectModal(null)}><X size={16} className="text-gray-400" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-[#F8F8F7] rounded-lg p-3 text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Supplier</span>
+                  <span className="font-medium">{(poRejectModal.vendor as Entity)?.name ?? poRejectModal.supplier_name_raw ?? '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Amount</span>
+                  <span className="font-bold text-[#E24B4A]">{formatTHB(poRejectModal.po_amount_incl_vat)}</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason *</label>
+                <textarea
+                  value={poRejectReason}
+                  onChange={e => setPoRejectReason(e.target.value)}
+                  rows={3}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/30 resize-none"
+                  placeholder="Explain the reason for rejection..."
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
+              <button onClick={() => setPoRejectModal(null)} className="flex-1 border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">Cancel</button>
+              <button
+                onClick={handleRejectPO}
+                disabled={!poRejectReason.trim() || poAction}
+                className="flex-1 flex items-center justify-center gap-2 bg-[#E24B4A] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#c73d3c] disabled:opacity-60 transition-colors"
+              >
+                <XCircle size={14} />
+                {poAction ? 'Processing...' : 'Confirm Rejection'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Approve transfer modal */}
       {transferModal && transferModalMode === 'approve' && (
