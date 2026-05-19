@@ -381,7 +381,7 @@ export default function WorkflowEfficiency() {
     const [posRes, invRes, costingsRes, reportsRes, vouchersRes, projRes] = await Promise.all([
       supabase
         .from('purchase_orders')
-        .select('id, pss_po_no, description, po_amount_incl_vat, status, updated_at, supplier_name_raw, project_id, vendor_id, vendor:entities!vendor_id(id,name), project:projects!project_id(id,name)')
+        .select('id, pss_po_no, description, po_amount_incl_vat, status, po_date, submitted_at, created_at, supplier_name_raw, project_id, vendor_id, version, vendor:entities!vendor_id(id,name), project:projects!project_id(id,name)')
         .in('status', ['draft', 'draft_revision', 'pending_cc', 'pending_cm', 'pending_evp', 'pending_revision_approval', 'pending_ceo']),
       supabase
         .from('vendor_invoices')
@@ -402,9 +402,11 @@ export default function WorkflowEfficiency() {
       supabase.from('projects').select('id, name').order('name'),
     ]);
 
+    // purchase_orders has no updated_at — use submitted_at, then po_date, then created_at
+    const poAging = (r: any) => safeDays(now, r.submitted_at ?? r.po_date ?? r.created_at);
     // VendorInvoice has no updated_at — fall back to invoice_date then created_at
     const daysFor = (r: any) => safeDays(now, r.updated_at ?? r.invoice_date ?? r.created_at);
-    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
+    setAllPos((posRes.data ?? []).map((r: any) => ({ ...r, _days: poAging(r) })));
     setAllInvoices((invRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllCostings((costingsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
     setAllReports((reportsRes.data ?? []).map((r: any) => ({ ...r, _days: daysFor(r) })));
@@ -427,7 +429,7 @@ export default function WorkflowEfficiency() {
       projectName: po.project?.name ?? '—',
       projectId: po.project_id,
       amount: po.po_amount_incl_vat ?? 0,
-      itemDate: po.updated_at ?? null,
+      itemDate: po.submitted_at ?? po.po_date ?? null,
       daysWaiting: po._days, aging: agingLevel(po._days),
       rawPO: po as PurchaseOrder,
     };
