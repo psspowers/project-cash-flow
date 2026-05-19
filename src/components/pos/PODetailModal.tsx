@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, CreditCard as Edit2, Clock, CheckCircle, XCircle, AlertTriangle, GitBranch } from 'lucide-react';
+import { X, CreditCard as Edit2, Clock, CheckCircle, XCircle, AlertTriangle, GitBranch, History } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { PurchaseOrder, Project, Entity, POMilestone, POSimplePayment, POAuditLog, COST_CATEGORY_LABELS, fmtTHB } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -27,6 +27,13 @@ interface AuditProfile {
 }
 
 type ModalMode = 'view' | 'edit' | 'amend_choice' | 'amend_non_commercial' | 'amend_commercial';
+type ModalTab = 'details' | 'version_history';
+
+interface VersionEntry {
+  po: PurchaseOrder;
+  actorNames: Map<string, string>;
+  auditLogs: Pick<POAuditLog, 'action' | 'to_status' | 'actor_id' | 'notes' | 'created_at'>[];
+}
 
 const ISSUED_STATUSES = new Set(['approved', 'partially_paid', 'fully_paid']);
 
@@ -48,6 +55,9 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [amendError, setAmendError] = useState<string | null>(null);
   const [creatingRevision, setCreatingRevision] = useState(false);
   const [auditActorMap, setAuditActorMap] = useState<Map<string, string>>(new Map());
+  const [activeTab, setActiveTab] = useState<ModalTab>('details');
+  const [versionHistory, setVersionHistory] = useState<VersionEntry[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const isIssued = ISSUED_STATUSES.has(po.status);
   const canEdit = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) &&
@@ -150,6 +160,70 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
     setApprovedBy(po.approved_by ? (profileMap.get(po.approved_by) ?? null) : null);
     setRejectedBy(po.rejected_by ? (profileMap.get(po.rejected_by) ?? null) : null);
     setLoading(false);
+  }
+
+  async function loadVersionHistory() {
+    setLoadingHistory(true);
+
+    // Walk up to find the root ancestor
+    let rootId = po.parent_po_id ?? po.id;
+    if (po.parent_po_id) {
+      const { data: ancestor } = await supabase
+        .from('purchase_orders')
+        .select('id, parent_po_id')
+        .eq('id', po.parent_po_id)
+        .maybeSingle();
+      if (ancestor?.parent_po_id) {
+        rootId = ancestor.parent_po_id;
+      } else if (ancestor) {
+        rootId = ancestor.id;
+      }
+    }
+
+    // Fetch all versions in the family (root + all children at any depth sharing root)
+    const { data: allVersions } = await supabase
+      .from('purchase_orders')
+      .select('*, vendor:entities!vendor_id(id,name), project:projects(id,name)')
+      .or(`id.eq.${rootId},parent_po_id.eq.${rootId}`)
+      .order('version', { ascending: true });
+
+    const versions = (allVersions as PurchaseOrder[] ?? []);
+    if (versions.length === 0) { setLoadingHistory(false); return; }
+
+    // Fetch audit logs for all version IDs in one query
+    const versionIds = versions.map(v => v.id);
+    const { data: auditRows } = await supabase
+      .from('po_audit_log')
+      .select('po_id, action, to_status, actor_id, notes, created_at')
+      .in('po_id', versionIds)
+      .order('created_at', { ascending: true });
+
+    const allAuditLogs = auditRows ?? [];
+
+    // Fetch actor names for all unique actor IDs
+    const allActorIds = Array.from(new Set(allAuditLogs.map((r: { actor_id: string }) => r.actor_id).filter(Boolean)));
+    let nameMap = new Map<string, string>();
+    if (allActorIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, full_name')
+        .in('id', allActorIds);
+      nameMap = new Map((profiles as AuditProfile[] ?? []).map(p => [p.id, p.full_name]));
+    }
+
+    // Build per-version entries
+    const entries: VersionEntry[] = versions.map(v => {
+      const logs = allAuditLogs.filter((r: { po_id: string }) => r.po_id === v.id);
+      const actorNames = new Map<string, string>();
+      for (const row of logs) {
+        const name = nameMap.get(row.actor_id);
+        if (name) actorNames.set(row.to_status, name);
+      }
+      return { po: v, actorNames, auditLogs: logs };
+    });
+
+    setVersionHistory(entries);
+    setLoadingHistory(false);
   }
 
   async function handleCommercialAmendment() {
@@ -435,11 +509,157 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
             {/* Row 2: workflow timeline — shows the relevant PO's path */}
             <WorkflowTimeline po={displayPo} auditActorMap={displayActorMap} />
+
+            {/* Tab bar */}
+            <div className="flex items-center gap-1 -mb-3 pt-1">
+              <button
+                onClick={() => setActiveTab('details')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors border-b-2 ${
+                  activeTab === 'details'
+                    ? 'text-[#1D9E75] border-[#1D9E75] bg-[#1D9E75]/5'
+                    : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-200'
+                }`}
+              >
+                Details
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('version_history');
+                  if (versionHistory.length === 0) loadVersionHistory();
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors border-b-2 ${
+                  activeTab === 'version_history'
+                    ? 'text-[#1D9E75] border-[#1D9E75] bg-[#1D9E75]/5'
+                    : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-200'
+                }`}
+              >
+                <History size={11} />
+                Version History
+              </button>
+            </div>
           </div>
 
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : activeTab === 'version_history' ? (
+            /* ── VERSION HISTORY TAB ─────────────────────────────────────── */
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingHistory ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="w-5 h-5 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : versionHistory.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-2">
+                  <History size={24} className="opacity-40" />
+                  <p className="text-sm">No version history found for this PO.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-400 mb-4">
+                    {versionHistory.length} version{versionHistory.length !== 1 ? 's' : ''} in this PO family
+                  </p>
+                  {versionHistory.map((entry, idx) => {
+                    const isCurrentPo = entry.po.id === po.id;
+                    const isSuperseded = !!entry.po.superseded_at;
+                    const submitter = entry.auditLogs.find(l => l.action === 'revision_created' || l.action === 'submitted')?.actor_id;
+                    const submitterName = submitter ? entry.actorNames.get(entry.auditLogs.find(l => l.actor_id === submitter)?.to_status ?? '') ?? null : null;
+
+                    return (
+                      <div
+                        key={entry.po.id}
+                        className={`relative rounded-lg border p-4 transition-colors ${
+                          isCurrentPo
+                            ? 'border-[#1D9E75]/40 bg-[#1D9E75]/5'
+                            : isSuperseded
+                            ? 'border-gray-100 bg-gray-50/50 opacity-75'
+                            : 'border-gray-200 bg-white'
+                        }`}
+                      >
+                        {/* Version connector line */}
+                        {idx < versionHistory.length - 1 && (
+                          <div className="absolute left-7 bottom-0 translate-y-full w-0.5 h-4 bg-gray-200 z-10" />
+                        )}
+
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start gap-3">
+                            {/* Version circle */}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
+                              isCurrentPo ? 'bg-[#1D9E75] text-white' : isSuperseded ? 'bg-gray-200 text-gray-500' : 'bg-[#0f1923] text-white'
+                            }`}>
+                              v{entry.po.version}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className="text-sm font-semibold text-gray-900">
+                                  {entry.po.pss_po_no ?? <span className="italic text-gray-400 font-normal text-xs">No PSS No. yet</span>}
+                                </span>
+                                <Badge label={entry.po.status.replace(/_/g, ' ')} variant={statusVariant(entry.po.status)} />
+                                {isCurrentPo && (
+                                  <span className="text-[10px] font-semibold text-[#1D9E75] bg-[#1D9E75]/10 px-2 py-0.5 rounded-full">
+                                    Current view
+                                  </span>
+                                )}
+                                {isSuperseded && (
+                                  <span className="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                                    Superseded
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-500 mt-2">
+                                <div>
+                                  <span className="text-gray-400">Amount: </span>
+                                  <span className="font-medium text-gray-700">{fmtTHB(entry.po.po_amount_excl_vat)} excl. VAT</span>
+                                </div>
+                                <div>
+                                  <span className="text-gray-400">Created: </span>
+                                  <span className="text-gray-600">{formatDate(entry.po.created_at)}</span>
+                                </div>
+                                {entry.po.revision_reason && (
+                                  <div className="col-span-2">
+                                    <span className="text-gray-400">Revision reason: </span>
+                                    <span className="text-gray-700">{entry.po.revision_reason}</span>
+                                  </div>
+                                )}
+                                {entry.po.superseded_at && (
+                                  <div>
+                                    <span className="text-gray-400">Superseded: </span>
+                                    <span className="text-gray-600">{formatDate(entry.po.superseded_at)}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Audit log for this version */}
+                              {entry.auditLogs.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-gray-100 pt-3">
+                                  {entry.auditLogs.slice(0, 6).map((log, li) => {
+                                    const actorName = entry.actorNames.get(log.to_status) ?? null;
+                                    return (
+                                      <div key={li} className="flex items-start gap-2 text-[11px] text-gray-500">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-gray-300 mt-1.5 shrink-0" />
+                                        <span className="font-medium text-gray-600 capitalize">{log.action.replace(/_/g, ' ')}</span>
+                                        {actorName && <span className="text-gray-400">by <span className="text-gray-600">{actorName}</span></span>}
+                                        {log.notes && <span className="text-gray-400 truncate max-w-[180px]" title={log.notes}>— {log.notes}</span>}
+                                        <span className="ml-auto shrink-0 text-gray-400">{formatDate(log.created_at)}</span>
+                                      </div>
+                                    );
+                                  })}
+                                  {entry.auditLogs.length > 6 && (
+                                    <p className="text-[11px] text-gray-400 pl-3.5">+{entry.auditLogs.length - 6} more entries</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : (
             /* 2-col grid: details left, chat right */

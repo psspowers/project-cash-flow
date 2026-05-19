@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Plus, Search, Send, ArrowUp, ArrowDown, ArrowUpDown, Filter, X } from 'lucide-react';
+import { Plus, Search, Send, ArrowUp, ArrowDown, ArrowUpDown, Filter, X, Download, Receipt } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PurchaseOrder, Project, Entity, COST_CATEGORY_LABELS } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -7,6 +7,7 @@ import Badge, { statusVariant } from '../components/ui/Badge';
 import { formatTHBCompact, formatDate } from '../utils/formatters';
 import POCreationWizard from '../components/pos/POCreationWizard';
 import PODetailModal from '../components/pos/PODetailModal';
+import NewExpenseModal from '../components/pos/NewExpenseModal';
 import { hasRole, PROCUREMENT_WRITE_ROLES } from '../config/roles';
 
 type SortCol = 'po_no' | 'vendor' | 'project' | 'category' | 'po_value';
@@ -59,6 +60,8 @@ export default function PurchaseOrders() {
   const filterPanelRef = useRef<HTMLDivElement>(null);
 
   const canWrite = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES);
+  const isCostController = profile?.role === 'cost_controller';
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
 
   // Close filter panel on outside click
   useEffect(() => {
@@ -230,6 +233,56 @@ export default function PurchaseOrders() {
 
   const hasAnyColFilter = activeChips.length > 0;
 
+  function exportCSV() {
+    const headers = [
+      'PSS PO No',
+      'Vendor',
+      'Project',
+      'Category',
+      'PO Date',
+      'Amount Excl VAT (THB)',
+      'VAT 7% (THB)',
+      'Total Incl VAT (THB)',
+      'WHT Applies',
+      'WHT Rate (%)',
+      'WHT Amount (THB)',
+      'Status',
+      'Version',
+      'Notes',
+    ];
+
+    const rows = sorted.map(po => [
+      po.pss_po_no ?? '',
+      (po.vendor as Entity | undefined)?.name ?? po.supplier_name_raw ?? '',
+      (po.project as Project | undefined)?.name?.split('–')[0]?.trim() ?? '',
+      COST_CATEGORY_LABELS[po.cost_category] ?? po.cost_category,
+      po.po_date ? formatDate(po.po_date) : '',
+      po.po_amount_excl_vat?.toFixed(2) ?? '0.00',
+      po.vat_7pct?.toFixed(2) ?? '0.00',
+      po.po_amount_incl_vat?.toFixed(2) ?? '0.00',
+      po.wht_applies ? 'Yes' : 'No',
+      po.wht_applies ? (po.wht_rate ?? 3).toString() : '',
+      po.wht_applies ? (po.wht_3pct?.toFixed(2) ?? '0.00') : '',
+      po.status.replace(/_/g, ' '),
+      po.version?.toString() ?? '1',
+      (po.notes ?? '').replace(/,/g, ';').replace(/\n/g, ' '),
+    ]);
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `purchase_orders_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <div className="w-6 h-6 border-2 border-[#1D9E75] border-t-transparent rounded-full animate-spin" />
@@ -245,15 +298,35 @@ export default function PurchaseOrders() {
             {sorted.length !== pos.length ? `${sorted.length} of ${pos.length} POs` : `${pos.length} total POs`}
           </p>
         </div>
-        {canWrite && (
-          <button
-            onClick={() => setShowWizard(true)}
-            className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
-          >
-            <Plus size={16} />
-            New PO
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isCostController && (
+            <button
+              onClick={exportCSV}
+              className="flex items-center gap-2 border border-gray-200 bg-white text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 hover:border-gray-300 transition-colors"
+            >
+              <Download size={15} />
+              Export CSV
+            </button>
+          )}
+          {canWrite && (
+            <button
+              onClick={() => setShowExpenseModal(true)}
+              className="flex items-center gap-2 border border-[#1D9E75] text-[#1D9E75] px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1D9E75]/5 transition-colors"
+            >
+              <Receipt size={15} />
+              New Expense
+            </button>
+          )}
+          {canWrite && (
+            <button
+              onClick={() => setShowWizard(true)}
+              className="flex items-center gap-2 bg-[#0f1923] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1a2b3c] transition-colors"
+            >
+              <Plus size={16} />
+              New PO
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
@@ -571,6 +644,14 @@ export default function PurchaseOrders() {
           vendors={vendors}
           onClose={() => setShowWizard(false)}
           onSuccess={() => { setShowWizard(false); loadData(); }}
+        />
+      )}
+
+      {showExpenseModal && (
+        <NewExpenseModal
+          projects={projects}
+          onClose={() => setShowExpenseModal(false)}
+          onSuccess={() => { setShowExpenseModal(false); }}
         />
       )}
 

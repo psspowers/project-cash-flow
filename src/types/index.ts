@@ -265,6 +265,26 @@ export interface POSimplePayment {
   created_at: string;
 }
 
+export type ExpenseStatus = 'draft' | 'approved' | 'rejected';
+
+export interface ProjectExpense {
+  id: string;
+  project_id: string;
+  cost_category: CostCategory;
+  description: string;
+  amount: number;
+  expense_date?: string;
+  receipt_ref?: string | null;
+  submitted_by?: string | null;
+  status: ExpenseStatus;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejection_comment?: string | null;
+  created_at: string;
+  project?: Project;
+  submitter?: { full_name: string };
+}
+
 export interface VendorInvoice {
   id: string;
   po_id: string;
