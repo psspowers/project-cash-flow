@@ -304,17 +304,23 @@ export default function Approvals() {
       poAmountInclVat: po.po_amount_incl_vat,
       currentStatus: po.status as never,
     };
-    let result: { error: string | null };
-    if (role === 'cost_controller')      result = await approvePO_CC(params);
-    else if (role === 'construction_manager') result = await approvePO_CM(params);
-    else if (role === 'evp')             result = await approvePO_EVP(params);
-    else if (role === 'ceo')             result = await approvePO_CEO(params);
-    else { setPoAction(false); return; }
-    if (result.error) alert('Failed to approve PO: ' + result.error);
-    setPoReviewModal(null);
-    setPoRejectReason('');
-    setPoAction(false);
-    loadData();
+    try {
+      let result: { error: string | null };
+      if (role === 'cost_controller')           result = await approvePO_CC(params);
+      else if (role === 'construction_manager') result = await approvePO_CM(params);
+      else if (role === 'evp')                  result = await approvePO_EVP(params);
+      else if (role === 'ceo')                  result = await approvePO_CEO(params);
+      else return;
+      if (result.error) alert('Failed to approve PO: ' + result.error);
+      setPoReviewModal(null);
+      setPoRejectReason('');
+      loadData();
+    } catch (err) {
+      console.error('approvePO threw:', err);
+      alert('An unexpected error occurred while approving. Please try again.');
+    } finally {
+      setPoAction(false);
+    }
   }
 
   async function handleRejectPO(po: PurchaseOrder) {
@@ -329,12 +335,18 @@ export default function Approvals() {
       poAmountInclVat: po.po_amount_incl_vat,
       currentStatus: po.status as never,
     };
-    const result = await rejectPO(params, user.id, poRejectReason.trim());
-    if (result.error) alert('Failed to reject PO: ' + result.error);
-    setPoReviewModal(null);
-    setPoRejectReason('');
-    setPoAction(false);
-    loadData();
+    try {
+      const result = await rejectPO(params, user.id, poRejectReason.trim());
+      if (result.error) alert('Failed to reject PO: ' + result.error);
+      setPoReviewModal(null);
+      setPoRejectReason('');
+      loadData();
+    } catch (err) {
+      console.error('handleRejectPO threw:', err);
+      alert('An unexpected error occurred while rejecting. Please try again.');
+    } finally {
+      setPoAction(false);
+    }
   }
 
   // ─── Invoice Filtering & Actions ────────────────────────────────────────────

@@ -463,7 +463,8 @@ export async function approvePO_EVP(
       ? project.name.split(/\s+/)[0].toUpperCase().replace(/[^A-Z0-9]/g, '')
       : 'PSS';
 
-    const { data: pssNo } = await supabase.rpc('generate_pss_po_number', { p_project_code: projectCode });
+    const { data: pssNo, error: rpcError } = await supabase.rpc('generate_pss_po_number', { p_project_code: projectCode });
+    if (rpcError) return { error: rpcError.message };
 
     const { error } = await supabase
       .from('purchase_orders')
@@ -524,7 +525,8 @@ export async function approvePO_CEO(
     ? project.name.split(/\s+/)[0].toUpperCase().replace(/[^A-Z0-9]/g, '')
     : 'PSS';
 
-  const { data: pssNo } = await supabase.rpc('generate_pss_po_number', { p_project_code: projectCode });
+  const { data: pssNo, error: rpcError } = await supabase.rpc('generate_pss_po_number', { p_project_code: projectCode });
+  if (rpcError) return { error: rpcError.message };
 
   const { error } = await supabase
     .from('purchase_orders')
