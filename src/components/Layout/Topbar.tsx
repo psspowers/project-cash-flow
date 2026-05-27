@@ -13,16 +13,18 @@ interface TopbarProps {
 }
 
 const TEST_ROLES = [
-  { value: 'reset', label: 'Reset to Actual Role' },
-  { value: 'ceo', label: 'CEO' },
-  { value: 'evp', label: 'EVP' },
-  { value: 'construction_manager', label: 'Construction Manager' },
-  { value: 'cost_controller', label: 'Cost Controller' },
-  { value: 'procurement', label: 'Procurement' },
-  { value: 'accounts_supervisor', label: 'Accounts Supervisor' },
-  { value: 'accounts_manager', label: 'Accounts Manager' },
-  { value: 'banking_finance_officer', label: 'Banking/Finance Exec' },
+  { value: 'reset', label: 'Reset to Actual Role', email: null },
+  { value: 'ceo', label: 'CEO', email: 'sam@psspowers.com' },
+  { value: 'evp', label: 'EVP', email: 'nakkarin@psspowers.com' },
+  { value: 'construction_manager', label: 'Construction Manager', email: 'suraphol@psspowers.com' },
+  { value: 'cost_controller', label: 'Cost Controller', email: 'niramon@psspowers.com' },
+  { value: 'procurement', label: 'Procurement', email: 'kanokthip@psspowers.com' },
+  { value: 'accounts_supervisor', label: 'Accounts Supervisor', email: 'nareerat@psspowers.com' },
+  { value: 'accounts_manager', label: 'Accounts Manager', email: 'chudapak@psspowers.com' },
+  { value: 'banking_finance_officer', label: 'Banking/Finance Exec', email: 'pawitchaya@psspowers.com' },
 ];
+
+const TEST_PASSWORD = 'PSS@2025';
 
 export function notifHref(
   entityType: string | null | undefined,
@@ -78,9 +80,10 @@ export const typeAccent: Record<Notification['type'], string> = {
 };
 
 export default function Topbar({ notifications, onNotificationRead, onMarkAllRead, title }: TopbarProps) {
-  const { profile, signOut, refreshProfile } = useAuth();
+  const { profile, signIn, signOut } = useAuth();
   const navigate = useNavigate();
   const [showNotifs, setShowNotifs] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const unread = notifications.filter(n => !n.is_read).length;
   const badgeLabel = unread > 9 ? '9+' : String(unread);
@@ -95,13 +98,28 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  const handleRoleSwitch = (newRole: string) => {
+  const handleRoleSwitch = async (newRole: string) => {
+    if (switching) return;
+    setSwitching(true);
+
+    let email: string | null = null;
+
     if (newRole === 'reset') {
-      sessionStorage.removeItem('dev_role_override');
+      email = sessionStorage.getItem('dev_original_email');
+      sessionStorage.removeItem('dev_original_email');
     } else {
-      sessionStorage.setItem('dev_role_override', newRole);
+      if (!sessionStorage.getItem('dev_original_email') && profile?.email) {
+        sessionStorage.setItem('dev_original_email', profile.email);
+      }
+      email = TEST_ROLES.find(r => r.value === newRole)?.email ?? null;
     }
-    refreshProfile();
+
+    if (email) {
+      await signIn(email, TEST_PASSWORD);
+      navigate('/');
+    }
+
+    setSwitching(false);
   };
 
   const initials = profile?.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
@@ -116,11 +134,14 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
       <div className="flex items-center gap-3">
         {/* Dev/Test Role Switcher */}
         <div className="flex items-center gap-2 bg-amber-50 px-3 py-1.5 rounded-md border border-amber-200">
-          <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Test Mode</span>
+          <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">
+            {switching ? 'Switching…' : 'Test Mode'}
+          </span>
           <select
-            value={sessionStorage.getItem('dev_role_override') || 'reset'}
+            value={profile?.role ?? 'reset'}
             onChange={e => handleRoleSwitch(e.target.value)}
-            className="text-xs bg-transparent border-none text-amber-900 font-medium focus:ring-0 cursor-pointer outline-none"
+            disabled={switching}
+            className="text-xs bg-transparent border-none text-amber-900 font-medium focus:ring-0 cursor-pointer outline-none disabled:opacity-50 disabled:cursor-wait"
           >
             {TEST_ROLES.map(r => (
               <option key={r.value} value={r.value}>{r.label}</option>
