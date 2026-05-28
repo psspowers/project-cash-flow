@@ -115,8 +115,13 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
     }
 
     if (email) {
-      await signIn(email, TEST_PASSWORD);
-      navigate('/');
+      await signOut();
+      const { error } = await signIn(email, TEST_PASSWORD);
+      if (!error) {
+        navigate('/');
+      } else {
+        console.error('Role switch sign-in failed:', error.message);
+      }
     }
 
     setSwitching(false);
