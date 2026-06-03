@@ -31,6 +31,8 @@ interface SimplePaymentRow {
 type POType = 'simple' | 'milestone';
 type SubmitMode = 'draft' | 'submit';
 
+const CURRENCIES = ['THB', 'USD', 'EUR', 'CNY', 'JPY'] as const;
+
 export default function POCreationWizard({ projects, vendors, onClose, onSuccess, editPo }: Props) {
   const { user } = useAuth();
   const { vatRate } = useTaxConfig();
@@ -47,7 +49,11 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
   const [costCategory, setCostCategory] = useState<CostCategory | ''>(editPo?.cost_category ?? '');
   const [whtRate, setWhtRate] = useState<number>(editPo?.wht_rate ?? 0);
 
+  // Amount / currency state
   const [exclVat, setExclVat] = useState(editPo ? String(editPo.po_amount_excl_vat) : '');
+  const [vatApplies, setVatApplies] = useState<boolean>(editPo ? (editPo.vat_7pct ?? 0) > 0 : true);
+  const [currency, setCurrency] = useState<string>(editPo?.currency ?? 'THB');
+  const [fxRate, setFxRate] = useState<string>(editPo?.fx_rate ? String(editPo.fx_rate) : '1');
 
   const [simplePayments, setSimplePayments] = useState<SimplePaymentRow[]>([{ payment_month: '', amount: '' }]);
   const [milestones, setMilestones] = useState<MilestoneRow[]>([{ description: '', pct: '', planned_payment_date: '' }]);
@@ -97,10 +103,15 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     loadChildren();
   }, [editPo]);
 
+  // Derived math — all THB values for downstream cash flow
   const exclVatNum = Number(exclVat) || 0;
-  const vatNum = +(exclVatNum * vatRate).toFixed(2);
-  const inclVatNum = +(exclVatNum + vatNum).toFixed(2);
-  const whtNum = +(exclVatNum * whtRate).toFixed(2);
+  const fxRateNum = Math.max(Number(fxRate) || 1, 0.000001);
+  const isForeign = currency !== 'THB';
+  // THB-equivalent base — the only number that matters for PO financials
+  const exclVatTHB = +(exclVatNum * fxRateNum).toFixed(2);
+  const vatNum = vatApplies ? +(exclVatTHB * vatRate).toFixed(2) : 0;
+  const inclVatNum = +(exclVatTHB + vatNum).toFixed(2);
+  const whtNum = +(exclVatTHB * whtRate).toFixed(2);
 
   const totalMilestonePct = milestones.reduce((sum, m) => sum + (Number(m.pct) || 0), 0);
   const totalSimpleAmount = simplePayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
@@ -115,6 +126,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     }
     if (s === 2) {
       if (!exclVatNum || exclVatNum <= 0) return 'Please enter a valid contract amount.';
+      if (isForeign && fxRateNum <= 0) return 'Please enter a valid FX rate.';
     }
     if (s === 3) {
       if (poType === 'milestone') {
@@ -164,6 +176,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
     const status = wasInApproval ? 'draft' : (mode === 'draft' ? 'draft' : 'pending_cc');
     const now = new Date().toISOString();
 
+    // Milestone amount_due is based on THB-equivalent excl VAT
+    const milestoneAmountBase = exclVatTHB;
+
     if (isEdit && editPo) {
       const { error: updateError } = await supabase
         .from('purchase_orders')
@@ -171,12 +186,14 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
           vendor_id: vendorId || null,
           description: description.trim(),
           cost_category: costCategory,
-          po_amount_excl_vat: exclVatNum,
+          po_amount_excl_vat: exclVatTHB,
           vat_7pct: vatNum,
           po_amount_incl_vat: inclVatNum,
           wht_applies: whtRate > 0,
           wht_rate: whtRate,
           wht_3pct: whtNum,
+          currency,
+          fx_rate: fxRateNum,
           status,
           has_supplier_milestones: poType === 'milestone',
           submitted_by: status === 'pending_cc' ? user.id : editPo.submitted_by ?? null,
@@ -202,7 +219,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
             purchase_order_id: editPo.id,
             milestone_number: i + 1,
             milestone_pct: Number(m.pct) / 100,
-            amount_due: +(exclVatNum * (Number(m.pct) / 100)).toFixed(2),
+            amount_due: +(milestoneAmountBase * (Number(m.pct) / 100)).toFixed(2),
             planned_payment_date: m.planned_payment_date ? m.planned_payment_date + '-01' : null,
             status: 'pending',
           }))
@@ -246,12 +263,14 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
         vendor_id: vendorId || null,
         description: description.trim(),
         cost_category: costCategory,
-        po_amount_excl_vat: exclVatNum,
+        po_amount_excl_vat: exclVatTHB,
         vat_7pct: vatNum,
         po_amount_incl_vat: inclVatNum,
         wht_applies: whtRate > 0,
         wht_rate: whtRate,
         wht_3pct: whtNum,
+        currency,
+        fx_rate: fxRateNum,
         status,
         has_supplier_milestones: poType === 'milestone',
         submitted_by: mode === 'submit' ? user.id : null,
@@ -274,7 +293,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
           purchase_order_id: poId,
           milestone_number: i + 1,
           milestone_pct: Number(m.pct) / 100,
-          amount_due: +(exclVatNum * (Number(m.pct) / 100)).toFixed(2),
+          amount_due: +(milestoneAmountBase * (Number(m.pct) / 100)).toFixed(2),
           planned_payment_date: m.planned_payment_date ? m.planned_payment_date + '-01' : null,
           status: 'pending',
         }))
@@ -437,26 +456,96 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
 
           {step === 2 && (
             <div className="space-y-4">
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Contract Amount excl. VAT (฿) *</label>
-                <input type="number" step="0.01" value={exclVat} onChange={e => setExclVat(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
-                  placeholder="0.00" />
+              {/* Currency row */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Currency *</label>
+                  <select
+                    value={currency}
+                    onChange={e => {
+                      setCurrency(e.target.value);
+                      if (e.target.value === 'THB') setFxRate('1');
+                    }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white"
+                  >
+                    {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                {isForeign && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">
+                      FX Rate <span className="text-gray-400 font-normal">(THB per 1 {currency})</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0.0001"
+                      value={fxRate}
+                      onChange={e => setFxRate(e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                      placeholder="e.g. 36.5"
+                    />
+                  </div>
+                )}
               </div>
+
+              {/* Amount input */}
+              <div>
+                <label className="text-xs font-medium text-gray-600 mb-1 block">
+                  Contract Amount excl. VAT ({currency}) *
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={exclVat}
+                  onChange={e => setExclVat(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30"
+                  placeholder="0.00"
+                />
+              </div>
+
+              {/* VAT toggle */}
+              <label className="flex items-center gap-3 cursor-pointer select-none">
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={vatApplies}
+                    onChange={e => setVatApplies(e.target.checked)}
+                  />
+                  <div className={`w-9 h-5 rounded-full transition-colors ${vatApplies ? 'bg-[#1D9E75]' : 'bg-gray-300'}`} />
+                  <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${vatApplies ? 'translate-x-4' : 'translate-x-0'}`} />
+                </div>
+                <span className="text-sm font-medium text-gray-700">Apply 7% VAT</span>
+              </label>
+
+              {!vatApplies && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                  VAT-exempt — the contract amount excl. VAT is also the total payable amount.
+                </div>
+              )}
+
+              {/* Summary breakdown */}
               {exclVatNum > 0 && (
                 <div className="bg-gray-50 rounded-lg p-4 space-y-2 border border-gray-100">
+                  {isForeign && (
+                    <div className="flex justify-between text-sm pb-2 border-b border-gray-200 mb-2">
+                      <span className="text-gray-500">Amount in {currency}</span>
+                      <span className="font-medium text-gray-700">{exclVatNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}</span>
+                    </div>
+                  )}
                   {[
-                    ['Contract excl. VAT', fmtTHB(exclVatNum), 'text-gray-800'],
-                    ['VAT 7%', fmtTHB(vatNum), 'text-gray-600'],
+                    ['Contract excl. VAT (THB)', fmtTHB(exclVatTHB), 'text-gray-800'],
+                    ...(vatApplies ? [['VAT 7%', fmtTHB(vatNum), 'text-gray-600']] : []),
                     ...(whtRate > 0 ? [[`WHT ${(whtRate * 100).toFixed(0)}% (withheld)`, fmtTHB(whtNum), 'text-[#EF9F27]']] : []),
                   ].map(([label, val, cls]) => (
                     <div key={label} className="flex justify-between text-sm">
-                      <span className={`${whtRate > 0 && label.startsWith('WHT') ? 'text-[#EF9F27]' : 'text-gray-500'}`}>{label}</span>
+                      <span className={`${String(label).startsWith('WHT') ? 'text-[#EF9F27]' : 'text-gray-500'}`}>{label}</span>
                       <span className={`font-medium ${cls}`}>{val}</span>
                     </div>
                   ))}
                   <div className="flex justify-between font-bold text-gray-900 pt-2 border-t border-gray-200">
-                    <span>Total incl. VAT</span>
+                    <span>Total incl. VAT (THB)</span>
                     <span className="text-base">{fmtTHB(inclVatNum)}</span>
                   </div>
                   {whtRate > 0 && (
@@ -467,9 +556,6 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                   )}
                 </div>
               )}
-              <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-600">
-                VAT is always 7% on the contract amount excl. VAT, regardless of PO status.
-              </div>
             </div>
           )}
 
@@ -542,9 +628,9 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                           className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 bg-white" placeholder="0" />
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 mb-1 block">Amount (excl VAT)</label>
+                        <label className="text-xs text-gray-500 mb-1 block">Amount (excl VAT, THB)</label>
                         <div className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 text-gray-600">
-                          {m.pct ? fmtTHB(+(exclVatNum * (Number(m.pct) / 100)).toFixed(0)) : '—'}
+                          {m.pct ? fmtTHB(+(exclVatTHB * (Number(m.pct) / 100)).toFixed(0)) : '—'}
                         </div>
                       </div>
                     </div>
@@ -582,6 +668,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                   ['Supplier', vendors.find(v => v.id === vendorId)?.name ?? 'Not assigned'],
                   ['Category', costCategory ? COST_CATEGORY_LABELS[costCategory] : '—'],
                   ['Description', description],
+                  ...(isForeign ? [['Currency', `${currency} @ ${fxRateNum} THB/${currency}`]] : []),
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between gap-4">
                     <span className="text-gray-500 shrink-0">{label}</span>
@@ -589,8 +676,17 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
                   </div>
                 ))}
                 <div className="border-t border-gray-200 pt-2 space-y-1">
-                  <div className="flex justify-between text-xs text-gray-500"><span>excl. VAT</span><span>{fmtTHB(exclVatNum)}</span></div>
-                  <div className="flex justify-between text-xs text-gray-500"><span>VAT 7%</span><span>{fmtTHB(vatNum)}</span></div>
+                  {isForeign && (
+                    <div className="flex justify-between text-xs text-gray-400">
+                      <span>Contract ({currency})</span>
+                      <span>{exclVatNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-xs text-gray-500"><span>excl. VAT (THB)</span><span>{fmtTHB(exclVatTHB)}</span></div>
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>VAT {vatApplies ? '7%' : '(exempt)'}</span>
+                    <span>{fmtTHB(vatNum)}</span>
+                  </div>
                   {whtRate > 0 && <div className="flex justify-between text-xs text-[#EF9F27]"><span>WHT {(whtRate * 100).toFixed(0)}%</span><span>{fmtTHB(whtNum)}</span></div>}
                   <div className="flex justify-between font-bold text-gray-900"><span>Total incl. VAT</span><span className="text-base">{fmtTHB(inclVatNum)}</span></div>
                 </div>
@@ -632,7 +728,7 @@ export default function POCreationWizard({ projects, vendors, onClose, onSuccess
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <button onClick={() => save('draft')} disabled={saving}
                   className="flex items-center justify-center gap-2 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-60 transition-colors">
-                  {saving ? 'Saving...' : wasInApproval ? 'Save as Draft' : 'Save as Draft'}
+                  {saving ? 'Saving...' : 'Save as Draft'}
                 </button>
                 <button onClick={() => save('submit')} disabled={saving}
                   className="flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2.5 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60 transition-colors">

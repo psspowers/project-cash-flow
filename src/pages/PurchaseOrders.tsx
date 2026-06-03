@@ -157,7 +157,8 @@ export default function PurchaseOrders() {
       const matchSearch = (
         (po.pss_po_no ?? '').toLowerCase().includes(search.toLowerCase()) ||
         vendorName.toLowerCase().includes(search.toLowerCase()) ||
-        (po.project as Project | undefined)?.name?.toLowerCase().includes(search.toLowerCase())
+        (po.project as Project | undefined)?.name?.toLowerCase().includes(search.toLowerCase()) ||
+        (po.description ?? '').toLowerCase().includes(search.toLowerCase())
       );
       if (!matchSearch) return false;
     }
@@ -299,7 +300,7 @@ export default function PurchaseOrders() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {isCostController && (
+          {(isCostController || canWrite) && (
             <button
               onClick={exportCSV}
               className="flex items-center gap-2 border border-gray-200 bg-white text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 hover:border-gray-300 transition-colors"

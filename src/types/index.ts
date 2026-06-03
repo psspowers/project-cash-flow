@@ -210,6 +210,8 @@ export interface PurchaseOrder {
   pending_invoice_amount: number;
   pending_remaining_amount: number;
   supplier_name_raw?: string | null;
+  currency?: string;
+  fx_rate?: number;
   notes?: string;
   submitted_by?: string;
   submitted_at?: string;

@@ -9,7 +9,8 @@ import { formatDate } from '../../utils/formatters';
 import POCreationWizard from './POCreationWizard';
 import AmendmentChoiceModal from './AmendmentChoiceModal';
 import NonCommercialEditModal from './NonCommercialEditModal';
-import { logPOAction } from '../../services/workflow';
+import { logPOAction, rejectPO } from '../../services/workflow';
+import type { POActionParams } from '../../services/workflow';
 import CommentThread from '../ui/CommentThread';
 import WorkflowTimeline from './WorkflowTimeline';
 
@@ -38,7 +39,7 @@ interface VersionEntry {
 const ISSUED_STATUSES = new Set(['approved', 'partially_paid', 'fully_paid']);
 
 export default function PODetailModal({ po, projects, vendors, onClose, onSuccess }: Props) {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const [mode, setMode] = useState<ModalMode>('view');
   const [milestones, setMilestones] = useState<POMilestone[]>([]);
   const [payments, setPayments] = useState<POSimplePayment[]>([]);
@@ -59,14 +60,81 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
   const [versionHistory, setVersionHistory] = useState<VersionEntry[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
+  // Reject panel state
+  const [showRejectPanel, setShowRejectPanel] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
+  // Cancel panel state
+  const [showCancelPanel, setShowCancelPanel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
   const isIssued = ISSUED_STATUSES.has(po.status);
   const canEdit = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) &&
     (po.status === 'draft' || po.status === 'pending_cc');
   const canAmend = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) && isIssued;
 
+  // Approvers can reject from the detail modal at their stage
+  const canReject = !isIssued && !viewingRevision && (
+    (profile?.role === 'cost_controller'      && po.status === 'pending_cc') ||
+    (profile?.role === 'construction_manager' && po.status === 'pending_cm') ||
+    (profile?.role === 'evp'                  && po.status === 'pending_evp') ||
+    (profile?.role === 'ceo'                  && po.status === 'pending_ceo')
+  );
+
+  // Procurement can cancel a rejected draft (rejection_reason proves it was rejected, not just newly created)
+  const canCancel = hasRole(profile?.role, PROCUREMENT_WRITE_ROLES) &&
+    po.status === 'draft' &&
+    !!po.rejection_reason;
+
   useEffect(() => {
     loadDetails();
   }, [po.id]);
+
+  async function handleRejectFromModal() {
+    if (!user || !rejectReason.trim() || rejecting) return;
+    setRejecting(true);
+    const params: POActionParams = {
+      poId: po.id,
+      actorId: user.id,
+      projectName: (po.project as Project | undefined)?.name ?? projects.find(p => p.id === po.project_id)?.name ?? '',
+      projectId: po.project_id,
+      poDescription: po.description ?? '',
+      poAmountInclVat: po.po_amount_incl_vat,
+      currentStatus: po.status as never,
+    };
+    const result = await rejectPO(params, user.id, rejectReason.trim());
+    setRejecting(false);
+    if (result.error) {
+      alert('Failed to reject PO: ' + result.error);
+      return;
+    }
+    onSuccess();
+    onClose();
+  }
+
+  async function handleCancelPO() {
+    if (!user || cancelling) return;
+    setCancelling(true);
+    const { error } = await supabase
+      .from('purchase_orders')
+      .update({
+        status: 'cancelled',
+        rejection_reason: null,
+        rejected_by: null,
+        rejected_at: null,
+      })
+      .eq('id', po.id);
+    if (error) {
+      alert('Failed to cancel PO: ' + error.message);
+      setCancelling(false);
+      return;
+    }
+    await logPOAction(po.id, 'cancelled', po.status, 'cancelled', user.id, 'PO cancelled by procurement');
+    setCancelling(false);
+    onSuccess();
+    onClose();
+  }
 
   async function loadDetails() {
     setLoading(true);
@@ -501,6 +569,24 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
                     Amend PO
                   </button>
                 )}
+                {canReject && !showRejectPanel && !showCancelPanel && (
+                  <button
+                    onClick={() => setShowRejectPanel(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-[#E24B4A] text-[#E24B4A] text-xs font-medium rounded-lg hover:bg-[#E24B4A]/5 transition-colors"
+                  >
+                    <XCircle size={12} />
+                    Reject
+                  </button>
+                )}
+                {canCancel && !showCancelPanel && !showRejectPanel && (
+                  <button
+                    onClick={() => setShowCancelPanel(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-500 text-xs font-medium rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                  >
+                    <XCircle size={12} />
+                    Cancel PO
+                  </button>
+                )}
                 <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
                   <X size={16} />
                 </button>
@@ -509,6 +595,62 @@ export default function PODetailModal({ po, projects, vendors, onClose, onSucces
 
             {/* Row 2: workflow timeline — shows the relevant PO's path */}
             <WorkflowTimeline po={displayPo} auditActorMap={displayActorMap} />
+
+            {/* Reject inline panel */}
+            {showRejectPanel && (
+              <div className="bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg p-4 space-y-3">
+                <p className="text-xs font-semibold text-[#E24B4A]">Reject Purchase Order</p>
+                <textarea
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  rows={3}
+                  placeholder="Explain why this PO is being rejected..."
+                  className="w-full border border-[#E24B4A]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#E24B4A]/20 resize-none bg-white"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleRejectFromModal}
+                    disabled={!rejectReason.trim() || rejecting}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-[#E24B4A] text-white text-xs font-medium rounded-lg hover:bg-[#c93939] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {rejecting ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <XCircle size={12} />}
+                    {rejecting ? 'Rejecting...' : 'Confirm Reject'}
+                  </button>
+                  <button
+                    onClick={() => { setShowRejectPanel(false); setRejectReason(''); }}
+                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cancel PO inline panel */}
+            {showCancelPanel && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-700">Cancel Purchase Order</p>
+                <p className="text-xs text-gray-500">
+                  This will permanently cancel <span className="font-medium text-gray-700">{po.pss_po_no ?? 'this PO'}</span>. A cancelled PO cannot be reopened.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCancelPO}
+                    disabled={cancelling}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-gray-700 text-white text-xs font-medium rounded-lg hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {cancelling ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <XCircle size={12} />}
+                    {cancelling ? 'Cancelling...' : 'Confirm Cancel'}
+                  </button>
+                  <button
+                    onClick={() => setShowCancelPanel(false)}
+                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Go Back
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Tab bar */}
             <div className="flex items-center gap-1 -mb-3 pt-1">
