@@ -37,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setLoading(true);
       setUser(session?.user ?? null);
       if (session?.user) {
         (async () => {

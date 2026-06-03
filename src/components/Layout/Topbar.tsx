@@ -117,11 +117,11 @@ export default function Topbar({ notifications, onNotificationRead, onMarkAllRea
     if (email) {
       await signOut();
       const { error } = await signIn(email, TEST_PASSWORD);
-      if (!error) {
-        navigate('/');
-      } else {
+      if (error) {
         console.error('Role switch sign-in failed:', error.message);
       }
+      // No navigate() needed — onAuthStateChange fires, sets loading=true,
+      // loads the new profile, then AppLayout re-renders with the new user.
     }
 
     setSwitching(false);
