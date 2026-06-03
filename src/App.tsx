@@ -65,8 +65,8 @@ function SplashScreen({ onDone }: { onDone: () => void }) {
     };
 
     video.addEventListener('ended', finish);
-    // Fallback: dismiss after 8s in case video fails to load
-    const fallback = setTimeout(finish, 8000);
+    // Fallback: dismiss after 4s in case video fails to load or is slow
+    const fallback = setTimeout(finish, 4000);
 
     return () => {
       video.removeEventListener('ended', finish);
