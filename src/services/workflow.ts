@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 import type { UserRole, POStatus } from '../types';
 import {
-  PO_CEO_THRESHOLD as _PO_CEO_THRESHOLD,
+  PO_CEO_THRESHOLD,
   VOUCHER_MANAGER_THRESHOLD,
   VOUCHER_CEO_NOTIFY_THRESHOLD,
 } from '../config/thresholds';
@@ -181,8 +181,6 @@ export async function rejectInvoiceCM(
   return { error: null };
 }
 
-const EVP_CEO_THRESHOLD = _PO_CEO_THRESHOLD;
-
 export async function approveInvoiceEVP(
   invoiceId: string,
   evpId: string,
@@ -191,7 +189,7 @@ export async function approveInvoiceEVP(
   invoiceNo: string,
   projectId: string,
 ): Promise<{ error: string | null }> {
-  if (amount < EVP_CEO_THRESHOLD) {
+  if (amount < PO_CEO_THRESHOLD) {
     const { error } = await supabase
       .from('vendor_invoices')
       .update({ status: 'released' })
@@ -302,7 +300,7 @@ export async function rejectInvoice(
 
 // ─── PO State Machine ─────────────────────────────────────────────────────────
 
-export { PO_CEO_THRESHOLD } from '../config/thresholds';
+export { PO_CEO_THRESHOLD };
 
 export async function logPOAction(
   poId: string,
