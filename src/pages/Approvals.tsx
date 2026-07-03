@@ -7,6 +7,7 @@ import {
 import {
   approveInvoiceCM, approveInvoiceEVP, approveInvoiceCEO, rejectInvoice,
   approvePO_CC, approvePO_CM, approvePO_EVP, approvePO_CEO, rejectPO,
+  grantPOChange, rejectPOChangeRequest, GrantPOChangeParams,
   approveCostingCM, approveCostingEVP, rejectCostingCM, rejectCostingEVP,
   recommendTransferEVP, approveTransferCEO, rejectTransferCEO,
   POActionParams, CostingActionParams, TransferActionParams,
@@ -17,7 +18,7 @@ import { supabase } from '../lib/supabase';
 import {
   ProgressReport, PurchaseOrder, VendorInvoice, Project,
   ProjectCosting, COSTING_CATEGORY_KEYS, fmtTHB, UserProfile,
-  ProjectCashTransfer,
+  ProjectCashTransfer, POStatus,
 } from '../types';
 import { useAuth } from '../context/AuthContext';
 import Badge, { statusVariant } from '../components/ui/Badge';
@@ -295,23 +296,38 @@ export default function Approvals() {
   async function approvePO(po: PurchaseOrder) {
     if (!user || poAction) return;
     setPoAction(true);
-    const params: POActionParams = {
-      poId: po.id,
-      actorId: user.id,
-      projectName: (po.project as Project)?.name ?? '',
-      projectId: po.project_id,
-      poDescription: po.description ?? '',
-      poAmountInclVat: po.po_amount_incl_vat,
-      currentStatus: po.status as never,
-    };
     try {
       let result: { error: string | null };
-      if (role === 'cost_controller')           result = await approvePO_CC(params);
-      else if (role === 'construction_manager') result = await approvePO_CM(params);
-      else if (role === 'evp')                  result = await approvePO_EVP(params);
-      else if (role === 'ceo')                  result = await approvePO_CEO(params);
-      else return;
-      if (result.error) alert('Failed to approve PO: ' + result.error);
+      if (role === 'evp' && po.status === 'pending_revision_approval') {
+        const grantParams: GrantPOChangeParams = {
+          poId: po.id,
+          evpId: user.id,
+          decision: 'revise',
+          projectName: (po.project as Project)?.name ?? '',
+          projectId: po.project_id,
+          poDescription: po.description ?? '',
+          pssPoNo: po.pss_po_no,
+          currentVersion: po.version ?? 1,
+          decisionNotes: poRejectReason.trim() || undefined,
+        };
+        result = await grantPOChange(grantParams);
+      } else {
+        const params: POActionParams = {
+          poId: po.id,
+          actorId: user.id,
+          projectName: (po.project as Project)?.name ?? '',
+          projectId: po.project_id,
+          poDescription: po.description ?? '',
+          poAmountInclVat: po.po_amount_incl_vat,
+          currentStatus: po.status as never,
+        };
+        if (role === 'cost_controller')           result = await approvePO_CC(params);
+        else if (role === 'construction_manager') result = await approvePO_CM(params);
+        else if (role === 'evp')                  result = await approvePO_EVP(params);
+        else if (role === 'ceo')                  result = await approvePO_CEO(params);
+        else return;
+      }
+      if (result.error) alert('Failed to process PO: ' + result.error);
       setPoReviewModal(null);
       setPoRejectReason('');
       loadData();
@@ -326,24 +342,75 @@ export default function Approvals() {
   async function handleRejectPO(po: PurchaseOrder) {
     if (!user || !poRejectReason.trim() || poAction) return;
     setPoAction(true);
-    const params: POActionParams = {
-      poId: po.id,
-      actorId: user.id,
-      projectName: (po.project as Project)?.name ?? '',
-      projectId: po.project_id,
-      poDescription: po.description ?? '',
-      poAmountInclVat: po.po_amount_incl_vat,
-      currentStatus: po.status as never,
-    };
     try {
-      const result = await rejectPO(params, user.id, poRejectReason.trim());
-      if (result.error) alert('Failed to reject PO: ' + result.error);
+      let result: { error: string | null };
+      if (po.status === 'pending_revision_approval') {
+        const { data: logEntry } = await supabase
+          .from('po_action_log')
+          .select('from_status')
+          .eq('po_id', po.id)
+          .eq('action', 'revision_requested')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const priorStatus = (logEntry?.from_status as POStatus) ?? 'approved_evp';
+        result = await rejectPOChangeRequest(
+          po.id,
+          user.id,
+          (po.project as Project)?.name ?? '',
+          po.project_id,
+          po.description ?? '',
+          po.pss_po_no,
+          poRejectReason.trim(),
+          priorStatus,
+        );
+      } else {
+        const params: POActionParams = {
+          poId: po.id,
+          actorId: user.id,
+          projectName: (po.project as Project)?.name ?? '',
+          projectId: po.project_id,
+          poDescription: po.description ?? '',
+          poAmountInclVat: po.po_amount_incl_vat,
+          currentStatus: po.status as never,
+        };
+        result = await rejectPO(params, user.id, poRejectReason.trim());
+      }
+      if (result.error) alert('Failed to process PO: ' + result.error);
       setPoReviewModal(null);
       setPoRejectReason('');
       loadData();
     } catch (err) {
       console.error('handleRejectPO threw:', err);
       alert('An unexpected error occurred while rejecting. Please try again.');
+    } finally {
+      setPoAction(false);
+    }
+  }
+
+  async function handleVoidPO(po: PurchaseOrder) {
+    if (!user || poAction) return;
+    if (!window.confirm(`Permanently void "${po.description ?? 'this PO'}"? This cannot be undone.`)) return;
+    setPoAction(true);
+    try {
+      const result = await grantPOChange({
+        poId: po.id,
+        evpId: user.id,
+        decision: 'void',
+        projectName: (po.project as Project)?.name ?? '',
+        projectId: po.project_id,
+        poDescription: po.description ?? '',
+        pssPoNo: po.pss_po_no,
+        currentVersion: po.version ?? 1,
+        decisionNotes: poRejectReason.trim() || undefined,
+      });
+      if (result.error) alert('Failed to void PO: ' + result.error);
+      setPoReviewModal(null);
+      setPoRejectReason('');
+      loadData();
+    } catch (err) {
+      console.error('handleVoidPO threw:', err);
+      alert('An unexpected error occurred. Please try again.');
     } finally {
       setPoAction(false);
     }
@@ -1043,7 +1110,9 @@ export default function Approvals() {
           <div className="bg-white rounded-xl w-full max-w-md border border-gray-200">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div>
-                <h2 className="text-base font-semibold text-gray-800">Review Purchase Order</h2>
+                <h2 className="text-base font-semibold text-gray-800">
+                  {poReviewModal.status === 'pending_revision_approval' ? 'Review Revision Request' : 'Review Purchase Order'}
+                </h2>
                 <p className="text-xs text-gray-400 mt-0.5">{(poReviewModal.project as Project)?.name ?? '—'}</p>
               </div>
               <button onClick={() => setPoReviewModal(null)}><X size={16} className="text-gray-400" /></button>
@@ -1062,19 +1131,49 @@ export default function Approvals() {
                 </div>
               </div>
               {poReviewModal.notes && <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 italic">"{poReviewModal.notes}"</div>}
+
+              {poReviewModal.status === 'pending_revision_approval' && poReviewModal.revision_reason && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs">
+                  <p className="text-amber-700 font-medium mb-0.5">Reason for revision request</p>
+                  <p className="text-amber-800">"{poReviewModal.revision_reason}"</p>
+                </div>
+              )}
+
               <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Rejection Reason (required to reject)</label>
-                <textarea value={poRejectReason} onChange={e => setPoRejectReason(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#EF9F27]/30 resize-none" placeholder="Explain why this PO is being rejected..." />
+                <label className="text-xs font-medium text-gray-600 mb-1 block">
+                  {poReviewModal.status === 'pending_revision_approval'
+                    ? 'Decision notes (required to decline)'
+                    : 'Rejection Reason (required to reject)'}
+                </label>
+                <textarea value={poRejectReason} onChange={e => setPoRejectReason(e.target.value)} rows={3} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#EF9F27]/30 resize-none" placeholder={poReviewModal.status === 'pending_revision_approval' ? 'Add notes for your decision...' : 'Explain why this PO is being rejected...'} />
               </div>
-              <div className="flex gap-3">
-                <button onClick={() => handleRejectPO(poReviewModal)} disabled={!poRejectReason.trim() || poAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60">
-                  <XCircle size={15} />Reject — Send Back
-                </button>
-                <button onClick={() => approvePO(poReviewModal)} disabled={poAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
-                  <CheckCircle size={15} />
-                  {poAction ? 'Processing...' : role === 'evp' && poReviewModal.po_amount_incl_vat >= PO_THRESHOLD_EVP ? 'Approve — Escalate to CEO' : role === 'construction_manager' ? 'Approve — Forward to EVP' : role === 'cost_controller' ? 'Approve — Forward to CM' : 'Approve & Assign PSS No.'}
-                </button>
-              </div>
+
+              {poReviewModal.status === 'pending_revision_approval' ? (
+                <div className="space-y-2">
+                  <div className="flex gap-3">
+                    <button onClick={() => handleRejectPO(poReviewModal)} disabled={!poRejectReason.trim() || poAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60">
+                      <XCircle size={15} />Decline Request
+                    </button>
+                    <button onClick={() => approvePO(poReviewModal)} disabled={poAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
+                      <CheckCircle size={15} />
+                      {poAction ? 'Processing...' : 'Grant Revision'}
+                    </button>
+                  </div>
+                  <button onClick={() => handleVoidPO(poReviewModal)} disabled={poAction} className="w-full text-xs text-gray-400 border border-gray-200 rounded-lg py-2 hover:bg-gray-50 hover:text-gray-600 transition-colors disabled:opacity-40">
+                    Void this PO permanently
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-3">
+                  <button onClick={() => handleRejectPO(poReviewModal)} disabled={!poRejectReason.trim() || poAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60">
+                    <XCircle size={15} />Reject — Send Back
+                  </button>
+                  <button onClick={() => approvePO(poReviewModal)} disabled={poAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
+                    <CheckCircle size={15} />
+                    {poAction ? 'Processing...' : role === 'evp' && poReviewModal.po_amount_incl_vat >= PO_THRESHOLD_EVP ? 'Approve — Escalate to CEO' : role === 'construction_manager' ? 'Approve — Forward to EVP' : role === 'cost_controller' ? 'Approve — Forward to CM' : 'Approve & Assign PSS No.'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
