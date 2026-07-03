@@ -64,7 +64,7 @@ export default function OrdersTab() {
   const [overrunAcknowledged, setOverrunAcknowledged] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [logInvoiceTarget, setLogInvoiceTarget] = useState<{ milestone: POMilestone; po: PurchaseOrder } | null>(null);
+  const [logInvoiceTarget, setLogInvoiceTarget] = useState<{ po: PurchaseOrder; milestone?: POMilestone } | null>(null);
   const [logInvoiceNo, setLogInvoiceNo] = useState('');
   const [logInvoiceAmount, setLogInvoiceAmount] = useState('');
   const [logInvoicePreFilled, setLogInvoicePreFilled] = useState(false);
@@ -175,7 +175,7 @@ export default function OrdersTab() {
       const vendor = vendors.find(v => v.id === po.vendor_id);
       const { error } = await submitInvoice({
         poId: po.id,
-        milestoneId: milestone.id,
+        milestoneId: milestone?.id ?? null,
         amount,
         invoiceNo: logInvoiceNo.trim(),
         projectId: po.project_id,
@@ -184,7 +184,7 @@ export default function OrdersTab() {
         projectName: project.name,
         poNumber: po.pss_po_no,
         vendorName: vendor?.name ?? 'Supplier',
-        milestoneNumber: milestone.milestone_number,
+        milestoneNumber: milestone?.milestone_number ?? null,
         existingInvoiceId: editingInvoiceId,
       });
       if (error) { alert(error); return; }
@@ -495,35 +495,71 @@ export default function OrdersTab() {
                       if (o.invoices.length === 0) {
                         return (
                           <tr key={`${o.id}-empty`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                            <td colSpan={10} className="pl-10 pr-4 py-3 text-xs text-gray-400 italic">No invoices for this PO</td>
+                            <td className="pl-3 pr-0 py-2.5">
+                              <div className="w-1 h-full min-h-[28px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
+                            </td>
+                            <td colSpan={9} className="pr-4 pl-4 py-2.5">
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="text-xs text-gray-400 italic">No invoices for this PO</span>
+                                {isCostController && (o.status === 'approved' || o.status === 'partially_paid') && (
+                                  <button
+                                    onClick={() => { setLogInvoiceTarget({ po: o }); setLogInvoiceNo(''); setLogInvoiceAmount(''); setLogInvoicePreFilled(false); setEditingInvoiceId(null); }}
+                                    className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap shrink-0"
+                                  >
+                                    <FileText size={11} />
+                                    Log Invoice
+                                  </button>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         );
                       }
-                      return o.invoices.map(inv => (
-                        <tr key={inv.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
-                          <td className="pl-3 pr-0 py-2.5">
-                            <div className="w-1 h-full min-h-[28px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
-                          </td>
-                          <td colSpan={9} className="pr-4 pl-4 py-2.5">
-                            <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-xs text-gray-600 sm:grid-cols-6">
-                              <span><span className="text-gray-400">Invoice: </span><span className="font-medium text-gray-800">{inv.vendor_invoice_no ?? '—'}</span></span>
-                              <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
-                              <span><span className="text-gray-400">Total: </span><span className="tabular-nums font-medium">{fmtTHB(inv.invoice_amount_incl_vat)}</span></span>
-                              <span><span className="text-gray-400">WHT 3%: </span><span className="tabular-nums">{fmtTHB(inv.wht_3pct)}</span></span>
-                              <span><span className="text-gray-400">Paid: </span><span className="tabular-nums text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount ?? 0)}</span></span>
-                              <span>
-                                <span className="text-gray-400">Balance: </span>
-                                <span className={`tabular-nums font-medium ${inv.invoice_amount_incl_vat - (inv.received_amount ?? 0) > 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
-                                  {fmtTHB(inv.invoice_amount_incl_vat - (inv.received_amount ?? 0))}
-                                </span>
-                              </span>
-                            </div>
-                            <div className="mt-1.5">
-                              <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />
-                            </div>
-                          </td>
-                        </tr>
-                      ));
+                      return (
+                        <>
+                          {o.invoices.map(inv => (
+                            <tr key={inv.id} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                              <td className="pl-3 pr-0 py-2.5">
+                                <div className="w-1 h-full min-h-[28px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
+                              </td>
+                              <td colSpan={9} className="pr-4 pl-4 py-2.5">
+                                <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-xs text-gray-600 sm:grid-cols-6">
+                                  <span><span className="text-gray-400">Invoice: </span><span className="font-medium text-gray-800">{inv.vendor_invoice_no ?? '—'}</span></span>
+                                  <span><span className="text-gray-400">Date: </span>{formatDate(inv.invoice_date)}</span>
+                                  <span><span className="text-gray-400">Total: </span><span className="tabular-nums font-medium">{fmtTHB(inv.invoice_amount_incl_vat)}</span></span>
+                                  <span><span className="text-gray-400">WHT 3%: </span><span className="tabular-nums">{fmtTHB(inv.wht_3pct)}</span></span>
+                                  <span><span className="text-gray-400">Paid: </span><span className="tabular-nums text-[#1D9E75] font-medium">{fmtTHB(inv.received_amount ?? 0)}</span></span>
+                                  <span>
+                                    <span className="text-gray-400">Balance: </span>
+                                    <span className={`tabular-nums font-medium ${inv.invoice_amount_incl_vat - (inv.received_amount ?? 0) > 0 ? 'text-[#E24B4A]' : 'text-[#1D9E75]'}`}>
+                                      {fmtTHB(inv.invoice_amount_incl_vat - (inv.received_amount ?? 0))}
+                                    </span>
+                                  </span>
+                                </div>
+                                <div className="mt-1.5">
+                                  <Badge label={inv.status.replace(/_/g, ' ')} variant={statusVariant(inv.status)} />
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {isCostController && (o.status === 'approved' || o.status === 'partially_paid') && (
+                            <tr key={`${o.id}-log-btn`} className="bg-[#F8F8F7] border-b border-[rgba(0,0,0,0.03)]">
+                              <td className="pl-3 pr-0 py-2">
+                                <div className="w-1 h-full min-h-[24px] rounded-full bg-[rgba(0,0,0,0.06)] mx-auto" />
+                              </td>
+                              <td colSpan={9} className="pr-4 pl-4 py-2 text-right">
+                                <button
+                                  onClick={() => { setLogInvoiceTarget({ po: o }); setLogInvoiceNo(''); setLogInvoiceAmount(''); setLogInvoicePreFilled(false); setEditingInvoiceId(null); }}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-[#378ADD] text-[#378ADD] text-xs font-medium rounded-lg hover:bg-[#378ADD]/10 transition-colors whitespace-nowrap"
+                                >
+                                  <FileText size={11} />
+                                  Log Invoice
+                                </button>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
                     })()}
                   </>
                 );
@@ -584,7 +620,9 @@ export default function OrdersTab() {
               <div>
                 <h3 className="font-semibold text-[#0f1923] text-sm">Log Supplier Invoice</h3>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  MS{logInvoiceTarget.milestone.milestone_number} — {logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}
+                  {logInvoiceTarget.milestone
+                    ? `MS${logInvoiceTarget.milestone.milestone_number} — ${logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}`
+                    : `Simple PO — ${logInvoiceTarget.po.pss_po_no ?? 'Draft PO'}`}
                 </p>
               </div>
               <button onClick={() => { setLogInvoiceTarget(null); setEditingInvoiceId(null); }}>
@@ -594,8 +632,17 @@ export default function OrdersTab() {
             <div className="p-5 space-y-3">
               <div className="text-xs bg-[#F8F8F7] rounded-lg px-3 py-2.5">
                 <div className="flex justify-between">
-                  <span className="text-gray-400">Milestone amount due</span>
-                  <span className="font-semibold text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span>
+                  {logInvoiceTarget.milestone ? (
+                    <>
+                      <span className="text-gray-400">Milestone amount due</span>
+                      <span className="font-semibold text-[#0f1923]">{fmtTHB(logInvoiceTarget.milestone.amount_due)}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-gray-400">Contract Value (incl VAT)</span>
+                      <span className="font-semibold text-[#0f1923]">{fmtTHB(logInvoiceTarget.po.po_amount_incl_vat)}</span>
+                    </>
+                  )}
                 </div>
               </div>
               <div>

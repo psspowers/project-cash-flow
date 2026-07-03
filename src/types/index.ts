@@ -291,28 +291,9 @@ export const SGA_SUBCATEGORY_LABELS: Record<SgaSubcategory, string> = {
   other:             'Other / Miscellaneous',
 };
 
-export interface ProjectExpense {
-  id: string;
-  project_id: string;
-  cost_category: CostCategory | null;
-  sga_subcategory?: SgaSubcategory | null;
-  description: string;
-  amount: number;
-  expense_date?: string;
-  receipt_ref?: string | null;
-  submitted_by?: string | null;
-  status: ExpenseStatus;
-  approved_by?: string | null;
-  approved_at?: string | null;
-  rejection_comment?: string | null;
-  created_at: string;
-  project?: Project;
-  submitter?: { full_name: string };
-}
-
 export interface VendorInvoice {
   id: string;
-  po_id: string;
+  po_id: string | null;
   po_milestone_id?: string;
   project_id: string;
   vendor_id: string;
@@ -329,6 +310,9 @@ export interface VendorInvoice {
   planned_payment_date?: string;
   planning_notes?: string;
   vendor_notified: boolean;
+  cost_category?: string | null;
+  sga_subcategory?: string | null;
+  description?: string | null;
   created_at: string;
   vendor?: Entity;
   project?: Project;

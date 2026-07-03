@@ -40,7 +40,7 @@ export async function notify(
 
 export interface InvoiceSubmitParams {
   poId: string;
-  milestoneId: string;
+  milestoneId: string | null;
   amount: number;
   invoiceNo: string;
   projectId: string;
@@ -49,7 +49,7 @@ export interface InvoiceSubmitParams {
   projectName: string;
   poNumber: string | null;
   vendorName: string;
-  milestoneNumber: number;
+  milestoneNumber: number | null;
   existingInvoiceId?: string | null;
 }
 
@@ -95,14 +95,20 @@ export async function submitInvoice(params: InvoiceSubmitParams): Promise<{ erro
     }
   }
 
-  await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestoneId);
+  if (milestoneId) {
+    await supabase.from('po_milestones').update({ status: 'invoiced' }).eq('id', milestoneId);
+  }
+
+  const invoiceRef = milestoneNumber != null
+    ? `${poNumber ?? 'Draft PO'} Milestone #${milestoneNumber}`
+    : `${poNumber ?? 'Direct Bill'}`;
 
   const cm = await getProfileByRole('construction_manager');
   if (cm) {
     await notify(
       cm.id,
       `Supplier invoice pending review — ${projectName}`,
-      `${vendorName} has submitted invoice ${invoiceNo} for ${poNumber ?? 'Draft PO'} Milestone #${milestoneNumber}. Logged by Cost Controller. Awaiting your review.`,
+      `${vendorName} has submitted invoice ${invoiceNo} for ${invoiceRef}. Logged by Cost Controller. Awaiting your review.`,
       'info',
       'project',
       projectId,
@@ -113,7 +119,7 @@ export async function submitInvoice(params: InvoiceSubmitParams): Promise<{ erro
   await notify(
     costControllerId,
     `Invoice logged — ${projectName}`,
-    `Invoice ${invoiceNo} from ${vendorName} for Milestone #${milestoneNumber} has been logged and is awaiting Construction Manager review.`,
+    `Invoice ${invoiceNo} from ${vendorName} for ${invoiceRef} has been logged and is awaiting Construction Manager review.`,
     'info',
     'project',
     projectId,

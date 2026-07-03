@@ -178,7 +178,7 @@ export default function PaymentQueue() {
     const [{ data: inv }, { data: vouc }, { data: chk }, { data: proj }, { data: vend }, { data: editChks }] = await Promise.all([
       supabase
         .from('vendor_invoices')
-        .select('*, project:projects(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
+        .select('*, project:projects(name), vendor:entities!vendor_id(name), purchase_order:purchase_orders(id, pss_po_no, supplier_name_raw, wht_rate, vendor:entities(name, bank_name, bank_account_no, bank_account_name))')
         .eq('status', 'released')
         .order('created_at', { ascending: false }),
       supabase
@@ -610,7 +610,7 @@ export default function PaymentQueue() {
     actionSlot?: React.ReactNode;
   }) {
     const po          = (inv as any).purchase_order;
-    const vendorName  = po?.vendor?.name ?? po?.supplier_name_raw ?? '—';
+    const vendorName  = po?.vendor?.name ?? po?.supplier_name_raw ?? (inv as any).vendor?.name ?? '—';
     const projectShort = (inv as any).project?.name?.split('–')[0]?.trim() || '—';
     const net = netPayable(inv);
     return (

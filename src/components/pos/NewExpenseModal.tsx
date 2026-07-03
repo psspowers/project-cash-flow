@@ -2,13 +2,15 @@ import { useState } from 'react';
 import { X, Receipt, AlertCircle, CheckCircle, Building2, Layers } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import {
-  Project, CostCategory, COST_CATEGORY_LABELS,
+  Project, Entity, CostCategory, COST_CATEGORY_LABELS,
   SgaSubcategory, SGA_SUBCATEGORY_LABELS,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import VendorCombobox from '../ui/VendorCombobox';
 
 interface Props {
   projects: Project[];
+  vendors: Entity[];
   defaultProjectId?: string;
   onClose: () => void;
   onSuccess: () => void;
@@ -22,7 +24,7 @@ const SGA_SUBCATEGORIES: { value: SgaSubcategory; label: string }[] = Object.ent
   ([value, label]) => ({ value: value as SgaSubcategory, label })
 );
 
-export default function NewExpenseModal({ projects, defaultProjectId, onClose, onSuccess }: Props) {
+export default function NewExpenseModal({ projects, vendors, defaultProjectId, onClose, onSuccess }: Props) {
   const { profile } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,12 +39,13 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
 
   const [form, setForm] = useState({
     project_id: initialProjectId,
+    vendor_id: '',
     cost_category: '01_civil' as CostCategory,
     sga_subcategory: 'office_admin' as SgaSubcategory,
     description: '',
     amount: '',
-    expense_date: new Date().toISOString().split('T')[0],
-    receipt_ref: '',
+    invoice_date: new Date().toISOString().split('T')[0],
+    vendor_invoice_no: '',
   });
 
   const isOverhead = overheadProjects.some(p => p.id === form.project_id);
@@ -63,23 +66,28 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
 
     const amount = parseFloat(form.amount);
     if (!form.project_id) { setError('Please select an account.'); return; }
+    if (!form.vendor_id) { setError('Please select a vendor.'); return; }
     if (!form.description.trim()) { setError('Please enter a description.'); return; }
     if (isNaN(amount) || amount <= 0) { setError('Please enter a valid amount greater than zero.'); return; }
-    if (!form.expense_date) { setError('Please select an expense date.'); return; }
+    if (!form.invoice_date) { setError('Please select an invoice date.'); return; }
 
     setSubmitting(true);
     setError(null);
 
-    const { error: insertError } = await supabase.from('project_expenses').insert({
+    const { error: insertError } = await supabase.from('vendor_invoices').insert({
+      po_id: null,
       project_id: form.project_id,
+      vendor_id: form.vendor_id,
       cost_category: isOverhead ? null : form.cost_category,
       sga_subcategory: isOverhead ? form.sga_subcategory : null,
       description: form.description.trim(),
-      amount,
-      expense_date: form.expense_date,
-      receipt_ref: form.receipt_ref.trim() || null,
-      submitted_by: profile.id,
-      status: 'draft',
+      invoice_amount_incl_vat: amount,
+      received_amount: 0,
+      wht_3pct: 0,
+      net_payable: amount,
+      invoice_date: form.invoice_date,
+      vendor_invoice_no: form.vendor_invoice_no.trim() || null,
+      status: 'received',
     });
 
     setSubmitting(false);
@@ -104,8 +112,8 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
               <Receipt size={16} className="text-[#1D9E75]" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">New Expense</h2>
-              <p className="text-xs text-gray-400">Direct cost entry — project or overhead</p>
+              <h2 className="text-sm font-semibold text-gray-900">New Direct Bill / Expense</h2>
+              <p className="text-xs text-gray-400">Direct vendor invoice — routed to CM for review</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -116,12 +124,12 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
         {success ? (
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <CheckCircle size={36} className="text-[#1D9E75]" />
-            <p className="text-sm font-medium text-gray-700">Expense recorded successfully</p>
+            <p className="text-sm font-medium text-gray-700">Invoice logged — pending CM review</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
 
-            {/* Account selector — SG&A overhead and construction projects in separate groups */}
+            {/* Account selector */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
                 Account <span className="text-red-400">*</span>
@@ -152,7 +160,6 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
                 )}
               </select>
 
-              {/* Context badge */}
               {form.project_id && (
                 <div className={`flex items-center gap-1.5 mt-1.5 text-[11px] font-medium ${
                   isOverhead ? 'text-amber-600' : 'text-[#1D9E75]'
@@ -165,7 +172,20 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
               )}
             </div>
 
-            {/* Classification — swaps instantly on project type change */}
+            {/* Vendor */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Vendor <span className="text-red-400">*</span>
+              </label>
+              <VendorCombobox
+                vendors={vendors}
+                value={form.vendor_id}
+                onChange={id => set('vendor_id', id)}
+                placeholder="Select vendor..."
+              />
+            </div>
+
+            {/* Classification */}
             {isOverhead ? (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
@@ -231,27 +251,27 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                  Expense Date <span className="text-red-400">*</span>
+                  Invoice Date <span className="text-red-400">*</span>
                 </label>
                 <input
                   type="date"
-                  value={form.expense_date}
-                  onChange={e => set('expense_date', e.target.value)}
+                  value={form.invoice_date}
+                  onChange={e => set('invoice_date', e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-gray-800"
                 />
               </div>
             </div>
 
-            {/* Receipt Ref */}
+            {/* Invoice Ref */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                Receipt Reference <span className="text-gray-400 font-normal">(optional)</span>
+                Supplier Invoice No. <span className="text-gray-400 font-normal">(optional)</span>
               </label>
               <input
                 type="text"
-                value={form.receipt_ref}
-                onChange={e => set('receipt_ref', e.target.value)}
-                placeholder="Receipt no. or reference"
+                value={form.vendor_invoice_no}
+                onChange={e => set('vendor_invoice_no', e.target.value)}
+                placeholder="e.g. INV-2026-001"
                 maxLength={100}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1D9E75]/30 text-gray-800 placeholder-gray-400"
               />
@@ -282,7 +302,7 @@ export default function NewExpenseModal({ projects, defaultProjectId, onClose, o
                 {submitting && (
                   <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 )}
-                Save Expense
+                Log Bill
               </button>
             </div>
           </form>

@@ -190,7 +190,7 @@ export default function Approvals() {
         .order('approved_at', { ascending: false })
         .limit(100),
       supabase.from('vendor_invoices')
-        .select('*, vendor:entities!vendor_id(*), purchase_order:purchase_orders(pss_po_no, description, vendor:entities!vendor_id(name), project:projects(name))')
+        .select('*, vendor:entities!vendor_id(*), project:projects(name), purchase_order:purchase_orders(pss_po_no, description, vendor:entities!vendor_id(name), project:projects(name))')
         .in('status', ['received', 'approved_cm', 'approved_evp', 'rejected']),
       supabase.from('projects').select('id, name, status, last_rejected_stage').order('name'),
       supabase.from('project_costings')
@@ -930,7 +930,8 @@ export default function Approvals() {
           {filteredInvoices.map(invoice => {
             const po        = invoice.purchase_order as { pss_po_no?: string; description?: string; project?: { name: string } } | undefined;
             const vendor    = invoice.vendor as { name: string } | undefined;
-            const projectName = po?.project?.name ?? '—';
+            const projectName = po?.project?.name ?? (invoice as any).project?.name ?? '—';
+            const descriptionLine = po?.description ?? (invoice as any).description ?? '—';
             const invoiceStatusMap: Record<string, { label: string; cls: string; border: string }> = {
               received:     { label: 'Awaiting CM Review',         cls: 'bg-amber-50 text-amber-700',         border: 'border-l-amber-400' },
               approved_cm:  { label: 'CM Approved — Awaiting EVP', cls: 'bg-blue-50 text-blue-700',           border: 'border-l-blue-400' },
@@ -944,12 +945,14 @@ export default function Approvals() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span>
-                      {po?.pss_po_no && (
+                      {po?.pss_po_no ? (
                         <button onClick={() => setInvoiceDetailModal(invoice)} className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200 transition-colors">{po.pss_po_no}</button>
+                      ) : (
+                        <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded">Direct Bill</span>
                       )}
                     </div>
                     <button onClick={() => setInvoiceDetailModal(invoice)} className="text-sm font-semibold text-gray-800 hover:text-[#1D9E75] transition-colors text-left">{projectName}</button>
-                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {po?.description ?? '—'}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{vendor?.name ?? '—'} · {descriptionLine}</p>
                     {invoice.vendor_invoice_no && <p className="text-xs text-gray-400 mt-0.5">Invoice No: <span className="font-medium text-gray-600">{invoice.vendor_invoice_no}</span></p>}
                     {invoice.status === 'rejected' && invoice.rejection_comment && (
                       <div className="mt-2 bg-[#E24B4A]/5 border border-[#E24B4A]/20 rounded-lg px-3 py-2">
