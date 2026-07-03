@@ -172,19 +172,6 @@ export default function NewExpenseModal({ projects, vendors, defaultProjectId, o
               )}
             </div>
 
-            {/* Vendor */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                Vendor <span className="text-red-400">*</span>
-              </label>
-              <VendorCombobox
-                vendors={vendors}
-                value={form.vendor_id}
-                onChange={id => set('vendor_id', id)}
-                placeholder="Select vendor..."
-              />
-            </div>
-
             {/* Classification */}
             {isOverhead ? (
               <div>
@@ -217,6 +204,19 @@ export default function NewExpenseModal({ projects, vendors, defaultProjectId, o
                 </select>
               </div>
             )}
+
+            {/* Vendor / Supplier */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Vendor / Supplier <span className="text-red-400">*</span>
+              </label>
+              <VendorCombobox
+                vendors={vendors}
+                value={form.vendor_id}
+                onChange={id => set('vendor_id', id)}
+                placeholder="Select vendor..."
+              />
+            </div>
 
             {/* Description */}
             <div>
