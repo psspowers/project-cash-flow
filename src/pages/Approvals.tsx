@@ -298,35 +298,20 @@ export default function Approvals() {
     setPoAction(true);
     try {
       let result: { error: string | null };
-      if (role === 'evp' && po.status === 'pending_revision_approval') {
-        const grantParams: GrantPOChangeParams = {
-          poId: po.id,
-          evpId: user.id,
-          decision: 'revise',
-          projectName: (po.project as Project)?.name ?? '',
-          projectId: po.project_id,
-          poDescription: po.description ?? '',
-          pssPoNo: po.pss_po_no,
-          currentVersion: po.version ?? 1,
-          decisionNotes: poRejectReason.trim() || undefined,
-        };
-        result = await grantPOChange(grantParams);
-      } else {
-        const params: POActionParams = {
-          poId: po.id,
-          actorId: user.id,
-          projectName: (po.project as Project)?.name ?? '',
-          projectId: po.project_id,
-          poDescription: po.description ?? '',
-          poAmountInclVat: po.po_amount_incl_vat,
-          currentStatus: po.status as never,
-        };
-        if (role === 'cost_controller')           result = await approvePO_CC(params);
-        else if (role === 'construction_manager') result = await approvePO_CM(params);
-        else if (role === 'evp')                  result = await approvePO_EVP(params);
-        else if (role === 'ceo')                  result = await approvePO_CEO(params);
-        else return;
-      }
+      const params: POActionParams = {
+        poId: po.id,
+        actorId: user.id,
+        projectName: (po.project as Project)?.name ?? '',
+        projectId: po.project_id,
+        poDescription: po.description ?? '',
+        poAmountInclVat: po.po_amount_incl_vat,
+        currentStatus: po.status as never,
+      };
+      if (role === 'cost_controller')           result = await approvePO_CC(params);
+      else if (role === 'construction_manager') result = await approvePO_CM(params);
+      else if (role === 'evp')                  result = await approvePO_EVP(params);
+      else if (role === 'ceo')                  result = await approvePO_CEO(params);
+      else return;
       if (result.error) alert('Failed to process PO: ' + result.error);
       setPoReviewModal(null);
       setPoRejectReason('');
@@ -344,38 +329,16 @@ export default function Approvals() {
     setPoAction(true);
     try {
       let result: { error: string | null };
-      if (po.status === 'pending_revision_approval') {
-        const { data: logEntry } = await supabase
-          .from('po_action_log')
-          .select('from_status')
-          .eq('po_id', po.id)
-          .eq('action', 'revision_requested')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const priorStatus = (logEntry?.from_status as POStatus) ?? 'approved_evp';
-        result = await rejectPOChangeRequest(
-          po.id,
-          user.id,
-          (po.project as Project)?.name ?? '',
-          po.project_id,
-          po.description ?? '',
-          po.pss_po_no,
-          poRejectReason.trim(),
-          priorStatus,
-        );
-      } else {
-        const params: POActionParams = {
-          poId: po.id,
-          actorId: user.id,
-          projectName: (po.project as Project)?.name ?? '',
-          projectId: po.project_id,
-          poDescription: po.description ?? '',
-          poAmountInclVat: po.po_amount_incl_vat,
-          currentStatus: po.status as never,
-        };
-        result = await rejectPO(params, user.id, poRejectReason.trim());
-      }
+      const params: POActionParams = {
+        poId: po.id,
+        actorId: user.id,
+        projectName: (po.project as Project)?.name ?? '',
+        projectId: po.project_id,
+        poDescription: po.description ?? '',
+        poAmountInclVat: po.po_amount_incl_vat,
+        currentStatus: po.status as never,
+      };
+      result = await rejectPO(params, user.id, poRejectReason.trim());
       if (result.error) alert('Failed to process PO: ' + result.error);
       setPoReviewModal(null);
       setPoRejectReason('');
@@ -1155,15 +1118,15 @@ export default function Approvals() {
                 <div className="space-y-2">
                   <div className="flex gap-3">
                     <button onClick={() => handleRejectPO(poReviewModal)} disabled={!poRejectReason.trim() || poAction} className="flex-1 flex items-center justify-center gap-2 border border-[#E24B4A] text-[#E24B4A] py-2 rounded-lg text-sm font-medium hover:bg-[#E24B4A]/5 disabled:opacity-60">
-                      <XCircle size={15} />Decline Request
+                      <XCircle size={15} />Reject — Send Back
                     </button>
                     <button onClick={() => approvePO(poReviewModal)} disabled={poAction} className="flex-1 flex items-center justify-center gap-2 bg-[#1D9E75] text-white py-2 rounded-lg text-sm font-medium hover:bg-[#178a64] disabled:opacity-60">
                       <CheckCircle size={15} />
-                      {poAction ? 'Processing...' : 'Grant Revision'}
+                      {poAction ? 'Processing...' : 'Approve Amendment'}
                     </button>
                   </div>
                   <button onClick={() => handleVoidPO(poReviewModal)} disabled={poAction} className="w-full text-xs text-gray-400 border border-gray-200 rounded-lg py-2 hover:bg-gray-50 hover:text-gray-600 transition-colors disabled:opacity-40">
-                    Void this PO permanently
+                    Void Amendment
                   </button>
                 </div>
               ) : (
