@@ -285,7 +285,7 @@ export default function Approvals() {
     switch (role) {
       case 'cost_controller':      return po.status === 'pending_cc';
       case 'construction_manager': return po.status === 'pending_cm';
-      case 'evp':                  return po.status === 'pending_evp';
+      case 'evp':                  return po.status === 'pending_evp' || po.status === 'pending_revision_approval';
       case 'ceo':                  return po.status === 'pending_ceo';
       default: return false;
     }
