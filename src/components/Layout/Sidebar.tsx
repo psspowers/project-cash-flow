@@ -207,7 +207,7 @@ export default function Sidebar({ role, badges = {} }: SidebarProps) {
           <>
             <Divider />
             <SectionLabel label="Procurement" />
-            <NavItem to="/purchase-orders" label="Purchase Orders" icon={<ShoppingCart size={16} />} />
+            <NavItem to="/purchase-orders" label="PO &amp; Expenses" icon={<ShoppingCart size={16} />} />
             <NavItem to="/suppliers" label="Suppliers" icon={<Building2 size={16} />} />
           </>
         )}
