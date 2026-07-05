@@ -139,7 +139,7 @@ export default function AppLayout({ children, title }: AppLayoutProps) {
     setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
   }
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="min-h-screen bg-[#F8F8F7] flex items-center justify-center">
         <div className="text-center">
