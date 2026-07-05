@@ -1451,11 +1451,15 @@ export default function CashFlowPlanner() {
         .from('client_milestones')
         .update({ planned_receive_date: isoDate })
         .eq('id', card.rawMilestone.id);
+      const milestoneId = card.rawMilestone.id;
+      setMilestones(prev => prev.map(m => m.id === milestoneId ? { ...m, planned_receive_date: isoDate } : m));
     } else if (card.type === 'invoice' && card.rawInvoice) {
       await supabase
         .from('vendor_invoices')
         .update({ planned_payment_date: isoDate })
         .eq('id', card.rawInvoice.id);
+      const invoiceId = card.rawInvoice.id;
+      setInvoices(prev => prev.map(inv => inv.id === invoiceId ? { ...inv, planned_payment_date: isoDate } : inv));
     }
 
     const modifiedCards = allCards.map((c) =>
@@ -1486,8 +1490,6 @@ export default function CashFlowPlanner() {
         showMessage(`${cardLabel} moved to ${weekLabel}.`, 'green', 2000);
       }
     }
-
-    await loadData();
   }
 
   function handleDragStart(event: DragStartEvent) {
